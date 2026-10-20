@@ -5,6 +5,7 @@ mod format;
 mod nav;
 mod player;
 mod profile;
+mod tools;
 mod ui;
 
 use adw::prelude::*;
