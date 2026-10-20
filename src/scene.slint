@@ -4,23 +4,22 @@
 import { ScrollView, Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, StandardListView,
     ComboBox, HorizontalBox, VerticalBox, GridBox, TabWidget, TextEdit, Slider } from "std-widgets.slint";
 
-App := Window {
+export component App inherits Window {
     preferred-width: 1000px;
     preferred-height: 1000px;
     title: "Slint MPV";
-    icon: @image-url("../../logo/slint-logo-small-light-128x128.png");
 
-    property window_width <=> width;
-    property window_height <=> height;
-    property<bool> is_paused;
-    property<float> seek_position: 0;
-    property<string> ts_label: "00:00:00 / 00:00:00";
+    out property <length> window_width: self.width;
+    out property <length> window_height: self.height;
+    in-out property <bool> is_paused;
+    in-out property <float> seek_position: 0;
+    in-out property <string> ts_label: "00:00:00 / 00:00:00";
 
-    property<image> play_icon: @image-url("../assets/play-solid.svg");
-    property<image> pause_icon: @image-url("../assets/pause-solid.svg");
+    in-out property <image> play_icon: @image-url("../assets/play-solid.svg");
+    in-out property <image> pause_icon: @image-url("../assets/pause-solid.svg");
 
-    property<float> new_position: 0;
-    property<bool> position_ackd: true;
+    in-out property <float> new_position: 0;
+    in-out property <bool> position_ackd: true;
 
     VerticalBox {
         Rectangle {

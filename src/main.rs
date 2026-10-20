@@ -10,7 +10,7 @@ pub fn main() {
     args.next();
 
     let file = args.next().unwrap();
-    let app = App::new();
+    let app = App::new().unwrap();
 
     let mut underlay = None;
     let mut prev_is_paused = false;
@@ -34,7 +34,7 @@ pub fn main() {
                     let (context, proc_addr) = match graphics_api {
                         slint::GraphicsAPI::NativeOpenGL { get_proc_address } => unsafe {
                             (
-                                glow::Context::from_loader_function(|s| get_proc_address(s)),
+                                glow::Context::from_loader_function(|s| get_proc_address(&std::ffi::CString::new(s).unwrap())),
                                 get_proc_address,
                             )
                         },
@@ -93,5 +93,5 @@ pub fn main() {
         std::process::exit(1);
     }
 
-    app.run();
+    app.run().unwrap();
 }

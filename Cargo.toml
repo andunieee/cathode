@@ -7,13 +7,10 @@ build = "build.rs"
 license = "GPL-3.0-only"
 
 [dependencies]
-slint = "0.2.0"
+slint = "1.18"
 glow = { version = "0.11" }
 instant = { version = "0.1", features = ["now"] }
 libmpv = { git = "https://github.com/anlumo/libmpv-rs" }
 
 [build-dependencies]
-slint-build = "0.2.0"
-
-[patch.crates-io.slint]
-git = "https://github.com/vgarleanu/slint"
+slint-build = "1.18"

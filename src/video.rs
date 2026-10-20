@@ -2,13 +2,13 @@ use glow::HasContext;
 
 use std::mem::transmute;
 use std::os::raw::c_void;
-use std::time::Duration;
 
 use libmpv::render::*;
 use libmpv::*;
 
 fn get_proc_address(ctx: &*mut c_void, proc: &str) -> *mut c_void {
-    unsafe { (*((*ctx) as *const &dyn Fn(&str) -> *mut c_void))(proc) as *mut c_void }
+    let proc = std::ffi::CString::new(proc).unwrap();
+    unsafe { (*((*ctx) as *const &dyn Fn(&std::ffi::CStr) -> *const c_void))(&proc) as *mut c_void }
 }
 
 pub struct VideoUnderlay {
