@@ -1,23 +1,33 @@
-# Lumiere
+# Lumpla
 ![demo](assets/demo.jpg)
 
-Lumiere is a proof-of-concept/example video player built with the Slint UI framework and libmpv.
-This was built quickly to try out Slint and it's new OpenGL underlay feature. As such, this player 
-isn't really meant to be used (but it does work).
+Lumpla is a YouTube client based on [yt-dlp](https://github.com/yt-dlp/yt-dlp), built with the Slint UI framework and libmpv. It may work.
 
-Instead of rendering on top of the UI window, lumiere gets MPV to draw into a framebuffer which is then bound to a texture and rendered underneath the UI, this way you can overlay UI elements and build a OSD for MPV with rust.
+Search for a video, hit play, and Lumpla downloads it with yt-dlp into a cache directory and plays the result in the built-in player.
+
+Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a framebuffer which is bound to a texture and rendered underneath the UI, so UI elements can be overlaid on the video.
 
 # Features
+- [x] Search YouTube (with thumbnails)
+- [x] Download through yt-dlp and play from a cache (`~/.cache/lumpla`)
 - [x] Play/Pause
 - [x] Seekbar and seeking (kinda works)
+- [ ] Download progress
 - [ ] Everything else
 
 # Installation
 ## Dependencies
-* libmpv-dev
 * rustc
+* libmpv (and its development headers)
+* yt-dlp and ffmpeg, available in your `PATH`
 
 ## Running
+Open the search page:
+```
+cargo run
+```
+
+Or play a local file directly:
 ```
 cargo run -- path/to/file.mp4
 ```

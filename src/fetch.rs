@@ -37,7 +37,7 @@ pub struct Thumbnail {
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("lumiere")
+        .join("lumpla")
 }
 
 /// Spawns a background thread running yt-dlp requests, returns the sender used to queue them.
