@@ -282,7 +282,10 @@ impl Player {
 
     /// True once, when the current file has played to its end.
     pub fn take_ended(&self) -> bool {
-        let reached = self.mpv.get_property::<bool>("eof-reached").unwrap_or(false);
+        let reached = self
+            .mpv
+            .get_property::<bool>("eof-reached")
+            .unwrap_or(false);
         if reached && !self.ended.get() {
             self.ended.set(true);
             true

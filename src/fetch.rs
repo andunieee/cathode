@@ -46,34 +46,78 @@ pub struct VideoInfo {
 }
 
 pub enum Source {
-    Search { query: String, by_date: bool },
+    Search {
+        query: String,
+        by_date: bool,
+    },
     /// A channel's uploads, or the results of searching inside that channel when `query` is set.
-    Channel { id: String, query: String },
-    Playlist { id: String },
+    Channel {
+        id: String,
+        query: String,
+    },
+    Playlist {
+        id: String,
+    },
 }
 
 pub enum Request {
     /// `key` is echoed back in the responses so the caller can tell which page they were for.
-    Listing { key: String, source: Source },
-    Info { key: String, url: String },
+    Listing {
+        key: String,
+        source: Source,
+    },
+    Info {
+        key: String,
+        url: String,
+    },
     /// Download the video into the cache directory, if it isn't there yet.
-    Download { entry: Entry },
+    Download {
+        entry: Entry,
+    },
     /// Stops the download of the video with this id, if one is running.
-    Cancel { id: String },
-    Thumbnail { id: String, large: bool },
+    Cancel {
+        id: String,
+    },
+    Thumbnail {
+        id: String,
+        large: bool,
+    },
     /// Looks up what a link typed in by the user points to.
-    Resolve { input: Input },
+    Resolve {
+        input: Input,
+    },
 }
 
 pub enum Response {
     /// A batch of a listing's entries; a listing arrives in several of these.
-    Entries { key: String, entries: Vec<Entry> },
-    ListingDone { key: String, error: Option<String> },
-    Info { key: String, result: Result<VideoInfo, String> },
-    Progress { id: String, fraction: f64 },
-    Downloaded { id: String, result: Result<PathBuf, String> },
-    Thumbnail { id: String, large: bool, image: Thumbnail },
-    Resolved { result: Result<Item, String> },
+    Entries {
+        key: String,
+        entries: Vec<Entry>,
+    },
+    ListingDone {
+        key: String,
+        error: Option<String>,
+    },
+    Info {
+        key: String,
+        result: Result<VideoInfo, String>,
+    },
+    Progress {
+        id: String,
+        fraction: f64,
+    },
+    Downloaded {
+        id: String,
+        result: Result<PathBuf, String>,
+    },
+    Thumbnail {
+        id: String,
+        large: bool,
+        image: Thumbnail,
+    },
+    Resolved {
+        result: Result<Item, String>,
+    },
     /// Progress of the startup check of the external tools.
     Setup(crate::tools::Status),
 }
@@ -201,7 +245,12 @@ fn string(value: &Value, key: &str) -> Option<String> {
 
 /// Streams the entries of a listing to `on_response` as yt-dlp finds them.
 async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
-    let finish = |error| on_response(Response::ListingDone { key: key.clone(), error });
+    let finish = |error| {
+        on_response(Response::ListingDone {
+            key: key.clone(),
+            error,
+        })
+    };
 
     let (url, limit) = match source {
         Source::Search {
@@ -248,7 +297,11 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             return finish(Some(error));
         }
     }
-    finish(stream_listing(&key, &url, limit, &mut seen, on_response).await.err());
+    finish(
+        stream_listing(&key, &url, limit, &mut seen, on_response)
+            .await
+            .err(),
+    );
 }
 
 /// Streams what yt-dlp lists at `url`, up to `end` entries, skipping the ones in `seen`.

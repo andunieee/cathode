@@ -25,7 +25,10 @@ const STATE_FILE: &str = "state.json";
 /// Where a download comes from.
 enum Origin {
     /// An asset of the latest release, GitHub reports its digest.
-    Github { repo: &'static str, asset: &'static str },
+    Github {
+        repo: &'static str,
+        asset: &'static str,
+    },
     /// A URL redirecting to the latest build, which has a `.sha256` file next to it.
     Mirror { url: &'static str },
 }
@@ -164,12 +167,16 @@ impl Tool {
 
     /// Whether it can be run, from our directory or from `PATH`.
     fn available(self) -> bool {
-        self.programs().iter().all(|program| find(program).is_some())
+        self.programs()
+            .iter()
+            .all(|program| find(program).is_some())
     }
 
     /// Whether there is a copy of ours, as opposed to relying on `PATH`.
     fn managed(self) -> bool {
-        self.programs().iter().all(|program| dir().join(exe(program)).is_file())
+        self.programs()
+            .iter()
+            .all(|program| dir().join(exe(program)).is_file())
     }
 }
 
@@ -213,9 +220,14 @@ pub fn command(program: &str) -> Command {
 pub enum Status {
     Checking,
     /// `fraction` is `None` while the size is unknown or the file is being unpacked.
-    Installing { tool: &'static str, fraction: Option<f64> },
+    Installing {
+        tool: &'static str,
+        fraction: Option<f64>,
+    },
     /// The check is over. `errors` lists what could not be installed or updated.
-    Done { errors: Vec<String> },
+    Done {
+        errors: Vec<String>,
+    },
 }
 
 /// Whether something needed is missing, which means requests have to wait for [`update`].
@@ -283,7 +295,9 @@ pub async fn update(report: impl Fn(Status)) {
     {
         Ok(client) => client,
         Err(e) => {
-            report(Status::Done { errors: vec![e.to_string()] });
+            report(Status::Done {
+                errors: vec![e.to_string()],
+            });
             return;
         }
     };
@@ -310,7 +324,8 @@ pub async fn update(report: impl Fn(Status)) {
         // alone what the user has. Ours, once downloaded, are kept up to date.
         let due = if usable {
             tool.managed()
-                && installed.is_none_or(|i| now().saturating_sub(i.checked) >= tool.check_interval())
+                && installed
+                    .is_none_or(|i| now().saturating_sub(i.checked) >= tool.check_interval())
         } else {
             true
         };
@@ -318,7 +333,14 @@ pub async fn update(report: impl Fn(Status)) {
             continue;
         }
 
-        let result = install(&client, tool, &packages, installed.map(|i| i.digest.as_str()), &report).await;
+        let result = install(
+            &client,
+            tool,
+            &packages,
+            installed.map(|i| i.digest.as_str()),
+            &report,
+        )
+        .await;
         match result {
             Ok(Some(new)) => {
                 state.tools.insert(name.to_string(), new);
@@ -376,11 +398,14 @@ async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response, S
 async fn resolve(client: &reqwest::Client, package: &Package) -> Result<Resolved, String> {
     match package.origin {
         Origin::Github { repo, asset } => {
-            let bytes = get(client, &format!("https://api.github.com/repos/{repo}/releases/latest"))
-                .await?
-                .bytes()
-                .await
-                .map_err(|e| e.to_string())?;
+            let bytes = get(
+                client,
+                &format!("https://api.github.com/repos/{repo}/releases/latest"),
+            )
+            .await?
+            .bytes()
+            .await
+            .map_err(|e| e.to_string())?;
             let release: Release = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
 
             let found = release
@@ -421,7 +446,11 @@ async fn resolve(client: &reqwest::Client, package: &Package) -> Result<Resolved
                 .get(reqwest::header::LOCATION)
                 .and_then(|l| l.to_str().ok())
                 .ok_or("the download address did not redirect")?;
-            let target = response.url().join(location).map_err(|e| e.to_string())?.to_string();
+            let target = response
+                .url()
+                .join(location)
+                .map_err(|e| e.to_string())?
+                .to_string();
 
             let checksum = get(client, &format!("{target}.sha256"))
                 .await?
@@ -477,21 +506,36 @@ async fn install(
         return Ok(None);
     }
 
-    report(Status::Installing { tool: name, fraction: None });
+    report(Status::Installing {
+        tool: name,
+        fraction: None,
+    });
 
     for (index, (package, resolved)) in packages.iter().zip(&resolved).enumerate() {
         // The percentage of the whole, when there are several files.
         let share = |fraction: f64| (index as f64 + fraction) / packages.len() as f64;
 
         let download = dir().join(format!("{name}.{index}.download"));
-        let result = fetch(client, &resolved.url, &download, resolved.sha256.as_deref(), |fraction| {
-            report(Status::Installing { tool: name, fraction: fraction.map(share) })
-        })
+        let result = fetch(
+            client,
+            &resolved.url,
+            &download,
+            resolved.sha256.as_deref(),
+            |fraction| {
+                report(Status::Installing {
+                    tool: name,
+                    fraction: fraction.map(share),
+                })
+            },
+        )
         .await;
 
         let result = match result {
             Ok(()) => {
-                report(Status::Installing { tool: name, fraction: None });
+                report(Status::Installing {
+                    tool: name,
+                    fraction: None,
+                });
                 let (source, archive) = (download.clone(), package.archive);
                 tokio::task::spawn_blocking(move || unpack(tool, archive, &source))
                     .await
@@ -509,7 +553,11 @@ async fn install(
     }
 
     Ok(Some(Installed {
-        version: resolved.iter().map(|r| r.version.as_str()).collect::<Vec<_>>().join(","),
+        version: resolved
+            .iter()
+            .map(|r| r.version.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
         digest: identity,
         checked: now(),
     }))
@@ -553,7 +601,11 @@ async fn fetch(
     file.flush().map_err(|e| e.to_string())?;
 
     if let Some(expected) = expected {
-        let actual: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let actual: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         if !actual.eq_ignore_ascii_case(expected) {
             return Err("the download is corrupted (checksum mismatch)".to_string());
         }
@@ -567,7 +619,10 @@ fn unpack(tool: Tool, archive: Archive, source: &Path) -> Result<(), String> {
     let open = || std::fs::File::open(source).map_err(|e| e.to_string());
     let wanted = |path: &Path| {
         let file_name = path.file_name()?.to_str()?;
-        tool.programs().iter().copied().find(|program| exe(program) == file_name)
+        tool.programs()
+            .iter()
+            .copied()
+            .find(|program| exe(program) == file_name)
     };
 
     match archive {
@@ -576,7 +631,11 @@ fn unpack(tool: Tool, archive: Archive, source: &Path) -> Result<(), String> {
             let mut archive = zip::ZipArchive::new(open()?).map_err(|e| e.to_string())?;
             for index in 0..archive.len() {
                 let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
-                let program = entry.is_file().then(|| entry.enclosed_name()).flatten().and_then(|p| wanted(&p));
+                let program = entry
+                    .is_file()
+                    .then(|| entry.enclosed_name())
+                    .flatten()
+                    .and_then(|p| wanted(&p));
                 if let Some(program) = program {
                     place(program, &mut entry)?;
                 }
@@ -588,7 +647,13 @@ fn unpack(tool: Tool, archive: Archive, source: &Path) -> Result<(), String> {
             for entry in archive.entries().map_err(|e| e.to_string())? {
                 let mut entry = entry.map_err(|e| e.to_string())?;
                 let path = entry.path().map_err(|e| e.to_string())?.into_owned();
-                if let Some(program) = entry.header().entry_type().is_file().then(|| wanted(&path)).flatten() {
+                if let Some(program) = entry
+                    .header()
+                    .entry_type()
+                    .is_file()
+                    .then(|| wanted(&path))
+                    .flatten()
+                {
                     place(program, &mut entry)?;
                 }
             }
@@ -651,14 +716,23 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn resolves_other_platforms() {
-        let client = reqwest::Client::builder().user_agent("lumpla-test").build().unwrap();
-        let github = |repo, asset| Package { origin: Origin::Github { repo, asset }, archive: Archive::Zip };
+        let client = reqwest::Client::builder()
+            .user_agent("lumpla-test")
+            .build()
+            .unwrap();
+        let github = |repo, asset| Package {
+            origin: Origin::Github { repo, asset },
+            archive: Archive::Zip,
+        };
 
         for package in [
             github("yt-dlp/yt-dlp", "yt-dlp.exe"),
             github("yt-dlp/yt-dlp", "yt-dlp_macos"),
             github("yt-dlp/FFmpeg-Builds", "ffmpeg-master-latest-win64-gpl.zip"),
-            github("yt-dlp/FFmpeg-Builds", "ffmpeg-master-latest-winarm64-gpl.zip"),
+            github(
+                "yt-dlp/FFmpeg-Builds",
+                "ffmpeg-master-latest-winarm64-gpl.zip",
+            ),
             github("denoland/deno", "deno-x86_64-pc-windows-msvc.zip"),
             github("denoland/deno", "deno-aarch64-pc-windows-msvc.zip"),
             github("denoland/deno", "deno-x86_64-apple-darwin.zip"),
@@ -673,20 +747,34 @@ mod tests {
             for program in ["ffmpeg", "ffprobe"] {
                 let url: &'static str =
                     Box::leak(format!("https://ffmpeg.martin-riedl.de/redirect/latest/macos/{arch}/release/{program}.zip").into());
-                let package = Package { origin: Origin::Mirror { url }, archive: Archive::Zip };
+                let package = Package {
+                    origin: Origin::Mirror { url },
+                    archive: Archive::Zip,
+                };
                 let resolved = resolve(&client, &package).await.unwrap();
                 println!("{arch} {program}: {} {}", resolved.version, resolved.url);
                 assert_eq!(resolved.sha256.as_ref().map(String::len), Some(64));
             }
         }
         let package = Package {
-            origin: Origin::Mirror { url: "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip" },
+            origin: Origin::Mirror {
+                url:
+                    "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip",
+            },
             archive: Archive::Zip,
         };
         let resolved = resolve(&client, &package).await.unwrap();
         std::fs::create_dir_all(dir()).unwrap();
         let path = dir().join("ffprobe.zip");
-        fetch(&client, &resolved.url, &path, resolved.sha256.as_deref(), |_| {}).await.unwrap();
+        fetch(
+            &client,
+            &resolved.url,
+            &path,
+            resolved.sha256.as_deref(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         unpack(Tool::Ffmpeg, Archive::Zip, &path).unwrap();
         assert!(dir().join("ffprobe").is_file());
     }

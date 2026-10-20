@@ -252,7 +252,10 @@ pub enum Input {
 }
 
 fn is_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn video(id: &str) -> Option<Input> {
@@ -280,7 +283,12 @@ pub fn parse_input(input: &str) -> Option<Input> {
     if input.len() == 24 && input.starts_with("UC") && is_id(input) {
         return channel(&format!("channel/{input}"));
     }
-    if input.len() > 11 && ["PL", "UU", "OL", "FL"].iter().any(|p| input.starts_with(p)) && is_id(input) {
+    if input.len() > 11
+        && ["PL", "UU", "OL", "FL"]
+            .iter()
+            .any(|p| input.starts_with(p))
+        && is_id(input)
+    {
         return playlist(input);
     }
     if input.len() == 11 && is_id(input) {
@@ -291,7 +299,10 @@ pub fn parse_input(input: &str) -> Option<Input> {
         .or_else(|_| reqwest::Url::parse(&format!("https://{input}")))
         .ok()?;
     let host = url.host_str()?;
-    let host = host.strip_prefix("www.").or(host.strip_prefix("m.")).unwrap_or(host);
+    let host = host
+        .strip_prefix("www.")
+        .or(host.strip_prefix("m."))
+        .unwrap_or(host);
     let query = |name: &str| {
         url.query_pairs()
             .find(|(key, _)| key == name)
@@ -358,7 +369,10 @@ mod tests {
         let id = "UCXuqSBlHAE6Xw-yeJA0Tunw";
         let expected = Some(format!("channel https://www.youtube.com/channel/{id}"));
         assert_eq!(kind(id), expected);
-        assert_eq!(kind(&format!("https://www.youtube.com/channel/{id}/videos")), expected);
+        assert_eq!(
+            kind(&format!("https://www.youtube.com/channel/{id}/videos")),
+            expected
+        );
         assert_eq!(
             kind("https://www.youtube.com/c/SomeName"),
             Some("channel https://www.youtube.com/c/SomeName".to_string())
@@ -367,15 +381,31 @@ mod tests {
 
     #[test]
     fn playlists() {
-        let expected = Some("playlist https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf".to_string());
-        assert_eq!(kind("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"), expected);
+        let expected = Some(
+            "playlist https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"
+                .to_string(),
+        );
+        assert_eq!(
+            kind("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"),
+            expected
+        );
         assert_eq!(kind("PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"), expected);
-        assert_eq!(kind("https://www.youtube.com/watch?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"), expected);
+        assert_eq!(
+            kind("https://www.youtube.com/watch?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"),
+            expected
+        );
     }
 
     #[test]
     fn rejects_the_rest() {
-        for input in ["", "   ", "hello world", "https://example.com/watch?v=jNQXAC9IVRw", "https://www.youtube.com/feed/trending", "nope"] {
+        for input in [
+            "",
+            "   ",
+            "hello world",
+            "https://example.com/watch?v=jNQXAC9IVRw",
+            "https://www.youtube.com/feed/trending",
+            "nope",
+        ] {
             assert_eq!(kind(input), None, "{input}");
         }
     }
@@ -397,8 +427,10 @@ mod tests {
         let profile: Profile = serde_json::from_str("{}").unwrap();
         assert!(!profile.restricted && profile.channels.is_empty());
 
-        let profile: Profile =
-            serde_json::from_str(r#"{"restricted": true, "channels": [{"id": "UC1", "name": "A"}]}"#).unwrap();
+        let profile: Profile = serde_json::from_str(
+            r#"{"restricted": true, "channels": [{"id": "UC1", "name": "A"}]}"#,
+        )
+        .unwrap();
         assert!(profile.restricted && profile.channels[0].id == "UC1");
     }
 }

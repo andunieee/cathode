@@ -11,18 +11,28 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache;
 use crate::controls;
-use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::fetch::{Entry, Request, Response, Source, VideoInfo};
 use crate::format;
+use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::ui::{self, CacheRow, Ui};
 
 #[derive(Clone)]
 enum Page {
     Home,
     Settings,
-    Search { query: String, by_date: bool },
-    Channel { id: String, name: String, query: String },
-    Playlist { id: String, title: String },
+    Search {
+        query: String,
+        by_date: bool,
+    },
+    Channel {
+        id: String,
+        name: String,
+        query: String,
+    },
+    Playlist {
+        id: String,
+        title: String,
+    },
     Video(Entry),
     Cache,
     Player(Entry),
@@ -381,12 +391,18 @@ pub fn toggle_allowed() {
     let result = match current() {
         Page::Channel { id, name, .. } => toggle(
             profile::allows_channel(&id),
-            Item::Channel(ChannelRef { id: id.clone(), name }),
+            Item::Channel(ChannelRef {
+                id: id.clone(),
+                name,
+            }),
             Box::new(move |p| p.channels.retain(|c| c.id != id)),
         ),
         Page::Playlist { id, title } => toggle(
             profile::allows_playlist(&id),
-            Item::Playlist(PlaylistRef { id: id.clone(), title }),
+            Item::Playlist(PlaylistRef {
+                id: id.clone(),
+                title,
+            }),
             Box::new(move |p| p.playlists.retain(|p| p.id != id)),
         ),
         Page::Video(entry) => {
@@ -680,7 +696,8 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     ui.player.load(&entry.id, &path.to_string_lossy());
     ui.player_title.set_text(&entry.title);
     ui.player_status.set_visible(false);
-    ui.play_button.set_icon_name("media-playback-pause-symbolic");
+    ui.play_button
+        .set_icon_name("media-playback-pause-symbolic");
     refresh_queue();
 }
 
@@ -1025,10 +1042,8 @@ fn show_cache() {
 
     let count = rows.len();
     *ui.cache_rows.borrow_mut() = rows;
-    ui.cache_summary.set_text(&format!(
-        "{count} videos · {}",
-        format::bytes(total)
-    ));
+    ui.cache_summary
+        .set_text(&format!("{count} videos · {}", format::bytes(total)));
     update_cache_selection();
 }
 
@@ -1046,11 +1061,15 @@ fn update_cache_selection() {
     let ui = ui::get();
     let (selected, total) = {
         let rows = ui.cache_rows.borrow();
-        (rows.iter().filter(|row| row.check.is_active()).count(), rows.len())
+        (
+            rows.iter().filter(|row| row.check.is_active()).count(),
+            rows.len(),
+        )
     };
 
     ui.syncing.set(true);
-    ui.cache_select_all.set_active(total > 0 && selected == total);
+    ui.cache_select_all
+        .set_active(total > 0 && selected == total);
     ui.cache_select_all
         .set_inconsistent(selected > 0 && selected < total);
     ui.syncing.set(false);
@@ -1121,11 +1140,15 @@ fn confirm_delete(entries: Vec<Entry>) {
     dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
-    dialog.choose(Some(&ui::get().window), gio::Cancellable::NONE, move |response| {
-        if response == "delete" {
-            delete_from_cache(&entries);
-        }
-    });
+    dialog.choose(
+        Some(&ui::get().window),
+        gio::Cancellable::NONE,
+        move |response| {
+            if response == "delete" {
+                delete_from_cache(&entries);
+            }
+        },
+    );
 }
 
 fn delete_from_cache(entries: &[Entry]) {
@@ -1188,7 +1211,9 @@ pub fn handle(response: Response) {
 
             if current().key() == key {
                 match error {
-                    Some(error) => ui.results_status.set_text(&format!("Failed to load: {error}")),
+                    Some(error) => ui
+                        .results_status
+                        .set_text(&format!("Failed to load: {error}")),
                     None => update_results_status(&key),
                 }
             }
@@ -1200,7 +1225,9 @@ pub fn handle(response: Response) {
                 Ok(info) => {
                     // Videos that were in the cache before we kept track of them.
                     let unknown = cache::find(&info.entry.id).is_some()
-                        && !cache::scan().iter().any(|v| v.known && v.entry.id == info.entry.id);
+                        && !cache::scan()
+                            .iter()
+                            .any(|v| v.known && v.entry.id == info.entry.id);
                     if unknown {
                         cache::record(&info.entry);
                     }
@@ -1317,7 +1344,10 @@ pub fn handle(response: Response) {
                         Err(error) => QueueState::Failed(error.clone()),
                     };
                 }
-                state.awaiting_play.take_if(|awaiting| *awaiting == id).is_some()
+                state
+                    .awaiting_play
+                    .take_if(|awaiting| *awaiting == id)
+                    .is_some()
             });
 
             if queued {
@@ -1326,7 +1356,8 @@ pub fn handle(response: Response) {
                         start_playback(&entry, path)
                     }
                     (Err(error), Page::Player(entry)) if entry.id == id => {
-                        ui.player_status.set_text(&format!("Download failed: {error}"));
+                        ui.player_status
+                            .set_text(&format!("Download failed: {error}"));
                     }
                     _ => {}
                 }

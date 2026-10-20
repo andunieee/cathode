@@ -49,10 +49,7 @@ fn page_box() -> gtk::Box {
 }
 
 fn clamp(child: &impl IsA<gtk::Widget>) -> adw::Clamp {
-    adw::Clamp::builder()
-        .maximum_size(720)
-        .child(child)
-        .build()
+    adw::Clamp::builder().maximum_size(720).child(child).build()
 }
 
 pub struct Widgets {
@@ -90,11 +87,8 @@ impl Widgets {
             .css_classes(["dim-label"])
             .margin_top(24)
             .build();
-        let (home_channels, home_playlists, home_videos) = (
-            section("Channels"),
-            section("Playlists"),
-            section("Videos"),
-        );
+        let (home_channels, home_playlists, home_videos) =
+            (section("Channels"), section("Playlists"), section("Videos"));
 
         let restricted = page_box();
         restricted.append(&home_empty);
@@ -105,7 +99,9 @@ impl Widgets {
         let home = gtk::Stack::new();
         home.add_named(&open, Some("open"));
         home.add_named(
-            &gtk::ScrolledWindow::builder().child(&clamp(&restricted)).build(),
+            &gtk::ScrolledWindow::builder()
+                .child(&clamp(&restricted))
+                .build(),
             Some("restricted"),
         );
 
@@ -142,11 +138,8 @@ impl Widgets {
             .css_classes(["dim-label"])
             .build();
 
-        let (settings_channels, settings_playlists, settings_videos) = (
-            section("Channels"),
-            section("Playlists"),
-            section("Videos"),
-        );
+        let (settings_channels, settings_playlists, settings_videos) =
+            (section("Channels"), section("Playlists"), section("Videos"));
 
         let password_row = adw::ActionRow::builder().title("Password").build();
         let password_set = gtk::Button::builder().valign(gtk::Align::Center).build();
@@ -300,12 +293,7 @@ fn remove(change: impl FnOnce(&mut profile::Profile)) {
     show_settings();
 }
 
-fn fill(
-    channels: &Section,
-    playlists: &Section,
-    videos: &Section,
-    removable: bool,
-) -> bool {
+fn fill(channels: &Section, playlists: &Section, videos: &Section, removable: bool) -> bool {
     let profile = profile::read(|profile| profile.clone());
 
     clear(&channels.list);
@@ -363,11 +351,9 @@ pub fn show_settings() {
     widgets
         .password_row
         .set_subtitle(if has_password { "Set" } else { "Not set" });
-    widgets.password_set.set_label(if has_password {
-        "Change…"
-    } else {
-        "Set…"
-    });
+    widgets
+        .password_set
+        .set_label(if has_password { "Change…" } else { "Set…" });
     widgets.password_remove.set_visible(has_password);
 }
 
@@ -451,11 +437,20 @@ fn prompt(
     }
     dialog.set_extra_child(Some(&content));
 
-    dialog.choose(Some(&ui::get().window), gio::Cancellable::NONE, move |response| {
-        if response == "ok" {
-            on_confirm(entries.iter().map(|entry| entry.text().to_string()).collect());
-        }
-    });
+    dialog.choose(
+        Some(&ui::get().window),
+        gio::Cancellable::NONE,
+        move |response| {
+            if response == "ok" {
+                on_confirm(
+                    entries
+                        .iter()
+                        .map(|entry| entry.text().to_string())
+                        .collect(),
+                );
+            }
+        },
+    );
 }
 
 fn set_password() {
@@ -521,4 +516,3 @@ pub fn unlock_profile() {
         },
     );
 }
-

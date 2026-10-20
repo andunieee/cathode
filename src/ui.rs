@@ -214,7 +214,10 @@ fn results_view(store: &gio::ListStore) -> gtk::ListView {
         card.bind(&entry);
     });
 
-    let view = gtk::ListView::new(Some(gtk::NoSelection::new(Some(store.clone()))), Some(factory));
+    let view = gtk::ListView::new(
+        Some(gtk::NoSelection::new(Some(store.clone()))),
+        Some(factory),
+    );
     view.set_single_click_activate(true);
     view.add_css_class("rich-list");
     view.connect_activate({
@@ -549,7 +552,13 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     });
     let time_label = gtk::Label::new(Some("0:00 / 0:00"));
     time_label.add_css_class("numeric");
-    let speed = gtk::DropDown::from_strings(&SPEEDS.map(|speed| format!("{speed}×")).iter().map(String::as_str).collect::<Vec<_>>());
+    let speed = gtk::DropDown::from_strings(
+        &SPEEDS
+            .map(|speed| format!("{speed}×"))
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
     speed.set_selected(SPEEDS.iter().position(|&speed| speed == 1.0).unwrap() as u32);
     speed.set_tooltip_text(Some("Playback speed"));
     speed.connect_selected_notify(|speed| {
@@ -630,7 +639,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Queue sidebar
     let queue_header = adw::HeaderBar::new();
-    queue_header.set_title_widget(Some(&gtk::Label::builder().label("Queue").css_classes(["heading"]).build()));
+    queue_header.set_title_widget(Some(
+        &gtk::Label::builder()
+            .label("Queue")
+            .css_classes(["heading"])
+            .build(),
+    ));
 
     let queue_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
