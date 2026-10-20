@@ -1,15 +1,25 @@
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{Notify, Semaphore};
 
-const MAX_RESULTS: usize = 50;
+const SEARCH_MAX_RESULTS: usize = 100;
+const CHANNEL_MAX_RESULTS: usize = 1000;
+/// How much of a long listing is fetched first, to have something to show early.
+const FIRST_PAGE: usize = 30;
 
-#[derive(Debug, Clone)]
+/// Thumbnails shown in lists are scaled down to keep a thousand of them cheap to hold.
+const SMALL_THUMBNAIL: (u32, u32) = (168, 94);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
     pub url: String,
@@ -23,6 +33,8 @@ pub struct Entry {
 /// What yt-dlp knows about a video beyond what the listings carry.
 #[derive(Debug, Clone)]
 pub struct VideoInfo {
+    /// The video as a listing would describe it, for videos we only know the id of.
+    pub entry: Entry,
     pub description: String,
     pub upload_date: Option<String>,
     pub views: Option<u64>,
@@ -36,30 +48,24 @@ pub enum Source {
 }
 
 pub enum Request {
-    /// `key` is echoed back in the response so the caller can tell which page it was for.
+    /// `key` is echoed back in the responses so the caller can tell which page they were for.
     Listing { key: String, source: Source },
     Info { key: String, url: String },
     /// Download the video into the cache directory, if it isn't there yet.
-    Download { id: String, url: String },
+    Download { entry: Entry },
+    /// Stops the download of the video with this id, if one is running.
+    Cancel { id: String },
+    Thumbnail { id: String, large: bool },
 }
 
 pub enum Response {
-    Listing {
-        key: String,
-        result: Result<Vec<Entry>, String>,
-    },
-    Info {
-        key: String,
-        result: Result<VideoInfo, String>,
-    },
-    Downloaded {
-        id: String,
-        result: Result<PathBuf, String>,
-    },
-    Thumbnail {
-        id: String,
-        image: Thumbnail,
-    },
+    /// A batch of a listing's entries; a listing arrives in several of these.
+    Entries { key: String, entries: Vec<Entry> },
+    ListingDone { key: String, error: Option<String> },
+    Info { key: String, result: Result<VideoInfo, String> },
+    Progress { id: String, fraction: f64 },
+    Downloaded { id: String, result: Result<PathBuf, String> },
+    Thumbnail { id: String, large: bool, image: Thumbnail },
 }
 
 pub struct Thumbnail {
@@ -75,7 +81,7 @@ pub fn cache_dir() -> PathBuf {
 }
 
 /// Spawns a background thread running yt-dlp requests, returns the sender used to queue them.
-/// `on_response` is called from the worker thread.
+/// `on_response` is called from the worker threads.
 pub fn spawn(on_response: impl Fn(Response) + Send + Sync + 'static) -> UnboundedSender<Request> {
     let (tx, rx) = unbounded_channel();
     let on_response = Arc::new(on_response);
@@ -95,70 +101,56 @@ async fn run(
     mut rx: UnboundedReceiver<Request>,
     on_response: Arc<impl Fn(Response) + Send + Sync + 'static>,
 ) {
-    // Thumbnails already fetched (or being fetched) during this run.
-    let thumbnails_requested = Arc::new(Mutex::new(HashSet::new()));
+    let thumbnail_slots = Arc::new(Semaphore::new(8));
+    let downloads: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Default::default();
 
     while let Some(request) = rx.recv().await {
         let on_response = on_response.clone();
-        let thumbnails_requested = thumbnails_requested.clone();
 
-        tokio::spawn(async move {
-            match request {
-                Request::Listing { key, source } => {
-                    let result = listing(source).await;
-
-                    // Thumbnails trickle in after the results are on screen.
-                    if let Ok(entries) = &result {
-                        for entry in entries {
-                            if !thumbnails_requested.lock().unwrap().insert(entry.id.clone()) {
-                                continue;
-                            }
-
-                            let id = entry.id.clone();
-                            let on_response = on_response.clone();
-                            let thumbnails_requested = thumbnails_requested.clone();
-                            tokio::spawn(async move {
-                                match thumbnail(&id).await {
-                                    Ok(image) => on_response(Response::Thumbnail { id, image }),
-                                    Err(_) => {
-                                        thumbnails_requested.lock().unwrap().remove(&id);
-                                    }
-                                }
-                            });
-                        }
-                    }
-
-                    on_response(Response::Listing { key, result });
-                }
-                Request::Info { key, url } => {
+        match request {
+            Request::Listing { key, source } => {
+                tokio::spawn(async move { listing(key, source, on_response.as_ref()).await });
+            }
+            Request::Info { key, url } => {
+                tokio::spawn(async move {
                     on_response(Response::Info {
                         key,
                         result: info(&url).await,
                     });
-                }
-                Request::Download { id, url } => {
-                    let result = download(&id, &url).await;
-                    on_response(Response::Downloaded { id, result });
+                });
+            }
+            Request::Download { entry } => {
+                let cancel = Arc::new(Notify::new());
+                downloads
+                    .lock()
+                    .unwrap()
+                    .insert(entry.id.clone(), cancel.clone());
+
+                let downloads = downloads.clone();
+                tokio::spawn(async move {
+                    let result = download(&entry, cancel, on_response.as_ref()).await;
+                    downloads.lock().unwrap().remove(&entry.id);
+                    on_response(Response::Downloaded {
+                        id: entry.id,
+                        result,
+                    });
+                });
+            }
+            Request::Cancel { id } => {
+                if let Some(cancel) = downloads.lock().unwrap().get(&id) {
+                    cancel.notify_one();
                 }
             }
-        });
-    }
-}
-
-/// Runs yt-dlp and parses its stdout as a single JSON document.
-async fn yt_dlp_json(args: &[&str]) -> Result<Value, String> {
-    let output = Command::new("yt-dlp")
-        .args(args)
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
-
-    // yt-dlp exits non-zero when it skipped some entries but still prints the rest.
-    match serde_json::from_slice::<Value>(&output.stdout) {
-        Ok(json) if !json.is_null() => Ok(json),
-        _ => Err(error_line(&output.stderr)),
+            Request::Thumbnail { id, large } => {
+                let slots = thumbnail_slots.clone();
+                tokio::spawn(async move {
+                    let _slot = slots.acquire().await;
+                    if let Ok(image) = thumbnail(&id, large).await {
+                        on_response(Response::Thumbnail { id, large, image });
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -178,101 +170,201 @@ fn string(value: &Value, key: &str) -> Option<String> {
     value[key].as_str().map(str::to_string)
 }
 
-async fn listing(source: Source) -> Result<Vec<Entry>, String> {
-    let url = match source {
+/// Streams the entries of a listing to `on_response` as yt-dlp finds them.
+async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
+    let finish = |error| on_response(Response::ListingDone { key: key.clone(), error });
+
+    let (url, limit) = match source {
         Source::Search {
             query,
             by_date: false,
-        } => format!("ytsearch{MAX_RESULTS}:{query}"),
+        } => (
+            format!("ytsearch{SEARCH_MAX_RESULTS}:{query}"),
+            SEARCH_MAX_RESULTS,
+        ),
         // yt-dlp dropped `ytsearchdate`, so date order goes through YouTube's own results URL,
         // where `sp=CAI=` is the "sort by upload date" filter.
         Source::Search {
             query,
             by_date: true,
-        } => reqwest::Url::parse_with_params(
+        } => match reqwest::Url::parse_with_params(
             "https://www.youtube.com/results",
             [("search_query", query.as_str()), ("sp", "CAI=")],
-        )
-        .map_err(|e| e.to_string())?
-        .to_string(),
-        Source::Channel { id, query } if query.is_empty() => {
-            format!("https://www.youtube.com/channel/{id}/videos")
-        }
-        Source::Channel { id, query } => reqwest::Url::parse_with_params(
+        ) {
+            Ok(url) => (url.to_string(), SEARCH_MAX_RESULTS),
+            Err(e) => return finish(Some(e.to_string())),
+        },
+        Source::Channel { id, query } if query.is_empty() => (
+            format!("https://www.youtube.com/channel/{id}/videos"),
+            CHANNEL_MAX_RESULTS,
+        ),
+        Source::Channel { id, query } => match reqwest::Url::parse_with_params(
             &format!("https://www.youtube.com/channel/{id}/search"),
             [("query", query.as_str())],
-        )
-        .map_err(|e| e.to_string())?
-        .to_string(),
+        ) {
+            Ok(url) => (url.to_string(), CHANNEL_MAX_RESULTS),
+            Err(e) => return finish(Some(e.to_string())),
+        },
     };
 
-    // The results and channel pages keep paging forever, so the limit is needed here.
-    let playlist = yt_dlp_json(&[
-        "--no-warnings",
-        "--flat-playlist",
-        &format!("--playlist-end={MAX_RESULTS}"),
-        "--dump-single-json",
-        &url,
-    ])
-    .await?;
-
-    Ok(parse_entries(&playlist))
+    // yt-dlp only prints a listing once it has all of it, which takes a while for a long
+    // channel. A short one comes first so there is something to look at in the meantime.
+    let mut seen = HashSet::new();
+    if limit > SEARCH_MAX_RESULTS {
+        if let Err(error) = stream_listing(&key, &url, FIRST_PAGE, &mut seen, on_response).await {
+            return finish(Some(error));
+        }
+    }
+    finish(stream_listing(&key, &url, limit, &mut seen, on_response).await.err());
 }
 
-fn parse_entries(playlist: &Value) -> Vec<Entry> {
-    // Entries of a channel's own tabs don't repeat which channel they belong to.
-    let fallback_channel = string(playlist, "channel").or_else(|| string(playlist, "uploader"));
-    let fallback_channel_id = string(playlist, "channel_id");
+/// Streams what yt-dlp lists at `url`, up to `end` entries, skipping the ones in `seen`.
+/// Fails if nothing at all could be listed.
+async fn stream_listing(
+    key: &str,
+    url: &str,
+    end: usize,
+    seen: &mut HashSet<String>,
+    on_response: &impl Fn(Response),
+) -> Result<(), String> {
+    // The results and channel pages keep paging forever, so the limit is needed here.
+    let mut child = Command::new("yt-dlp")
+        .args([
+            "--no-warnings",
+            "--flat-playlist",
+            &format!("--playlist-end={end}"),
+            "-j",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
 
-    playlist["entries"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let url = string(entry, "url")?;
-            // Playlists and channels show up in search results too.
-            if !url.contains("/watch?v=") && !url.contains("/shorts/") {
-                return None;
-            }
+    let mut stderr = child.stderr.take().unwrap();
+    let stderr = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        let _ = stderr.read_to_end(&mut buffer).await;
+        buffer
+    });
 
-            if let Some(availability) = entry["availability"].as_str() {
-                if availability != "public" && availability != "unlisted" {
-                    return None;
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut batch = Vec::new();
+
+    loop {
+        // Entries tend to arrive a page at a time, so wait a little to send them together.
+        let line = if batch.is_empty() {
+            lines.next_line().await
+        } else {
+            match tokio::time::timeout(Duration::from_millis(100), lines.next_line()).await {
+                Ok(line) => line,
+                Err(_) => {
+                    on_response(Response::Entries {
+                        key: key.to_string(),
+                        entries: std::mem::take(&mut batch),
+                    });
+                    continue;
                 }
             }
+        };
 
-            // Ongoing and upcoming live streams have no duration.
-            let duration = entry["duration"].as_f64()?;
+        let Ok(Some(line)) = line else { break };
+        if let Some(entry) = serde_json::from_str::<Value>(&line)
+            .ok()
+            .and_then(|value| parse_entry(&value))
+        {
+            if seen.insert(entry.id.clone()) {
+                batch.push(entry);
+            }
+        }
+    }
 
-            Some(Entry {
-                id: string(entry, "id")?,
-                url,
-                title: string(entry, "title")?,
-                channel: string(entry, "channel")
-                    .or_else(|| string(entry, "uploader"))
-                    .or_else(|| fallback_channel.clone())
-                    .unwrap_or_default(),
-                channel_id: string(entry, "channel_id")
-                    .or_else(|| fallback_channel_id.clone())
-                    .unwrap_or_default(),
-                duration: Some(duration),
-                views: entry["view_count"].as_u64(),
-            })
-        })
-        .collect()
+    if !batch.is_empty() {
+        on_response(Response::Entries {
+            key: key.to_string(),
+            entries: batch,
+        });
+    }
+
+    let success = child.wait().await.is_ok_and(|status| status.success());
+    let stderr = stderr.await.unwrap_or_default();
+
+    // yt-dlp exits non-zero when it skipped some entries but still printed the rest.
+    if seen.is_empty() && !success {
+        Err(error_line(&stderr))
+    } else {
+        Ok(())
+    }
+}
+
+/// Parses one line of `yt-dlp --flat-playlist -j` output.
+fn parse_entry(entry: &Value) -> Option<Entry> {
+    let url = string(entry, "url")?;
+    // Playlists and channels show up in search results too.
+    if !url.contains("/watch?v=") && !url.contains("/shorts/") {
+        return None;
+    }
+
+    if let Some(availability) = entry["availability"].as_str() {
+        if availability != "public" && availability != "unlisted" {
+            return None;
+        }
+    }
+
+    // Ongoing and upcoming live streams have no duration.
+    let duration = entry["duration"].as_f64()?;
+
+    // Entries of a channel's own tabs don't repeat which channel they belong to.
+    Some(Entry {
+        id: string(entry, "id")?,
+        url,
+        title: string(entry, "title")?,
+        channel: string(entry, "channel")
+            .or_else(|| string(entry, "uploader"))
+            .or_else(|| string(entry, "playlist_channel"))
+            .or_else(|| string(entry, "playlist_uploader"))
+            .unwrap_or_default(),
+        channel_id: string(entry, "channel_id")
+            .or_else(|| string(entry, "playlist_channel_id"))
+            .unwrap_or_default(),
+        duration: Some(duration),
+        views: entry["view_count"].as_u64(),
+    })
 }
 
 async fn info(url: &str) -> Result<VideoInfo, String> {
-    let video = yt_dlp_json(&[
-        "--no-warnings",
-        "--no-playlist",
-        "--skip-download",
-        "--dump-single-json",
-        url,
-    ])
-    .await?;
+    let output = Command::new("yt-dlp")
+        .args([
+            "--no-warnings",
+            "--no-playlist",
+            "--skip-download",
+            "--dump-single-json",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
+
+    let Ok(video) = serde_json::from_slice::<Value>(&output.stdout) else {
+        return Err(error_line(&output.stderr));
+    };
 
     Ok(VideoInfo {
+        entry: Entry {
+            id: string(&video, "id").ok_or("yt-dlp did not report the video id")?,
+            url: string(&video, "webpage_url").unwrap_or_else(|| url.to_string()),
+            title: string(&video, "title").unwrap_or_default(),
+            channel: string(&video, "channel")
+                .or_else(|| string(&video, "uploader"))
+                .unwrap_or_default(),
+            channel_id: string(&video, "channel_id").unwrap_or_default(),
+            duration: video["duration"].as_f64(),
+            views: video["view_count"].as_u64(),
+        },
         description: string(&video, "description").unwrap_or_default(),
         upload_date: string(&video, "upload_date"),
         views: video["view_count"].as_u64(),
@@ -280,36 +372,26 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
     })
 }
 
-fn find_cached(dir: &Path, id: &str) -> Option<PathBuf> {
-    let prefix = format!("{id}.");
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(&prefix))
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| matches!(ext, "mp4" | "mkv" | "webm" | "mov"))
-        })
-}
-
-async fn download(id: &str, url: &str) -> Result<PathBuf, String> {
+async fn download(
+    entry: &Entry,
+    cancel: Arc<Notify>,
+    on_response: &impl Fn(Response),
+) -> Result<PathBuf, String> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    if let Some(path) = find_cached(&dir, id) {
+    if let Some(path) = crate::cache::find(&entry.id) {
         return Ok(path);
     }
 
-    let output = Command::new("yt-dlp")
+    let mut child = Command::new("yt-dlp")
         .args([
             "--no-warnings",
             "--no-playlist",
-            "--no-progress",
+            "--progress",
+            "--newline",
+            "--progress-template",
+            "download:PROG %(progress.downloaded_bytes|0)s %(progress.total_bytes|0)s %(progress.total_bytes_estimate|0)s",
             "-f",
             "bv*[height<=1080]+ba/b[height<=1080]/b",
             "--merge-output-format",
@@ -319,27 +401,67 @@ async fn download(id: &str, url: &str) -> Result<PathBuf, String> {
             "after_move:filepath",
             "-o",
         ])
-        .arg(dir.join(format!("{id}.%(ext)s")))
-        .arg(url)
+        .arg(dir.join(format!("{}.%(ext)s", entry.id)))
+        .arg(&entry.url)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .output()
-        .await
+        .spawn()
         .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
 
-    if !output.status.success() {
-        return Err(error_line(&output.stderr));
+    let mut stderr = child.stderr.take().unwrap();
+    let stderr = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        let _ = stderr.read_to_end(&mut buffer).await;
+        buffer
+    });
+
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut path = None;
+
+    loop {
+        let line = tokio::select! {
+            line = lines.next_line() => line,
+            _ = cancel.notified() => {
+                let _ = child.kill().await;
+                return Err("Cancelled".to_string());
+            }
+        };
+
+        let Ok(Some(line)) = line else { break };
+        if let Some(progress) = line.strip_prefix("PROG ") {
+            let numbers: Vec<f64> = progress
+                .split_whitespace()
+                .filter_map(|number| number.parse().ok())
+                .collect();
+            if let [downloaded, total, estimate] = numbers[..] {
+                let total = if total > 0.0 { total } else { estimate };
+                if total > 0.0 {
+                    on_response(Response::Progress {
+                        id: entry.id.clone(),
+                        fraction: (downloaded / total).min(1.0),
+                    });
+                }
+            }
+        } else if !line.trim().is_empty() {
+            path = Some(PathBuf::from(line.trim()));
+        }
     }
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .last()
-        .map(PathBuf::from)
-        .or_else(|| find_cached(&dir, id))
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
+    if !status.success() {
+        return Err(error_line(&stderr.await.unwrap_or_default()));
+    }
+
+    path.or_else(|| crate::cache::find(&entry.id))
         .ok_or_else(|| "yt-dlp did not report the downloaded file".to_string())
 }
 
-async fn thumbnail(id: &str) -> Result<Thumbnail, String> {
+async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
     let bytes = reqwest::get(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"))
         .await
         .and_then(|response| response.error_for_status())
@@ -348,9 +470,11 @@ async fn thumbnail(id: &str) -> Result<Thumbnail, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let image = image::load_from_memory(&bytes)
-        .map_err(|e| e.to_string())?
-        .into_rgba8();
+    let mut image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    if !large {
+        image = image.thumbnail(SMALL_THUMBNAIL.0, SMALL_THUMBNAIL.1);
+    }
+    let image = image.into_rgba8();
 
     Ok(Thumbnail {
         width: image.width(),
