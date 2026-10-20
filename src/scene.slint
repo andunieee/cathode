@@ -1,16 +1,32 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+import { Button, Slider, LineEdit, ListView, HorizontalBox, VerticalBox, Palette } from "std-widgets.slint";
 
-import { ScrollView, Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, StandardListView,
-    ComboBox, HorizontalBox, VerticalBox, GridBox, TabWidget, TextEdit, Slider } from "std-widgets.slint";
+export struct SearchResult {
+    id: string,
+    url: string,
+    title: string,
+    uploader: string,
+    duration: string,
+    thumbnail: image,
+}
 
 export component App inherits Window {
     preferred-width: 1000px;
-    preferred-height: 1000px;
-    title: "Slint MPV";
+    preferred-height: 700px;
+    title: "Lumiere";
+    background: playing ? transparent : Palette.background;
 
     out property <length> window_width: self.width;
     out property <length> window_height: self.height;
+
+    // Search / browse state
+    in-out property <bool> playing: false;
+    in-out property <bool> busy: false;
+    in-out property <string> status;
+    in-out property <[SearchResult]> results;
+    callback search(string);
+    callback play(SearchResult);
+
+    // Player state
     in-out property <bool> is_paused;
     in-out property <float> seek_position: 0;
     in-out property <string> ts_label: "00:00:00 / 00:00:00";
@@ -21,7 +37,72 @@ export component App inherits Window {
     in-out property <float> new_position: 0;
     in-out property <bool> position_ackd: true;
 
-    VerticalBox {
+    if !playing : VerticalBox {
+        HorizontalBox {
+            query := LineEdit {
+                placeholder-text: "Search YouTube";
+                enabled: !busy;
+                accepted(text) => {
+                    search(text);
+                }
+            }
+            Button {
+                text: "Search";
+                enabled: !busy;
+                clicked => {
+                    search(query.text);
+                }
+            }
+        }
+
+        Text {
+            text: status;
+            color: Palette.foreground;
+            horizontal-alignment: center;
+        }
+
+        ListView {
+            for result in results : Rectangle {
+                height: 84px;
+                HorizontalBox {
+                    Rectangle {
+                        width: 112px;
+                        background: Palette.foreground.with-alpha(0.1);
+                        Image {
+                            source: result.thumbnail;
+                            width: 100%;
+                            height: 100%;
+                            image-fit: cover;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: result.title;
+                            color: Palette.foreground;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: result.uploader + "  ·  " + result.duration;
+                            color: Palette.foreground.with-alpha(0.6);
+                            overflow: elide;
+                        }
+                    }
+                    Button {
+                        text: "Play";
+                        enabled: !busy;
+                        clicked => {
+                            play(result);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if playing : VerticalBox {
         Rectangle {
             background: #ffffff00;
         }
@@ -31,6 +112,13 @@ export component App inherits Window {
             height: 50px;
             HorizontalBox {
                 HorizontalLayout {
+                    Button {
+                        text: "Back";
+                        clicked => {
+                            is_paused = true;
+                            playing = false;
+                        }
+                    }
                     Button {
                         width: 55px;
                         icon: !is_paused ? pause_icon : play_icon;

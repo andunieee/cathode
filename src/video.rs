@@ -193,6 +193,12 @@ impl VideoUnderlay {
         }
     }
 
+    /// Replaces the currently playing file and starts playback.
+    pub fn load(&self, file: &str) {
+        let _ = self.mpv.command("loadfile", &[file, "replace"]);
+        let _ = self.mpv.set_property("pause", false);
+    }
+
     pub fn pause(&self) {
         let _ = self.mpv.set_property("pause", true);
     }

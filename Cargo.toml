@@ -11,6 +11,11 @@ slint = "1.18"
 glow = { version = "0.11" }
 instant = { version = "0.1", features = ["now"] }
 libmpv2 = "6"
+yt-dlp = "2.9.0"
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "sync"] }
+dirs = "7.0.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+reqwest = "0.13"
 
 [build-dependencies]
 slint-build = "1.18"
