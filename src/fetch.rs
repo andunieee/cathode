@@ -4,6 +4,8 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -45,10 +47,53 @@ pub struct VideoInfo {
     pub likes: Option<u64>,
 }
 
+/// How a search orders its results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSort {
+    Relevance,
+    Newest,
+    Views,
+}
+
+impl SearchSort {
+    /// In the order the dropdown shows them.
+    pub const ALL: [Self; 3] = [Self::Relevance, Self::Newest, Self::Views];
+}
+
+/// What a search keeps in its results, besides sorting them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchFilter {
+    None,
+    Hour,
+    Today,
+    Week,
+    Month,
+    Year,
+    Short,
+    Medium,
+    Long,
+}
+
+impl SearchFilter {
+    /// In the order the dropdown shows them.
+    pub const ALL: [Self; 9] = [
+        Self::None,
+        Self::Hour,
+        Self::Today,
+        Self::Week,
+        Self::Month,
+        Self::Year,
+        Self::Short,
+        Self::Medium,
+        Self::Long,
+    ];
+}
+
 pub enum Source {
     Search {
         query: String,
-        by_date: bool,
+        sort: SearchSort,
+        filter: SearchFilter,
     },
     /// A channel's uploads, or the results of searching inside that channel when `query` is set.
     Channel {
@@ -255,23 +300,29 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
     let (url, limit) = match source {
         Source::Search {
             query,
-            by_date: false,
+            sort: SearchSort::Relevance,
+            filter: SearchFilter::None,
         } => (
             format!("ytsearch{SEARCH_MAX_RESULTS}:{query}"),
             SEARCH_MAX_RESULTS,
         ),
-        // yt-dlp dropped `ytsearchdate`, so date order goes through YouTube's own results URL,
-        // where `sp=CAI=` is the "sort by upload date" filter.
+        // The other sorts don't exist as yt-dlp search keys (`ytsearchdate` was dropped), so
+        // they go through YouTube's own results URL, where `sp` is a protobuf carrying the
+        // sort in the first field and the filter in a second one.
         Source::Search {
             query,
-            by_date: true,
-        } => match reqwest::Url::parse_with_params(
-            "https://www.youtube.com/results",
-            [("search_query", query.as_str()), ("sp", "CAI=")],
-        ) {
-            Ok(url) => (url.to_string(), SEARCH_MAX_RESULTS),
-            Err(e) => return finish(Some(e.to_string())),
-        },
+            sort,
+            filter,
+        } => {
+            let sp = search_sp(sort, filter);
+            match reqwest::Url::parse_with_params(
+                "https://www.youtube.com/results",
+                [("search_query", query.as_str()), ("sp", &sp)],
+            ) {
+                Ok(url) => (url.to_string(), SEARCH_MAX_RESULTS),
+                Err(e) => return finish(Some(e.to_string())),
+            }
+        }
         Source::Playlist { id } => (
             format!("https://www.youtube.com/playlist?list={id}"),
             CHANNEL_MAX_RESULTS,
@@ -302,6 +353,31 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             .await
             .err(),
     );
+}
+
+/// The `sp` parameter for a search on YouTube's own results URL, as base64 protobuf. Field 1
+/// is the sort (1 = rating, 2 = upload date, 3 = view count) and field 2 is a submessage, with
+/// 1 = upload window (1 = hour .. 5 = year) and 3 = duration (1 = under 4 minutes, 2 = over 20
+/// minutes, 3 = 4 to 20 minutes). Composing the two as a flat concatenation is what YouTube
+/// itself does, and what yt-dlp's tests round-trip.
+fn search_sp(sort: SearchSort, filter: SearchFilter) -> String {
+    let mut sp = match sort {
+        SearchSort::Relevance => Vec::new(),
+        SearchSort::Newest => vec![0x08, 0x02],
+        SearchSort::Views => vec![0x08, 0x03],
+    };
+    match filter {
+        SearchFilter::None => (),
+        SearchFilter::Hour => sp.extend_from_slice(&[0x12, 0x02, 0x08, 0x01]),
+        SearchFilter::Today => sp.extend_from_slice(&[0x12, 0x02, 0x08, 0x02]),
+        SearchFilter::Week => sp.extend_from_slice(&[0x12, 0x02, 0x08, 0x03]),
+        SearchFilter::Month => sp.extend_from_slice(&[0x12, 0x02, 0x08, 0x04]),
+        SearchFilter::Year => sp.extend_from_slice(&[0x12, 0x02, 0x08, 0x05]),
+        SearchFilter::Short => sp.extend_from_slice(&[0x12, 0x02, 0x18, 0x01]),
+        SearchFilter::Medium => sp.extend_from_slice(&[0x12, 0x02, 0x18, 0x03]),
+        SearchFilter::Long => sp.extend_from_slice(&[0x12, 0x02, 0x18, 0x02]),
+    };
+    BASE64.encode(&sp)
 }
 
 /// Streams what yt-dlp lists at `url`, up to `end` entries, skipping the ones in `seen`.

@@ -11,7 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache;
 use crate::controls;
-use crate::fetch::{Entry, Request, Response, Source, VideoInfo};
+use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo};
 use crate::format;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::ui::{self, CacheRow, Ui};
@@ -22,7 +22,8 @@ enum Page {
     Settings,
     Search {
         query: String,
-        by_date: bool,
+        sort: SearchSort,
+        filter: SearchFilter,
     },
     Channel {
         id: String,
@@ -45,7 +46,13 @@ impl Page {
             Page::Home => "home".to_string(),
             Page::Settings => "settings".to_string(),
             Page::Playlist { id, .. } => format!("l:{id}"),
-            Page::Search { query, by_date } => format!("s:{by_date}:{query}"),
+            Page::Search {
+                query,
+                sort,
+                filter,
+            } => {
+                format!("s:{}:{}:{}", *sort as u8, *filter as u8, query)
+            }
             Page::Channel { id, query, .. } => format!("c:{id}:{query}"),
             Page::Video(entry) => format!("v:{}", entry.id),
             Page::Cache => "cache".to_string(),
@@ -451,15 +458,27 @@ fn show() {
 
     let key = page.key();
     match page {
-        Page::Search { query, by_date } => {
+        Page::Search {
+            query,
+            sort,
+            filter,
+        } => {
             ui.channel_header.set_visible(false);
 
             ui.syncing.set(true);
             ui.search_entry.set_text(&query);
-            ui.sort.set_selected(by_date as u32);
+            ui.sort.set_selected(sort as u8 as u32);
+            ui.filter.set_selected(filter as u8 as u32);
             ui.syncing.set(false);
 
-            show_listing(key, Source::Search { query, by_date });
+            show_listing(
+                key,
+                Source::Search {
+                    query,
+                    sort,
+                    filter,
+                },
+            );
         }
         Page::Home => {
             ui.stack.set_visible_child_name("home");
@@ -540,12 +559,13 @@ pub fn init(requests: UnboundedSender<Request>) {
     show();
 }
 
-pub fn search(query: &str, by_date: bool) {
+pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
     let query = query.trim();
     if !query.is_empty() {
         navigate(Page::Search {
             query: query.to_string(),
-            by_date,
+            sort,
+            filter,
         });
     }
 }

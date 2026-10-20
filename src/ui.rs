@@ -7,7 +7,7 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib, pango};
 
 use crate::controls;
-use crate::fetch::Entry;
+use crate::fetch::{Entry, SearchFilter, SearchSort};
 use crate::nav;
 use crate::player::Player;
 use crate::profile;
@@ -35,6 +35,7 @@ pub struct Ui {
     pub title_stack: gtk::Stack,
     pub search_entry: gtk::SearchEntry,
     pub sort: gtk::DropDown,
+    pub filter: gtk::DropDown,
     pub stack: gtk::Stack,
 
     // Search and channel pages show their results the same way.
@@ -306,10 +307,22 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .placeholder_text("Search YouTube")
         .hexpand(true)
         .build();
-    let sort = gtk::DropDown::from_strings(&["Relevance", "Newest"]);
+    let sort = gtk::DropDown::from_strings(&["Relevance", "Newest", "Most viewed"]);
+    let filter = gtk::DropDown::from_strings(&[
+        "No filter",
+        "Last hour",
+        "Today",
+        "This week",
+        "This month",
+        "This year",
+        "Under 4 minutes",
+        "4 to 20 minutes",
+        "Over 20 minutes",
+    ]);
     let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     search_box.append(&search_entry);
     search_box.append(&sort);
+    search_box.append(&filter);
     // The search bar is replaced by a title in the restricted profile.
     let title_stack = gtk::Stack::new();
     title_stack.add_named(
@@ -337,14 +350,28 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     header.pack_end(&queue_toggle);
     header.pack_end(&downloads);
 
-    search_entry.connect_activate(|entry| {
+    // Re-running the search is what changing either dropdown does, so that results follow.
+    let search = |ui: &Ui| {
+        nav::search(
+            &ui.search_entry.text(),
+            SearchSort::ALL[ui.sort.selected() as usize],
+            SearchFilter::ALL[ui.filter.selected() as usize],
+        );
+    };
+    search_entry.connect_activate(move |_| {
         let ui = get();
-        nav::search(&entry.text(), ui.sort.selected() == 1);
+        search(&ui);
     });
-    sort.connect_selected_notify(|sort| {
+    sort.connect_selected_notify(move |_| {
         let ui = get();
         if !ui.syncing.get() {
-            nav::search(&ui.search_entry.text(), sort.selected() == 1);
+            search(&ui);
+        }
+    });
+    filter.connect_selected_notify(move |_| {
+        let ui = get();
+        if !ui.syncing.get() {
+            search(&ui);
         }
     });
 
@@ -727,6 +754,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         controls_stack,
         search_entry,
         sort,
+        filter,
         stack,
         channel_header,
         channel_title,
