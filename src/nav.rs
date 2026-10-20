@@ -324,6 +324,8 @@ fn apply_mode() {
     ui.title_stack
         .set_visible_child_name(if restricted { "restricted" } else { "search" });
     ui.downloads.set_visible(!restricted);
+    ui.controls_stack
+        .set_visible_child_name(if restricted { "restricted" } else { "open" });
 }
 
 /// Turns the restricted profile on or off, starting over from the home page.

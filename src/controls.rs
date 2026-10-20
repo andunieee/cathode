@@ -60,7 +60,6 @@ pub struct Widgets {
     pub home: gtk::Stack,
     pub settings: gtk::ScrolledWindow,
 
-    restricted_switch: adw::SwitchRow,
     home_channels: Section,
     home_playlists: Section,
     home_videos: Section,
@@ -79,55 +78,13 @@ pub struct Widgets {
 impl Widgets {
     pub fn new() -> Self {
         // Home, profile off
-        let restricted_switch = adw::SwitchRow::builder()
-            .title("Restricted profile")
-            .subtitle("Only the allowed videos, channels and playlists can be watched")
-            .build();
-        restricted_switch.connect_active_notify(|row| {
-            if row.is_active() && !ui::get().syncing.get() {
-                nav::set_restricted(true);
-            }
-        });
-
-        let setup = adw::ActionRow::builder()
-            .title("Set up the restricted profile")
-            .activatable(true)
-            .build();
-        setup.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-        setup.connect_activated(|_| nav::open_settings());
-
-        let group = adw::PreferencesGroup::builder()
-            .title("Parental controls")
-            .build();
-        group.add(&restricted_switch);
-        group.add(&setup);
-
         let open = adw::StatusPage::builder()
             .icon_name("system-search-symbolic")
             .title("Search YouTube")
             .description("Type in the search bar to look for videos")
-            .child(&clamp(&group))
-            .css_classes(["compact"])
             .build();
 
         // Home, profile on
-        let unlock = gtk::Button::builder()
-            .label("Turn off…")
-            .icon_name("changes-allow-symbolic")
-            .valign(gtk::Align::Center)
-            .build();
-        unlock.connect_clicked(|_| unlock_profile());
-
-        let title = gtk::Label::builder()
-            .label("Restricted profile")
-            .xalign(0.0)
-            .hexpand(true)
-            .css_classes(["title-2"])
-            .build();
-        let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        top.append(&title);
-        top.append(&unlock);
-
         let home_empty = gtk::Label::builder()
             .label("Nothing is allowed in this profile yet")
             .css_classes(["dim-label"])
@@ -140,7 +97,6 @@ impl Widgets {
         );
 
         let restricted = page_box();
-        restricted.append(&top);
         restricted.append(&home_empty);
         restricted.append(&home_channels.root);
         restricted.append(&home_playlists.root);
@@ -224,7 +180,6 @@ impl Widgets {
             settings: gtk::ScrolledWindow::builder()
                 .child(&clamp(&settings_page))
                 .build(),
-            restricted_switch,
             home_channels,
             home_playlists,
             home_videos,
@@ -390,9 +345,6 @@ pub fn show_home() {
         widgets.home_empty.set_visible(empty);
     } else {
         widgets.home.set_visible_child_name("open");
-        ui.syncing.set(true);
-        widgets.restricted_switch.set_active(false);
-        ui.syncing.set(false);
     }
 }
 

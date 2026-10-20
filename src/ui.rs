@@ -28,6 +28,8 @@ pub struct Ui {
     pub back: gtk::Button,
     pub forward: gtk::Button,
     pub downloads: gtk::Button,
+    /// "open" has the entries to turn the profile on, "restricted" the one to turn it off.
+    pub controls_stack: gtk::Stack,
     pub title_stack: gtk::Stack,
     pub search_entry: gtk::SearchEntry,
     pub sort: gtk::DropDown,
@@ -250,6 +252,50 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     header.pack_start(&back);
     header.pack_start(&forward);
     header.pack_start(&home);
+
+    let turn_on = gtk::Button::builder()
+        .label("Turn on restricted profile")
+        .css_classes(["flat"])
+        .build();
+    let set_up = gtk::Button::builder()
+        .label("Set up restricted profile…")
+        .css_classes(["flat"])
+        .build();
+    let turn_off = gtk::Button::builder()
+        .label("Turn off restricted profile…")
+        .css_classes(["flat"])
+        .build();
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    menu_box.append(&turn_on);
+    menu_box.append(&set_up);
+    let controls_stack = gtk::Stack::new();
+    controls_stack.add_named(&menu_box, Some("open"));
+    controls_stack.add_named(&turn_off, Some("restricted"));
+    let popover = gtk::Popover::builder().child(&controls_stack).build();
+    let controls_menu = gtk::MenuButton::builder()
+        .icon_name("system-users-symbolic")
+        .tooltip_text("Parental controls")
+        .popover(&popover)
+        .build();
+    {
+        let popover = popover.clone();
+        turn_on.connect_clicked(move |_| {
+            popover.popdown();
+            nav::set_restricted(true);
+        });
+    }
+    {
+        let popover = popover.clone();
+        set_up.connect_clicked(move |_| {
+            popover.popdown();
+            nav::open_settings();
+        });
+    }
+    turn_off.connect_clicked(move |_| {
+        popover.popdown();
+        controls::unlock_profile();
+    });
+    header.pack_start(&controls_menu);
 
     let search_entry = gtk::SearchEntry::builder()
         .placeholder_text("Search YouTube")
@@ -658,6 +704,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         back,
         forward,
         downloads,
+        controls_stack,
         title_stack,
         search_entry,
         sort,
