@@ -1,12 +1,99 @@
-import { Button, Slider, LineEdit, ListView, HorizontalBox, VerticalBox, Palette } from "std-widgets.slint";
+import { Button, Slider, LineEdit, ListView, ScrollView, ComboBox, HorizontalBox, VerticalBox, Palette } from "std-widgets.slint";
 
 export struct SearchResult {
     id: string,
-    url: string,
     title: string,
-    uploader: string,
-    duration: string,
+    channel: string,
+    channel_id: string,
+    details: string,
     thumbnail: image,
+}
+
+export struct VideoDetails {
+    id: string,
+    title: string,
+    channel: string,
+    channel_id: string,
+    meta: string,
+    description: string,
+    thumbnail: image,
+}
+
+// A channel name that takes you to the channel's page.
+component ChannelLink inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size: 12px;
+    callback clicked();
+
+    width: label.preferred-width;
+    height: label.preferred-height;
+
+    label := Text {
+        text: root.text;
+        font-size: root.font-size;
+        color: Palette.accent-background;
+        overflow: elide;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component ResultCard inherits Rectangle {
+    in property <SearchResult> result;
+    callback open-video();
+    callback open-channel();
+
+    height: 84px;
+    background: card-area.has-hover ? Palette.foreground.with-alpha(0.08) : transparent;
+
+    card-area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            open-video();
+        }
+    }
+
+    HorizontalBox {
+        Rectangle {
+            width: 112px;
+            background: Palette.foreground.with-alpha(0.1);
+            Image {
+                source: result.thumbnail;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: result.title;
+                color: Palette.foreground;
+                font-weight: 600;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                ChannelLink {
+                    text: result.channel;
+                    clicked => {
+                        open-channel();
+                    }
+                }
+                Text {
+                    text: result.details;
+                    color: Palette.foreground.with-alpha(0.6);
+                    overflow: elide;
+                }
+            }
+        }
+    }
 }
 
 export component App inherits Window {
@@ -18,13 +105,28 @@ export component App inherits Window {
     out property <length> window_width: self.width;
     out property <length> window_height: self.height;
 
-    // Search / browse state
+    // Browsing state. `page` is one of "search", "channel" and "video".
     in-out property <bool> playing: false;
     in-out property <bool> busy: false;
     in-out property <string> status;
+    in-out property <string> page: "search";
+    in-out property <bool> can_back: false;
+    in-out property <bool> can_forward: false;
+
     in-out property <[SearchResult]> results;
-    callback search(string);
-    callback play(SearchResult);
+    in-out property <string> query_text;
+    in-out property <int> sort_index: 0;
+    in-out property <string> channel_name;
+    in-out property <string> channel_query;
+    in-out property <VideoDetails> video;
+
+    callback search(string, bool);
+    callback search-channel(string);
+    callback open-video(string);
+    callback open-channel(string, string);
+    callback play-video();
+    callback go-back();
+    callback go-forward();
 
     // Player state
     in-out property <bool> is_paused;
@@ -39,19 +141,73 @@ export component App inherits Window {
 
     if !playing : VerticalBox {
         HorizontalBox {
-            query := LineEdit {
-                placeholder-text: "Search YouTube";
-                enabled: !busy;
-                accepted(text) => {
-                    search(text);
+            Button {
+                text: "Back";
+                enabled: can_back;
+                clicked => {
+                    go-back();
                 }
             }
             Button {
-                text: "Search";
-                enabled: !busy;
+                text: "Forward";
+                enabled: can_forward;
                 clicked => {
-                    search(query.text);
+                    go-forward();
                 }
+            }
+            if page == "search" : HorizontalLayout {
+                spacing: 6px;
+                horizontal-stretch: 1;
+                LineEdit {
+                    placeholder-text: "Search YouTube";
+                    text <=> query_text;
+                    accepted(text) => {
+                        search(text, sort_index == 1);
+                    }
+                }
+                ComboBox {
+                    model: ["Relevance", "Newest"];
+                    current-index <=> sort_index;
+                    selected => {
+                        if query_text != "" {
+                            search(query_text, sort_index == 1);
+                        }
+                    }
+                }
+                Button {
+                    text: "Search";
+                    clicked => {
+                        search(query_text, sort_index == 1);
+                    }
+                }
+            }
+            if page == "channel" : HorizontalLayout {
+                spacing: 6px;
+                horizontal-stretch: 1;
+                Text {
+                    text: channel_name;
+                    color: Palette.foreground;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                LineEdit {
+                    placeholder-text: "Search this channel";
+                    text <=> channel_query;
+                    accepted(text) => {
+                        search-channel(text);
+                    }
+                }
+                Button {
+                    text: "Search";
+                    clicked => {
+                        search-channel(channel_query);
+                    }
+                }
+            }
+            if page == "video" : Rectangle {
+                horizontal-stretch: 1;
             }
         }
 
@@ -61,42 +217,70 @@ export component App inherits Window {
             horizontal-alignment: center;
         }
 
-        ListView {
-            for result in results : Rectangle {
-                height: 84px;
-                HorizontalBox {
-                    Rectangle {
-                        width: 112px;
-                        background: Palette.foreground.with-alpha(0.1);
-                        Image {
-                            source: result.thumbnail;
-                            width: 100%;
-                            height: 100%;
-                            image-fit: cover;
+        if page != "video" : ListView {
+            for result in results : ResultCard {
+                result: result;
+                open-video => {
+                    open-video(result.id);
+                }
+                open-channel => {
+                    open-channel(result.channel_id, result.channel);
+                }
+            }
+        }
+
+        if page == "video" : VerticalBox {
+            HorizontalBox {
+                alignment: start;
+                Rectangle {
+                    width: 320px;
+                    height: 180px;
+                    background: Palette.foreground.with-alpha(0.1);
+                    Image {
+                        source: video.thumbnail;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: cover;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+                    spacing: 8px;
+                    Text {
+                        text: video.title;
+                        color: Palette.foreground;
+                        font-size: 20px;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                    }
+                    ChannelLink {
+                        text: video.channel;
+                        font-size: 14px;
+                        clicked => {
+                            open-channel(video.channel_id, video.channel);
                         }
                     }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        Text {
-                            text: result.title;
-                            color: Palette.foreground;
-                            font-weight: 600;
-                            overflow: elide;
-                        }
-                        Text {
-                            text: result.uploader + "  ·  " + result.duration;
-                            color: Palette.foreground.with-alpha(0.6);
-                            overflow: elide;
-                        }
+                    Text {
+                        text: video.meta;
+                        color: Palette.foreground.with-alpha(0.6);
                     }
                     Button {
                         text: "Play";
+                        primary: true;
                         enabled: !busy;
                         clicked => {
-                            play(result);
+                            play-video();
                         }
                     }
+                }
+            }
+            ScrollView {
+                Text {
+                    text: video.description;
+                    color: Palette.foreground;
+                    wrap: word-wrap;
+                    width: parent.visible-width;
                 }
             }
         }
