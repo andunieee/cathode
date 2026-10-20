@@ -154,7 +154,7 @@ impl Widgets {
         password_row.add_suffix(&password_remove);
         let password = adw::PreferencesGroup::builder()
             .title("Password")
-            .description("Asked for to turn the restricted profile off")
+            .description("Asked for to turn the restricted profile on or off")
             .build();
         password.add(&password_row);
 
@@ -456,7 +456,7 @@ fn prompt(
 fn set_password() {
     prompt(
         "Set a password",
-        "It will be asked for to turn the restricted profile off.",
+        "It will be asked for to turn the restricted profile on or off.",
         "Set",
         &["New password", "Repeat the password"],
         |passwords| {
@@ -495,21 +495,27 @@ fn remove_password() {
     );
 }
 
-/// Turns the restricted profile off, after asking for the password if there is one.
-pub fn unlock_profile() {
+/// Turns the restricted profile on or off, after asking for the password if there is one.
+pub fn toggle_profile() {
+    let turn_on = !profile::restricted();
     if !profile::has_password() {
-        nav::set_restricted(false);
+        nav::set_restricted(turn_on);
         return;
     }
 
+    let (heading, confirm) = if turn_on {
+        ("Turn on the restricted profile", "Turn on")
+    } else {
+        ("Turn off the restricted profile", "Turn off")
+    };
     prompt(
-        "Turn off the restricted profile",
+        heading,
         "Enter the password.",
-        "Turn off",
+        confirm,
         &["Password"],
-        |passwords| {
+        move |passwords| {
             if profile::check_password(&passwords[0]) {
-                nav::set_restricted(false);
+                nav::set_restricted(turn_on);
             } else {
                 nav::toast("Wrong password");
             }

@@ -261,15 +261,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     header.pack_start(&forward);
     header.pack_start(&home);
 
-    // Straight to the restricted profile: on from here, off asks for the password if any.
+    // Straight to the restricted profile, asking for the password if there is one.
     let controls_button = icon_button("system-users-symbolic", "Turn on the restricted profile");
-    controls_button.connect_clicked(|_| {
-        if profile::restricted() {
-            controls::unlock_profile();
-        } else {
-            nav::set_restricted(true);
-        }
-    });
+    controls_button.connect_clicked(|_| controls::toggle_profile());
     header.pack_start(&controls_button);
 
     let search_entry = gtk::SearchEntry::builder()
