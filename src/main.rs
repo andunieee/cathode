@@ -65,7 +65,7 @@ pub fn main() {
                             app.set_position_ackd(true);
                             let duration = underlay.get_duration().unwrap_or(0) as f64;
                             let seek_target = app.get_new_position() as f64 / 100.0 * duration;
-                            underlay.get_mpv().seek_absolute(seek_target);
+                            let _ = underlay.get_mpv().command("seek", &[&seek_target.to_string(), "absolute"]);
                         }
 
                         app.set_ts_label(underlay.get_ts_label().into());

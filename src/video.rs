@@ -3,8 +3,8 @@ use glow::HasContext;
 use std::mem::transmute;
 use std::os::raw::c_void;
 
-use libmpv::render::*;
-use libmpv::*;
+use libmpv2::render::*;
+use libmpv2::*;
 
 fn get_proc_address(ctx: &*mut c_void, proc: &str) -> *mut c_void {
     let proc = std::ffi::CString::new(proc).unwrap();
@@ -24,28 +24,32 @@ pub struct VideoUnderlay {
     prev_height: f32,
 
     // NOTE: The order of the fields below should not change otherwise we will get a SEGFAULT.
-    render_ctx: RenderContext,
+    render_ctx: RenderContext<'static>,
     mpv: Mpv,
 }
 
 impl VideoUnderlay {
     pub fn new(gl: glow::Context, proc_addr_ctx: *mut c_void, file: &str, wh: (f32, f32)) -> Self {
-        let mut mpv = Mpv::new().expect("Error while creating MPV");
-        let render_ctx = RenderContext::new(
-            unsafe { mpv.ctx.as_mut() },
-            vec![
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("vo", "libmpv")?;
+            Ok(())
+        })
+        .expect("Error while creating MPV");
+        let render_ctx = mpv
+            .create_render_context(vec![
                 RenderParam::ApiType(RenderParamApiType::OpenGl),
                 RenderParam::InitParams(OpenGLInitParams {
                     get_proc_address,
                     ctx: proc_addr_ctx,
                 }),
-            ],
-        )
-        .expect("Failed creating render context");
+            ])
+            .expect("Failed creating render context");
 
-        mpv.event_context_mut().disable_deprecated_events().unwrap();
-        mpv.playlist_load_files(&[(file, FileState::AppendPlay, None)])
-            .unwrap();
+        // SAFETY: the render context only holds the raw mpv handle, and the field order of
+        // `VideoUnderlay` guarantees it is dropped before `mpv`.
+        let render_ctx: RenderContext<'static> = unsafe { transmute(render_ctx) };
+
+        mpv.command("loadfile", &[file, "append-play"]).unwrap();
 
         Self::init_gl(gl, wh, mpv, render_ctx)
     }
@@ -54,7 +58,7 @@ impl VideoUnderlay {
         gl: glow::Context,
         (width, height): (f32, f32),
         mpv: Mpv,
-        render_ctx: RenderContext,
+        render_ctx: RenderContext<'static>,
     ) -> Self {
         unsafe {
             let program = gl.create_program().expect("Cannot create program");
@@ -190,11 +194,11 @@ impl VideoUnderlay {
     }
 
     pub fn pause(&self) {
-        self.mpv.pause();
+        let _ = self.mpv.set_property("pause", true);
     }
 
     pub fn play(&self) {
-        self.mpv.unpause();
+        let _ = self.mpv.set_property("pause", false);
     }
 
     pub fn get_position(&self) -> Option<i64> {
@@ -258,9 +262,7 @@ impl VideoUnderlay {
                 .render::<*mut c_void>(transmute(self.fbo), width as _, height as _, true)
                 .expect("Failed to render");
 
-            let elapsed = self.start_time.elapsed().as_millis() as f32;
-
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
 
