@@ -11,6 +11,8 @@ use tokio::process::Command;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Notify, Semaphore};
 
+use crate::profile::{ChannelRef, Input, Item, PlaylistRef};
+
 const SEARCH_MAX_RESULTS: usize = 100;
 const CHANNEL_MAX_RESULTS: usize = 1000;
 /// How much of a long listing is fetched first, to have something to show early.
@@ -48,6 +50,7 @@ pub enum Source {
     Search { query: String, by_date: bool },
     /// A channel's uploads, or the results of searching inside that channel when `query` is set.
     Channel { id: String, query: String },
+    Playlist { id: String },
 }
 
 pub enum Request {
@@ -59,6 +62,8 @@ pub enum Request {
     /// Stops the download of the video with this id, if one is running.
     Cancel { id: String },
     Thumbnail { id: String, large: bool },
+    /// Looks up what a link typed in by the user points to.
+    Resolve { input: Input },
 }
 
 pub enum Response {
@@ -69,6 +74,7 @@ pub enum Response {
     Progress { id: String, fraction: f64 },
     Downloaded { id: String, result: Result<PathBuf, String> },
     Thumbnail { id: String, large: bool, image: Thumbnail },
+    Resolved { result: Result<Item, String> },
 }
 
 pub struct Thumbnail {
@@ -144,6 +150,13 @@ async fn run(
                     cancel.notify_one();
                 }
             }
+            Request::Resolve { input } => {
+                tokio::spawn(async move {
+                    on_response(Response::Resolved {
+                        result: resolve(input).await,
+                    });
+                });
+            }
             Request::Thumbnail { id, large } => {
                 let slots = thumbnail_slots.clone();
                 tokio::spawn(async move {
@@ -197,6 +210,10 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             Ok(url) => (url.to_string(), SEARCH_MAX_RESULTS),
             Err(e) => return finish(Some(e.to_string())),
         },
+        Source::Playlist { id } => (
+            format!("https://www.youtube.com/playlist?list={id}"),
+            CHANNEL_MAX_RESULTS,
+        ),
         Source::Channel { id, query } if query.is_empty() => (
             format!("https://www.youtube.com/channel/{id}/videos"),
             CHANNEL_MAX_RESULTS,
@@ -490,4 +507,45 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
         height: image.height(),
         rgba: image.into_raw(),
     })
+}
+
+/// The first entry of a listing, with the listing's own details.
+async fn listing_head(url: &str) -> Result<Value, String> {
+    let output = Command::new("yt-dlp")
+        .args([
+            "--no-warnings",
+            "--flat-playlist",
+            "--playlist-end=1",
+            "--dump-single-json",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
+
+    serde_json::from_slice::<Value>(&output.stdout).map_err(|_| error_line(&output.stderr))
+}
+
+async fn resolve(input: Input) -> Result<Item, String> {
+    match input {
+        Input::Video(url) => Ok(Item::Video(info(&url).await?.entry)),
+        Input::Channel(url) => {
+            let channel = listing_head(&format!("{url}/videos")).await?;
+            Ok(Item::Channel(ChannelRef {
+                id: string(&channel, "channel_id").ok_or("This channel could not be found")?,
+                name: string(&channel, "channel")
+                    .or_else(|| string(&channel, "uploader"))
+                    .unwrap_or_else(|| "Unnamed channel".to_string()),
+            }))
+        }
+        Input::Playlist(url) => {
+            let playlist = listing_head(&url).await?;
+            Ok(Item::Playlist(PlaylistRef {
+                id: string(&playlist, "id").ok_or("This playlist could not be found")?,
+                title: string(&playlist, "title").unwrap_or_else(|| "Unnamed playlist".to_string()),
+            }))
+        }
+    }
 }

@@ -6,9 +6,11 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib, pango};
 
+use crate::controls;
 use crate::fetch::Entry;
 use crate::nav;
 use crate::player::Player;
+use crate::profile;
 
 /// Playback speeds on offer, 1.0 being the first selected.
 const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -25,6 +27,8 @@ pub struct Ui {
     pub toolbar: adw::ToolbarView,
     pub back: gtk::Button,
     pub forward: gtk::Button,
+    pub downloads: gtk::Button,
+    pub title_stack: gtk::Stack,
     pub search_entry: gtk::SearchEntry,
     pub sort: gtk::DropDown,
     pub stack: gtk::Stack,
@@ -33,6 +37,7 @@ pub struct Ui {
     pub channel_header: gtk::Box,
     pub channel_title: gtk::Label,
     pub channel_entry: gtk::SearchEntry,
+    pub allow_channel: gtk::Button,
     pub results_status: gtk::Label,
     pub store: gio::ListStore,
 
@@ -41,6 +46,7 @@ pub struct Ui {
     pub video_channel: gtk::LinkButton,
     pub video_meta: gtk::Label,
     pub video_description: gtk::Label,
+    pub allow_video: gtk::Button,
 
     pub cache_list: gtk::ListBox,
     pub cache_select_all: gtk::CheckButton,
@@ -48,6 +54,8 @@ pub struct Ui {
     pub cache_queue: gtk::Button,
     pub cache_delete: gtk::Button,
     pub cache_rows: RefCell<Vec<CacheRow>>,
+
+    pub controls: controls::Widgets,
 
     pub player: Rc<Player>,
     pub player_title: gtk::Label,
@@ -169,6 +177,9 @@ impl Card {
         self.title.set_text(&entry.title);
         self.channel.set_label(&entry.channel);
         self.channel.set_visible(!entry.channel.is_empty());
+        // In the restricted profile only the channels that are allowed can be visited.
+        self.channel
+            .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
         self.details.set_text(&nav::details(entry));
         *self.entry.borrow_mut() = Some(entry.clone());
 
@@ -234,8 +245,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let forward = icon_button("go-next-symbolic", "Forward");
     back.connect_clicked(|_| nav::back());
     forward.connect_clicked(|_| nav::forward());
+    let home = icon_button("go-home-symbolic", "Home");
+    home.connect_clicked(|_| nav::open_home());
     header.pack_start(&back);
     header.pack_start(&forward);
+    header.pack_start(&home);
 
     let search_entry = gtk::SearchEntry::builder()
         .placeholder_text("Search YouTube")
@@ -245,12 +259,23 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     search_box.append(&search_entry);
     search_box.append(&sort);
-    header.set_title_widget(Some(
+    // The search bar is replaced by a title in the restricted profile.
+    let title_stack = gtk::Stack::new();
+    title_stack.add_named(
         &adw::Clamp::builder()
             .maximum_size(640)
             .child(&search_box)
             .build(),
-    ));
+        Some("search"),
+    );
+    title_stack.add_named(
+        &gtk::Label::builder()
+            .label("Restricted profile")
+            .css_classes(["heading"])
+            .build(),
+        Some("restricted"),
+    );
+    header.set_title_widget(Some(&title_stack));
 
     let queue_toggle = gtk::ToggleButton::builder()
         .icon_name("view-list-symbolic")
@@ -293,6 +318,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     channel_header.set_margin_end(12);
     channel_header.append(&channel_title);
     channel_header.append(&channel_entry);
+    let allow_channel = gtk::Button::builder()
+        .valign(gtk::Align::Center)
+        .visible(false)
+        .build();
+    allow_channel.connect_clicked(|_| nav::toggle_allowed());
+    channel_header.append(&allow_channel);
 
     let results_status = gtk::Label::builder()
         .css_classes(["dim-label"])
@@ -355,6 +386,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons.set_margin_top(6);
     buttons.append(&play);
     buttons.append(&queue_video);
+    let allow_video = gtk::Button::builder()
+        .css_classes(["pill"])
+        .visible(false)
+        .build();
+    allow_video.connect_clicked(|_| nav::toggle_allowed());
+    buttons.append(&allow_video);
 
     let video_info = gtk::Box::new(gtk::Orientation::Vertical, 6);
     video_info.set_hexpand(true);
@@ -529,6 +566,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Pages
     let stack = gtk::Stack::new();
+    let controls = controls::Widgets::new();
+    stack.add_named(&controls.home, Some("home"));
+    stack.add_named(&controls.settings, Some("settings"));
     stack.add_named(&results, Some("results"));
     stack.add_named(&video_scroll, Some("video"));
     stack.add_named(&cache_page, Some("cache"));
@@ -617,12 +657,15 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         toolbar,
         back,
         forward,
+        downloads,
+        title_stack,
         search_entry,
         sort,
         stack,
         channel_header,
         channel_title,
         channel_entry,
+        allow_channel,
         results_status,
         store,
         video_picture,
@@ -630,12 +673,14 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         video_channel,
         video_meta,
         video_description,
+        allow_video,
         cache_list,
         cache_select_all,
         cache_summary,
         cache_queue,
         cache_delete,
         cache_rows: RefCell::new(Vec::new()),
+        controls,
         player,
         player_title,
         player_status,

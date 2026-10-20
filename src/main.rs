@@ -1,8 +1,10 @@
 mod cache;
+mod controls;
 mod fetch;
 mod format;
 mod nav;
 mod player;
+mod profile;
 mod ui;
 
 use adw::prelude::*;

@@ -16,6 +16,8 @@ Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `
 - [x] Download through yt-dlp, with progress, into a cache (`~/.cache/lumpla`)
 - [x] A page listing the cached videos, to queue or delete them one by one or in bulk. The files are the source of truth, `index.json` only remembers their titles and is cleaned up when files are gone
 - [x] Play/Pause, seekbar, playback speed (0.5× to 3×), volume, fullscreen
+- [x] Parental controls: a restricted profile that only reaches the videos, channels and playlists it allows. There is no search while it is on, and it can be protected with a password. Set it up from the home page, it is saved in `~/.config/lumpla/profiles/default.json`
+- [x] Playlist pages
 - [ ] Everything else
 
 # Installation

@@ -10,14 +10,19 @@ use gtk::{gdk, gio, glib};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache;
+use crate::controls;
+use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::fetch::{Entry, Request, Response, Source, VideoInfo};
 use crate::format;
 use crate::ui::{self, CacheRow, Ui};
 
 #[derive(Clone)]
 enum Page {
+    Home,
+    Settings,
     Search { query: String, by_date: bool },
     Channel { id: String, name: String, query: String },
+    Playlist { id: String, title: String },
     Video(Entry),
     Cache,
     Player(Entry),
@@ -27,6 +32,9 @@ impl Page {
     /// Identifies the page's content, and is what responses are matched against.
     fn key(&self) -> String {
         match self {
+            Page::Home => "home".to_string(),
+            Page::Settings => "settings".to_string(),
+            Page::Playlist { id, .. } => format!("l:{id}"),
             Page::Search { query, by_date } => format!("s:{by_date}:{query}"),
             Page::Channel { id, query, .. } => format!("c:{id}:{query}"),
             Page::Video(entry) => format!("v:{}", entry.id),
@@ -86,7 +94,7 @@ struct State {
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State {
         requests: None,
-        history: vec![Page::Search { query: String::new(), by_date: false }],
+        history: vec![Page::Home],
         index: 0,
         listings: HashMap::new(),
         infos: HashMap::new(),
@@ -108,7 +116,7 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     STATE.with(|state| f(&mut state.borrow_mut()))
 }
 
-fn send(request: Request) {
+pub fn send(request: Request) {
     with(|state| {
         if let Some(requests) = &state.requests {
             let _ = requests.send(request);
@@ -120,7 +128,7 @@ fn current() -> Page {
     with(|state| state.history[state.index].clone())
 }
 
-fn toast(message: &str) {
+pub fn toast(message: &str) {
     ui::get().toasts.add_toast(adw::Toast::new(message));
 }
 
@@ -206,7 +214,10 @@ fn show_listing(key: String, source: Source) {
 
     let cached = with(|state| state.listings.get(&key).map(|l| l.entries.clone()));
     match cached {
-        Some(entries) => append_entries(&ui, &entries),
+        Some(entries) => {
+            note_listed(&key, &entries);
+            append_entries(&ui, &entries);
+        }
         None => {
             with(|state| {
                 state.listings.insert(
@@ -235,6 +246,8 @@ fn show_video(entry: &Entry) {
     ui.video_title.set_text(&entry.title);
     ui.video_channel.set_label(&entry.channel);
     ui.video_channel.set_visible(!entry.channel_id.is_empty());
+    ui.video_channel
+        .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
 
     let mut meta = Vec::new();
     // The exact date comes with the details, a listing only knows roughly how long ago it was.
@@ -265,6 +278,132 @@ fn show_video(entry: &Entry) {
     let large = thumbnail(&entry.id, true, None);
     let small = with(|state| state.thumbnails[0].get(&entry.id).cloned());
     ui.video_picture.set_paintable(large.or(small).as_ref());
+}
+
+// The restricted profile
+
+/// Whether the video can be watched, given the restricted profile if it is on.
+fn video_allowed(entry: &Entry) -> bool {
+    !profile::restricted() || profile::allows_video(entry)
+}
+
+/// The restricted profile only gets to see what it was given.
+fn page_allowed(page: &Page) -> bool {
+    if !profile::restricted() {
+        return true;
+    }
+
+    match page {
+        Page::Home => true,
+        Page::Settings | Page::Search { .. } | Page::Cache => false,
+        Page::Channel { id, .. } => profile::allows_channel(id),
+        Page::Playlist { id, .. } => profile::allows_playlist(id),
+        Page::Video(entry) | Page::Player(entry) => profile::allows_video(entry),
+    }
+}
+
+/// Videos listed by an allowed channel or playlist are allowed too.
+fn note_listed(key: &str, entries: &[Entry]) {
+    let allowed = if let Some(id) = key.strip_prefix("l:") {
+        profile::allows_playlist(id)
+    } else if let Some(rest) = key.strip_prefix("c:") {
+        rest.split(':').next().is_some_and(profile::allows_channel)
+    } else {
+        false
+    };
+
+    if allowed {
+        profile::remember_listed(entries);
+    }
+}
+
+fn apply_mode() {
+    let ui = ui::get();
+    let restricted = profile::restricted();
+
+    ui.title_stack
+        .set_visible_child_name(if restricted { "restricted" } else { "search" });
+    ui.downloads.set_visible(!restricted);
+}
+
+/// Turns the restricted profile on or off, starting over from the home page.
+pub fn set_restricted(restricted: bool) {
+    if let Err(error) = profile::update(|profile| profile.restricted = restricted) {
+        toast(&format!("Could not save the profile: {error}"));
+    }
+    profile::forget_listed();
+
+    with(|state| {
+        state.history = vec![Page::Home];
+        state.index = 0;
+    });
+    apply_mode();
+    show();
+}
+
+fn update_allow_buttons() {
+    let ui = ui::get();
+    let label = |allowed: bool| {
+        if allowed {
+            "Remove from restricted profile"
+        } else {
+            "Add to restricted profile"
+        }
+    };
+
+    let (channel, video) = match current() {
+        Page::Channel { id, .. } => (Some(label(profile::allows_channel(&id))), None),
+        Page::Playlist { id, .. } => (Some(label(profile::allows_playlist(&id))), None),
+        Page::Video(entry) => (None, Some(label(profile::lists_video(&entry.id)))),
+        _ => (None, None),
+    };
+
+    // Only the one in charge of the profile gets to change it.
+    let editable = !profile::restricted();
+    ui.allow_channel.set_visible(editable && channel.is_some());
+    ui.allow_channel.set_label(channel.unwrap_or_default());
+    ui.allow_video.set_visible(editable && video.is_some());
+    ui.allow_video.set_label(video.unwrap_or_default());
+}
+
+/// Adds the page on screen to the restricted profile, or takes it out of it.
+pub fn toggle_allowed() {
+    let toggle = |allowed: bool, item: Item, remove: Box<dyn FnOnce(&mut profile::Profile)>| {
+        if allowed {
+            profile::update(remove).map(|_| false)
+        } else {
+            profile::add(item)
+        }
+    };
+
+    let result = match current() {
+        Page::Channel { id, name, .. } => toggle(
+            profile::allows_channel(&id),
+            Item::Channel(ChannelRef { id: id.clone(), name }),
+            Box::new(move |p| p.channels.retain(|c| c.id != id)),
+        ),
+        Page::Playlist { id, title } => toggle(
+            profile::allows_playlist(&id),
+            Item::Playlist(PlaylistRef { id: id.clone(), title }),
+            Box::new(move |p| p.playlists.retain(|p| p.id != id)),
+        ),
+        Page::Video(entry) => {
+            let id = entry.id.clone();
+            toggle(
+                profile::lists_video(&entry.id),
+                Item::Video(entry),
+                Box::new(move |p| p.videos.retain(|v| v.id != id)),
+            )
+        }
+        _ => return,
+    };
+
+    match result {
+        Ok(true) => toast("Added to the restricted profile"),
+        Ok(false) => toast("Removed from the restricted profile"),
+        Err(error) => toast(&format!("Could not save the profile: {error}")),
+    }
+    update_allow_buttons();
 }
 
 // Navigation
@@ -302,18 +441,29 @@ fn show() {
             ui.sort.set_selected(by_date as u32);
             ui.syncing.set(false);
 
-            if query.is_empty() {
-                ui.stack.set_visible_child_name("results");
-                ui.store.remove_all();
-                ui.results_status.set_text("Search for something to get started");
-            } else {
-                show_listing(key, Source::Search { query, by_date });
-            }
+            show_listing(key, Source::Search { query, by_date });
+        }
+        Page::Home => {
+            ui.stack.set_visible_child_name("home");
+            controls::show_home();
+        }
+        Page::Settings => {
+            ui.stack.set_visible_child_name("settings");
+            controls::show_settings();
+        }
+        Page::Playlist { id, title } => {
+            ui.channel_header.set_visible(true);
+            ui.channel_title.set_text(&title);
+            // There is nothing to search in a playlist.
+            ui.channel_entry.set_visible(false);
+
+            show_listing(key, Source::Playlist { id });
         }
         Page::Channel { id, name, query } => {
             ui.channel_header.set_visible(true);
             ui.channel_title.set_text(&name);
             ui.channel_entry.set_text(&query);
+            ui.channel_entry.set_visible(true);
 
             show_listing(key, Source::Channel { id, query });
         }
@@ -331,9 +481,16 @@ fn show() {
         Page::Cache => show_cache(),
         Page::Player(entry) => show_player(&entry),
     }
+
+    update_allow_buttons();
 }
 
 fn navigate(page: Page) {
+    if !page_allowed(&page) {
+        toast("This is not available in the restricted profile");
+        return;
+    }
+
     let reload = with(|state| {
         let key = page.key();
         if state.history[state.index].key() == key {
@@ -358,6 +515,8 @@ fn navigate(page: Page) {
 
 pub fn init(requests: UnboundedSender<Request>) {
     with(|state| state.requests = Some(requests));
+    profile::init();
+    apply_mode();
     // Forgets what's left of videos that are gone.
     cache::scan();
     show();
@@ -401,6 +560,21 @@ pub fn open_current_channel() {
 
 pub fn open_video(entry: Entry) {
     navigate(Page::Video(entry));
+}
+
+pub fn open_home() {
+    navigate(Page::Home);
+}
+
+pub fn open_settings() {
+    navigate(Page::Settings);
+}
+
+pub fn open_playlist(id: &str, title: &str) {
+    navigate(Page::Playlist {
+        id: id.to_string(),
+        title: title.to_string(),
+    });
 }
 
 pub fn open_cache() {
@@ -585,7 +759,7 @@ fn play_next_in_queue() {
         let position = state.queue.iter().position(|item| item.entry.id == id)?;
         state.queue[position + 1..]
             .iter()
-            .find(|item| matches!(item.state, QueueState::Ready))
+            .find(|item| matches!(item.state, QueueState::Ready) && video_allowed(&item.entry))
             .map(|item| item.entry.clone())
     });
 
@@ -603,6 +777,11 @@ pub fn queue_current() {
 }
 
 pub fn queue_add(entry: Entry) {
+    if !video_allowed(&entry) {
+        toast("This video is not available in the restricted profile");
+        return;
+    }
+
     let added = with(|state| {
         if state.queue.iter().any(|item| item.entry.id == entry.id) {
             return false;
@@ -727,7 +906,7 @@ fn refresh_queue() {
             .icon_name("media-playback-start-symbolic")
             .tooltip_text("Play")
             .valign(gtk::Align::Center)
-            .sensitive(ready && !is_playing)
+            .sensitive(ready && !is_playing && video_allowed(&entry))
             .css_classes(["flat", "circular"])
             .build();
         play.connect_clicked({
@@ -987,6 +1166,8 @@ pub fn handle(response: Response) {
                     .extend(entries.iter().cloned())
             });
 
+            note_listed(&key, &entries);
+
             if current().key() == key {
                 append_entries(&ui, &entries);
                 update_results_status(&key);
@@ -1039,6 +1220,7 @@ pub fn handle(response: Response) {
                 Err(_) => {}
             }
         }
+        Response::Resolved { result } => controls::resolved(result),
         Response::Thumbnail { id, large, image } => {
             let bytes = glib::Bytes::from_owned(image.rgba);
             let texture: gdk::Texture = gdk::MemoryTexture::new(
