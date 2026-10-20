@@ -16,10 +16,14 @@ type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
 
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 
-/// Looks up OpenGL functions through whichever of EGL or GLX GTK is using.
+/// Looks up OpenGL functions through whichever of EGL, GLX (Linux), WGL
+/// (Windows) or the OpenGL framework (macOS) the GTK renderer is using. Values that the proc-address entry
+/// point returns NULL for (e.g. GL 1.x core functions) fall back to a dlsym
+/// of the same library.
 struct GlLoader {
     _library: libloading::Library,
-    get_proc_address: GetProcAddress,
+    /// `None` on macOS, where there is no such function and the symbols are looked up directly.
+    get_proc_address: Option<GetProcAddress>,
 }
 
 static GL_LOADER: OnceLock<Option<GlLoader>> = OnceLock::new();
@@ -27,10 +31,23 @@ static GL_LOADER: OnceLock<Option<GlLoader>> = OnceLock::new();
 fn gl_loader() -> Option<&'static GlLoader> {
     GL_LOADER
         .get_or_init(|| {
+            #[cfg(target_os = "macos")]
+            // SAFETY: loading the system's OpenGL framework runs nothing of ours.
+            if let Ok(library) = unsafe {
+                libloading::Library::new("/System/Library/Frameworks/OpenGL.framework/OpenGL")
+            } {
+                return Some(GlLoader {
+                    _library: library,
+                    get_proc_address: None,
+                });
+            }
+
             for (library, symbol) in [
                 ("libEGL.so.1", "eglGetProcAddress"),
                 ("libGL.so.1", "glXGetProcAddressARB"),
                 ("libGL.so.1", "glXGetProcAddress"),
+                ("libEGL.dll", "eglGetProcAddress"),
+                ("opengl32.dll", "wglGetProcAddress"),
             ] {
                 unsafe {
                     let Ok(library) = libloading::Library::new(library) else {
@@ -43,7 +60,7 @@ fn gl_loader() -> Option<&'static GlLoader> {
                     let get_proc_address = *get_proc_address;
                     return Some(GlLoader {
                         _library: library,
-                        get_proc_address,
+                        get_proc_address: Some(get_proc_address),
                     });
                 }
             }
@@ -53,9 +70,33 @@ fn gl_loader() -> Option<&'static GlLoader> {
 }
 
 fn gl_proc_address(name: &str) -> *mut c_void {
-    match (gl_loader(), CString::new(name)) {
-        (Some(loader), Ok(name)) => unsafe { (loader.get_proc_address)(name.as_ptr()) },
-        _ => std::ptr::null_mut(),
+    let Ok(name) = CString::new(name) else {
+        return std::ptr::null_mut();
+    };
+    let Some(loader) = gl_loader() else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: `_library` stays loaded forever in `GL_LOADER`.
+    let address = loader
+        .get_proc_address
+        .map_or(std::ptr::null_mut(), |get| unsafe { get(name.as_ptr()) });
+    if !address.is_null() {
+        return address;
+    }
+    // GL core functions (1.0/1.1) may only be available as direct exports of
+    // the library, not through the proc-address entry point.
+    // SAFETY: the library stays loaded forever, so the symbol stays valid,
+    // and dereferencing a function-type `Symbol` yields the address itself.
+    let fallback = unsafe {
+        loader
+            ._library
+            .get::<unsafe extern "C" fn()>(name.as_bytes())
+            .ok()
+    };
+    match fallback {
+        // SAFETY: see above.
+        Some(symbol) => *symbol as *mut c_void,
+        None => std::ptr::null_mut(),
     }
 }
 
