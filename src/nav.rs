@@ -1223,6 +1223,33 @@ pub fn handle(response: Response) {
             }
         }
         Response::Resolved { result } => controls::resolved(result),
+        Response::Setup(status) => {
+            use crate::tools::Status;
+
+            let banner = &ui.setup_banner;
+            match status {
+                Status::Checking => {}
+                Status::Installing { tool, fraction } => {
+                    banner.set_title(&match fraction {
+                        Some(fraction) => {
+                            format!("Downloading {tool}… {:.0}%", fraction * 100.0)
+                        }
+                        None => format!("Setting up {tool}…"),
+                    });
+                    banner.set_revealed(true);
+                }
+                Status::Done { errors } => {
+                    if errors.is_empty() {
+                        banner.set_revealed(false);
+                    } else {
+                        banner.set_title(&errors.join(" · "));
+                        banner.set_button_label(Some("Dismiss"));
+                        banner.connect_button_clicked(|banner| banner.set_revealed(false));
+                        banner.set_revealed(true);
+                    }
+                }
+            }
+        }
         Response::Thumbnail { id, large, image } => {
             let bytes = glib::Bytes::from_owned(image.rgba);
             let texture: gdk::Texture = gdk::MemoryTexture::new(

@@ -25,6 +25,8 @@ pub struct Ui {
     pub toasts: adw::ToastOverlay,
     pub split: adw::OverlaySplitView,
     pub toolbar: adw::ToolbarView,
+    /// Shows the progress of the startup check of the external tools.
+    pub setup_banner: adw::Banner,
     pub back: gtk::Button,
     pub forward: gtk::Button,
     pub downloads: gtk::Button,
@@ -622,6 +624,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
+    let setup_banner = adw::Banner::new("");
+    toolbar.add_top_bar(&setup_banner);
     toolbar.set_content(Some(&stack));
 
     // Queue sidebar
@@ -701,11 +705,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         toasts,
         split,
         toolbar,
+        setup_banner,
         back,
         forward,
         downloads,
-        controls_stack,
         title_stack,
+        controls_stack,
         search_entry,
         sort,
         stack,

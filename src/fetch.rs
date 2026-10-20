@@ -7,7 +7,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Notify, Semaphore};
 
@@ -75,6 +74,8 @@ pub enum Response {
     Downloaded { id: String, result: Result<PathBuf, String> },
     Thumbnail { id: String, large: bool, image: Thumbnail },
     Resolved { result: Result<Item, String> },
+    /// Progress of the startup check of the external tools.
+    Setup(crate::tools::Status),
 }
 
 pub struct Thumbnail {
@@ -112,6 +113,18 @@ async fn run(
 ) {
     let thumbnail_slots = Arc::new(Semaphore::new(8));
     let downloads: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Default::default();
+
+    // Without the tools there is nothing to run, so the first start waits for them. Later ones
+    // only update in the background.
+    let report = {
+        let on_response = on_response.clone();
+        move |status| on_response(Response::Setup(status))
+    };
+    if crate::tools::missing() {
+        crate::tools::update(report).await;
+    } else {
+        tokio::spawn(crate::tools::update(report));
+    }
 
     while let Some(request) = rx.recv().await {
         let on_response = on_response.clone();
@@ -248,7 +261,7 @@ async fn stream_listing(
     on_response: &impl Fn(Response),
 ) -> Result<(), String> {
     // The results and channel pages keep paging forever, so the limit is needed here.
-    let mut child = Command::new("yt-dlp")
+    let mut child = crate::tools::command("yt-dlp")
         .args([
             "--no-warnings",
             "--flat-playlist",
@@ -360,7 +373,7 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
 }
 
 async fn info(url: &str) -> Result<VideoInfo, String> {
-    let output = Command::new("yt-dlp")
+    let output = crate::tools::command("yt-dlp")
         .args([
             "--no-warnings",
             "--no-playlist",
@@ -410,7 +423,7 @@ async fn download(
         return Ok(path);
     }
 
-    let mut child = Command::new("yt-dlp")
+    let mut child = crate::tools::command("yt-dlp")
         .args([
             "--no-warnings",
             "--no-playlist",
@@ -511,7 +524,7 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
 
 /// The first entry of a listing, with the listing's own details.
 async fn listing_head(url: &str) -> Result<Value, String> {
-    let output = Command::new("yt-dlp")
+    let output = crate::tools::command("yt-dlp")
         .args([
             "--no-warnings",
             "--flat-playlist",

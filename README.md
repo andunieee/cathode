@@ -25,7 +25,7 @@ Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `
 * rustc
 * GTK 4.10+ and libadwaita 1.5+ (and their development headers)
 * libmpv (and its development headers)
-* yt-dlp and ffmpeg, available in your `PATH`
+* Nothing else: on startup Lumpla downloads yt-dlp (kept up to date daily), and ffmpeg/ffprobe and deno if they aren't in your `PATH`, into the `tools` folder of the cache (`~/.cache/lumpla/tools` on Linux), verifying their checksums
 
 ## Running
 Open the search page:
