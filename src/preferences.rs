@@ -1,9 +1,69 @@
 //! The Settings page: a sidebar with the general settings and the parental control ones.
 
+use std::cell::{Cell, RefCell};
+
 use adw::prelude::*;
 
+use crate::fetch::Request;
 use crate::nav;
 use crate::settings::{self, BROWSERS, QUALITIES};
+
+const COOKIES_SUBTITLE: &str =
+    "Uses the browser's sign-in, for age-restricted videos and sign-in checks";
+
+struct CookiesRow {
+    row: adw::ComboRow,
+    /// Set while the row is changed by code, so its signal can be ignored.
+    syncing: Cell<bool>,
+}
+
+thread_local! {
+    static COOKIES: RefCell<Option<std::rc::Rc<CookiesRow>>> = const { RefCell::new(None) };
+}
+
+fn cookies_row() -> Option<std::rc::Rc<CookiesRow>> {
+    COOKIES.with(|cookies| cookies.borrow().clone())
+}
+
+/// The row position of the browser saved in the settings.
+fn saved_position() -> u32 {
+    settings::get()
+        .cookies_from_browser
+        .as_deref()
+        .and_then(|name| BROWSERS.iter().position(|b| *b == name))
+        .map_or(0, |index| index as u32 + 1)
+}
+
+/// Accepts the browser if yt-dlp could use its cookies, otherwise shows why it couldn't and
+/// puts the row back to what is saved.
+pub fn cookies_checked(browser: &str, result: Result<(), String>) {
+    let Some(cookies) = cookies_row() else { return };
+    let row = &cookies.row;
+
+    // The choice may have moved on while yt-dlp was running.
+    let chosen = (row.selected() as usize)
+        .checked_sub(1)
+        .map(|index| BROWSERS[index]);
+    if chosen != Some(browser) {
+        return;
+    }
+
+    row.set_sensitive(true);
+    match result {
+        Ok(()) => {
+            row.set_subtitle(COOKIES_SUBTITLE);
+            row.remove_css_class("error");
+            save(|s| s.cookies_from_browser = Some(browser.to_string()));
+        }
+        Err(error) => {
+            row.set_subtitle(&format!("Could not use {browser}: {error}"));
+            row.add_css_class("error");
+            cookies.syncing.set(true);
+            row.set_selected(saved_position());
+            cookies.syncing.set(false);
+        }
+    }
+}
 
 fn save(change: impl FnOnce(&mut settings::Settings)) {
     if let Err(error) = settings::update(change) {
@@ -72,21 +132,35 @@ fn general() -> adw::PreferencesPage {
     browsers.extend(BROWSERS);
     let cookies = adw::ComboRow::builder()
         .title("Cookies from browser")
-        .subtitle("Uses the browser's sign-in, for age-restricted videos and sign-in checks")
+        .subtitle(COOKIES_SUBTITLE)
         .model(&gtk::StringList::new(&browsers))
-        .selected(
-            current
-                .cookies_from_browser
-                .as_deref()
-                .and_then(|name| BROWSERS.iter().position(|b| *b == name))
-                .map_or(0, |index| index as u32 + 1),
-        )
+        .selected(saved_position())
         .build();
-    cookies.connect_selected_notify(|row| {
-        let browser = (row.selected() as usize)
-            .checked_sub(1)
-            .map(|index| BROWSERS[index].to_string());
-        save(|s| s.cookies_from_browser = browser);
+    let cookies_state = std::rc::Rc::new(CookiesRow {
+        row: cookies.clone(),
+        syncing: Cell::new(false),
+    });
+    COOKIES.with(|slot| *slot.borrow_mut() = Some(cookies_state.clone()));
+    cookies.connect_selected_notify(move |row| {
+        if cookies_state.syncing.get() {
+            return;
+        }
+        row.remove_css_class("error");
+
+        // A browser has to prove it works before it is saved. Having none needs no proof.
+        match (row.selected() as usize).checked_sub(1) {
+            Some(index) => {
+                row.set_subtitle("Checking…");
+                row.set_sensitive(false);
+                nav::send(Request::CheckCookies {
+                    browser: BROWSERS[index].to_string(),
+                });
+            }
+            None => {
+                row.set_subtitle(COOKIES_SUBTITLE);
+                save(|s| s.cookies_from_browser = None);
+            }
+        }
     });
 
     let proxy = entry_row(

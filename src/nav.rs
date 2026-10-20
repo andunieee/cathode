@@ -35,6 +35,8 @@ enum Page {
         title: String,
     },
     Video(Entry),
+    /// What YouTube suggests after a video.
+    Related(Entry),
     Cache,
     Player(Entry),
 }
@@ -55,6 +57,7 @@ impl Page {
             }
             Page::Channel { id, query, .. } => format!("c:{id}:{query}"),
             Page::Video(entry) => format!("v:{}", entry.id),
+            Page::Related(entry) => format!("r:{}", entry.id),
             Page::Cache => "cache".to_string(),
             Page::Player(entry) => format!("p:{}", entry.id),
         }
@@ -312,7 +315,7 @@ fn page_allowed(page: &Page) -> bool {
 
     match page {
         Page::Home => true,
-        Page::Settings | Page::Search { .. } | Page::Cache => false,
+        Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache => false,
         Page::Channel { id, .. } => profile::allows_channel(id),
         Page::Playlist { id, .. } => profile::allows_playlist(id),
         Page::Video(entry) | Page::Player(entry) => profile::allows_video(entry),
@@ -519,6 +522,14 @@ fn show() {
                 });
             }
         }
+        Page::Related(entry) => {
+            ui.channel_header.set_visible(true);
+            ui.channel_title
+                .set_text(&format!("Suggested after {}", entry.title));
+            ui.channel_entry.set_visible(false);
+
+            show_listing(key, Source::Related { id: entry.id });
+        }
         Page::Cache => show_cache(),
         Page::Player(entry) => show_player(&entry),
     }
@@ -597,6 +608,12 @@ pub fn open_channel(id: &str, name: &str) {
 pub fn open_current_channel() {
     if let Page::Video(entry) = current() {
         open_channel(&entry.channel_id, &entry.channel);
+    }
+}
+
+pub fn open_related() {
+    if let Page::Video(entry) = current() {
+        navigate(Page::Related(entry));
     }
 }
 
@@ -1235,9 +1252,15 @@ pub fn handle(response: Response) {
 
             if current().key() == key {
                 match error {
-                    Some(error) => ui
-                        .results_status
-                        .set_text(&format!("Failed to load: {error}")),
+                    Some(error) => {
+                        let message = glib::markup_escape_text(&format!("Failed to load: {error}"));
+                        let link = if error.starts_with(crate::fetch::COOKIES_ERROR) {
+                            " <a href=\"lumpla:settings\">Open the settings</a>"
+                        } else {
+                            ""
+                        };
+                        ui.results_status.set_markup(&format!("{message}{link}"));
+                    }
                     None => update_results_status(&key),
                 }
             }
@@ -1274,6 +1297,9 @@ pub fn handle(response: Response) {
             }
         }
         Response::Resolved { result } => controls::resolved(result),
+        Response::CookiesChecked { browser, result } => {
+            crate::preferences::cookies_checked(&browser, result)
+        }
         Response::Setup(status) => {
             use crate::tools::Status;
 

@@ -94,7 +94,7 @@ pub fn update(change: impl FnOnce(&mut Settings)) -> Result<(), String> {
 
 /// What `--cookies-from-browser` gets for the browser. yt-dlp doesn't know Helium, but it is
 /// Chromium underneath, so it is Chromium looking in the profile directory of Helium.
-fn browser_argument(browser: &str) -> String {
+pub fn browser_argument(browser: &str) -> String {
     if browser != "helium" {
         return browser.to_string();
     }

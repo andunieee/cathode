@@ -103,6 +103,10 @@ pub enum Source {
     Playlist {
         id: String,
     },
+    /// What YouTube suggests to watch after the video.
+    Related {
+        id: String,
+    },
 }
 
 pub enum Request {
@@ -130,6 +134,10 @@ pub enum Request {
     /// Looks up what a link typed in by the user points to.
     Resolve {
         input: Input,
+    },
+    /// Tries yt-dlp with the cookies of the browser, before the setting is accepted.
+    CheckCookies {
+        browser: String,
     },
 }
 
@@ -162,6 +170,10 @@ pub enum Response {
     },
     Resolved {
         result: Result<Item, String>,
+    },
+    CookiesChecked {
+        browser: String,
+        result: Result<(), String>,
     },
     /// Progress of the startup check of the external tools.
     Setup(crate::tools::Status),
@@ -259,6 +271,14 @@ async fn run(
                     });
                 });
             }
+            Request::CheckCookies { browser } => {
+                tokio::spawn(async move {
+                    on_response(Response::CookiesChecked {
+                        result: check_cookies(&browser).await,
+                        browser,
+                    });
+                });
+            }
             Request::Thumbnail { id, large } => {
                 let slots = thumbnail_slots.clone();
                 tokio::spawn(async move {
@@ -272,16 +292,35 @@ async fn run(
     }
 }
 
+/// What the errors caused by the browser cookies setting say, so they can be told apart.
+pub const COOKIES_ERROR: &str =
+    "yt-dlp could not read the cookies of the browser chosen in the settings.";
+
 fn error_line(stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr);
-    stderr
+    let line = stderr
         .lines()
         .rev()
         .find(|line| line.contains("ERROR"))
         .or_else(|| stderr.lines().last())
         .unwrap_or("yt-dlp failed")
-        .trim()
-        .to_string()
+        .trim();
+
+    // A broken cookie database comes out as a bare SQLite error ("no such table: meta").
+    let lower = line.to_lowercase();
+    if [
+        "cookie",
+        "no such table",
+        "database is locked",
+        "unable to open database",
+    ]
+    .iter()
+    .any(|hint| lower.contains(hint))
+    {
+        format!("{COOKIES_ERROR} ({line})")
+    } else {
+        line.to_string()
+    }
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {
@@ -298,6 +337,19 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
     };
 
     let (url, limit) = match source {
+        Source::Related { id } => {
+            let result = related(&id).await;
+            return match result {
+                Ok(entries) => {
+                    on_response(Response::Entries {
+                        key: key.clone(),
+                        entries,
+                    });
+                    finish(None)
+                }
+                Err(error) => finish(Some(error)),
+            };
+        }
         Source::Search {
             query,
             sort: SearchSort::Relevance,
@@ -353,6 +405,168 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             .await
             .err(),
     );
+}
+
+/// Asks YouTube's `next` endpoint, the one the watch page uses, for the videos suggested next
+/// to this one. yt-dlp doesn't expose them.
+async fn related(id: &str) -> Result<Vec<Entry>, String> {
+    let body = serde_json::json!({
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "2.20250101.00.00",
+                "hl": "en",
+                "gl": "US",
+            },
+        },
+        "videoId": id,
+    });
+
+    let response = reqwest::Client::new()
+        .post("https://www.youtube.com/youtubei/v1/next?prettyPrint=false")
+        .header("content-type", "application/json")
+        .header("user-agent", "Mozilla/5.0")
+        .body(body.to_string())
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let response: Value = serde_json::from_slice(&response).map_err(|e| e.to_string())?;
+
+    let mut entries = Vec::new();
+    collect_lockups(&response, id, &mut entries);
+    if entries.is_empty() {
+        Err("YouTube returned no suggestions".to_string())
+    } else {
+        Ok(entries)
+    }
+}
+
+/// Collects the videos of every `lockupViewModel` in the response, which is how the suggestions
+/// are laid out, other than the one being watched.
+fn collect_lockups(value: &Value, current: &str, entries: &mut Vec<Entry>) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "lockupViewModel" {
+                    let entry = parse_lockup(value).filter(|entry| entry.id != current);
+                    entries.extend(entry.filter(|entry| !entries.iter().any(|e| e.id == entry.id)));
+                } else {
+                    collect_lockups(value, current, entries);
+                }
+            }
+        }
+        Value::Array(array) => {
+            for value in array {
+                collect_lockups(value, current, entries);
+            }
+        }
+        _ => (),
+    }
+}
+
+/// Parses a suggested video. Playlists, mixes and the like are left out.
+fn parse_lockup(lockup: &Value) -> Option<Entry> {
+    if lockup["contentType"] != "LOCKUP_CONTENT_TYPE_VIDEO" {
+        return None;
+    }
+    let id = string(lockup, "contentId")?;
+    let metadata = &lockup["metadata"]["lockupMetadataViewModel"];
+
+    // Rows of small parts: the channel name, then the views and how long ago.
+    let rows: Vec<Vec<&str>> = metadata["metadata"]["contentMetadataViewModel"]["metadataRows"]
+        .as_array()?
+        .iter()
+        .map(|row| {
+            row["metadataParts"]
+                .as_array()
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part["text"]["content"].as_str())
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+
+    let duration = lockup["contentImage"]["thumbnailViewModel"]["overlays"]
+        .as_array()?
+        .iter()
+        .flat_map(|overlay| {
+            overlay["thumbnailBottomOverlayViewModel"]["badges"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .find_map(|badge| badge["thumbnailBadgeViewModel"]["text"].as_str())
+        .and_then(parse_clock)?;
+
+    let channel_id = metadata["image"]["decoratedAvatarViewModel"]["rendererContext"]
+        ["commandContext"]["onTap"]["innertubeCommand"]["browseEndpoint"]["browseId"]
+        .as_str()
+        .unwrap_or_default();
+
+    let stats = rows.iter().find(|row| row.len() == 2);
+
+    Some(Entry {
+        url: format!("https://www.youtube.com/watch?v={id}"),
+        id,
+        title: string(&metadata["title"], "content")?,
+        channel: rows
+            .first()
+            .and_then(|row| row.first())
+            .map(|name| name.to_string())
+            .unwrap_or_default(),
+        channel_id: channel_id.to_string(),
+        duration: Some(duration),
+        views: stats.and_then(|stats| parse_count(stats[0])),
+        published: stats.and_then(|stats| parse_ago(stats[1])),
+    })
+}
+
+/// "4:05" or "1:02:03", in seconds.
+fn parse_clock(text: &str) -> Option<f64> {
+    text.split(':').try_fold(0.0, |total, part| {
+        part.parse::<f64>().ok().map(|part| total * 60.0 + part)
+    })
+}
+
+/// "207M", "1.6B" or "952", the way YouTube abbreviates view counts.
+fn parse_count(text: &str) -> Option<u64> {
+    let (number, factor) = match text.chars().last()? {
+        'K' => (&text[..text.len() - 1], 1e3),
+        'M' => (&text[..text.len() - 1], 1e6),
+        'B' => (&text[..text.len() - 1], 1e9),
+        _ => (text, 1.0),
+    };
+    number.parse::<f64>().ok().map(|n| (n * factor) as u64)
+}
+
+/// "3d ago" or "16y ago", as the approximate moment it was uploaded.
+fn parse_ago(text: &str) -> Option<i64> {
+    let text = text.strip_suffix(" ago")?;
+    let split = text.find(|c: char| !c.is_ascii_digit())?;
+    let amount: i64 = text[..split].parse().ok()?;
+    let seconds = match &text[split..] {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        "w" => 7 * 86_400,
+        "mo" => 30 * 86_400,
+        "y" => 365 * 86_400,
+        _ => return None,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    Some(now - amount * seconds)
 }
 
 /// The `sp` parameter for a search on YouTube's own results URL, as base64 protobuf. Field 1
@@ -499,6 +713,40 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
         views: entry["view_count"].as_u64(),
         published: entry["timestamp"].as_i64(),
     })
+}
+
+/// Runs yt-dlp with the cookies of the browser. They are read as it starts, so a search for a
+/// single result is enough to find out whether they can be.
+async fn check_cookies(browser: &str) -> Result<(), String> {
+    let mut command = crate::tools::command("yt-dlp");
+    command.args([
+        "--cookies-from-browser",
+        &crate::settings::browser_argument(browser),
+    ]);
+    let proxy = crate::settings::get().proxy;
+    if !proxy.trim().is_empty() {
+        command.args(["--proxy", proxy.trim()]);
+    }
+
+    let output = command
+        .args([
+            "--no-warnings",
+            "--simulate",
+            "--flat-playlist",
+            "--playlist-end=1",
+            "ytsearch1:test",
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(error_line(&output.stderr))
+    }
 }
 
 async fn info(url: &str) -> Result<VideoInfo, String> {

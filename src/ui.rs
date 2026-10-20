@@ -373,7 +373,15 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .css_classes(["dim-label"])
         .margin_top(6)
         .margin_bottom(6)
+        .margin_start(12)
+        .margin_end(12)
+        .wrap(true)
         .build();
+    // Errors can point to the settings.
+    results_status.connect_activate_link(|_, _| {
+        nav::open_settings();
+        glib::Propagation::Stop
+    });
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();
     let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
     results.append(&channel_header);
@@ -430,6 +438,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons.set_margin_top(6);
     buttons.append(&play);
     buttons.append(&queue_video);
+    let related = gtk::Button::builder()
+        .label("Suggestions")
+        .css_classes(["pill"])
+        .build();
+    related.connect_clicked(|_| nav::open_related());
+    buttons.append(&related);
     let allow_video = gtk::Button::builder()
         .css_classes(["pill"])
         .visible(false)
