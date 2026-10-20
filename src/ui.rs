@@ -31,6 +31,10 @@ pub struct Ui {
     pub back: gtk::Button,
     pub forward: gtk::Button,
     pub downloads: gtk::Button,
+    pub history_button: gtk::Button,
+    /// Opens the sidebar listing the subscriptions.
+    pub subs_toggle: gtk::ToggleButton,
+    pub subscriptions_list: gtk::ListBox,
     /// Turns the restricted profile on or off.
     pub controls_button: gtk::Button,
     pub settings_button: gtk::Button,
@@ -45,6 +49,7 @@ pub struct Ui {
     pub channel_title: gtk::Label,
     pub channel_entry: gtk::SearchEntry,
     pub allow_channel: gtk::Button,
+    pub subscribe_button: gtk::Button,
     pub results_status: gtk::Label,
     pub store: gio::ListStore,
 
@@ -61,6 +66,16 @@ pub struct Ui {
     pub cache_queue: gtk::Button,
     pub cache_delete: gtk::Button,
     pub cache_rows: RefCell<Vec<CacheRow>>,
+
+    /// The latest videos of the subscriptions, on the home page.
+    pub feed_store: gio::ListStore,
+    pub feed_status: gtk::Label,
+
+    pub history_scroll: gtk::ScrolledWindow,
+    /// The history page is one list per day, the one most recently added to is kept here.
+    pub history_box: gtk::Box,
+    pub history_current: RefCell<Option<gtk::ListBox>>,
+    pub history_empty: gtk::Label,
 
     pub controls: controls::Widgets,
 
@@ -266,6 +281,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     controls_button.connect_clicked(|_| controls::toggle_profile());
     header.pack_start(&controls_button);
 
+    let subs_toggle = gtk::ToggleButton::builder()
+        .icon_name("starred-symbolic")
+        .tooltip_text("Subscriptions")
+        .build();
+    header.pack_start(&subs_toggle);
+
     let search_entry = gtk::SearchEntry::builder()
         .placeholder_text("Search YouTube")
         .hexpand(true)
@@ -312,9 +333,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     downloads.connect_clicked(|_| nav::open_cache());
     let settings_button = icon_button("emblem-system-symbolic", "Settings");
     settings_button.connect_clicked(|_| nav::open_settings());
+    let history_button = icon_button("document-open-recent-symbolic", "History");
+    history_button.connect_clicked(|_| nav::open_history());
     header.pack_end(&settings_button);
     header.pack_end(&queue_toggle);
     header.pack_end(&downloads);
+    header.pack_end(&history_button);
 
     // Re-running the search is what changing either dropdown does, so that results follow.
     let search = |ui: &Ui| {
@@ -367,6 +391,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .visible(false)
         .build();
     allow_channel.connect_clicked(|_| nav::toggle_allowed());
+    let subscribe_button = gtk::Button::builder()
+        .valign(gtk::Align::Center)
+        .visible(false)
+        .build();
+    subscribe_button.connect_clicked(|_| nav::toggle_subscription());
+    channel_header.append(&subscribe_button);
     channel_header.append(&allow_channel);
 
     let results_status = gtk::Label::builder()
@@ -531,6 +561,73 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             .build(),
     );
 
+    // Home page, once there are subscriptions
+    let feed_store = gio::ListStore::new::<glib::BoxedAnyObject>();
+    let feed_status = gtk::Label::builder()
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["dim-label"])
+        .build();
+    let feed_refresh = icon_button("view-refresh-symbolic", "Check for new videos");
+    feed_refresh.add_css_class("flat");
+    feed_refresh.connect_clicked(|_| nav::refresh_feed());
+    let feed_heading = gtk::Label::builder()
+        .label("Latest videos")
+        .xalign(0.0)
+        .css_classes(["title-2"])
+        .build();
+    let feed_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    feed_bar.set_margin_top(12);
+    feed_bar.set_margin_bottom(6);
+    feed_bar.set_margin_start(12);
+    feed_bar.set_margin_end(12);
+    feed_bar.append(&feed_heading);
+    feed_bar.append(&feed_status);
+    feed_bar.append(&feed_refresh);
+    let feed = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    feed.append(&feed_bar);
+    feed.append(
+        &gtk::ScrolledWindow::builder()
+            .vexpand(true)
+            .child(&results_view(&feed_store))
+            .build(),
+    );
+
+    // History page
+    let history_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let history_empty = gtk::Label::builder()
+        .label("Nothing watched yet")
+        .css_classes(["dim-label"])
+        .margin_top(24)
+        .visible(false)
+        .build();
+    let history_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    history_page.set_margin_top(18);
+    history_page.set_margin_bottom(18);
+    history_page.set_margin_start(18);
+    history_page.set_margin_end(18);
+    history_page.append(
+        &gtk::Label::builder()
+            .label("History")
+            .xalign(0.0)
+            .css_classes(["title-2"])
+            .build(),
+    );
+    history_page.append(&history_empty);
+    history_page.append(&history_box);
+    let history_scroll = gtk::ScrolledWindow::builder()
+        .child(
+            &adw::Clamp::builder()
+                .maximum_size(720)
+                .child(&history_page)
+                .build(),
+        )
+        .build();
+    // More is read from the file when the end is near, or when the page doesn't even scroll.
+    let adjustment = history_scroll.vadjustment();
+    adjustment.connect_value_changed(|_| nav::history_check(true));
+    adjustment.connect_upper_notify(|_| nav::history_check(false));
+
     // Player page
     let player = Player::new();
     let player_title = gtk::Label::builder()
@@ -631,11 +728,13 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     // Pages
     let stack = gtk::Stack::new();
     let controls = controls::Widgets::new();
+    controls.home.add_named(&feed, Some("feed"));
     stack.add_named(&controls.home, Some("home"));
     stack.add_named(&preferences::build(&controls.settings), Some("settings"));
     stack.add_named(&results, Some("results"));
     stack.add_named(&video_scroll, Some("video"));
     stack.add_named(&cache_page, Some("cache"));
+    stack.add_named(&history_scroll, Some("history"));
     stack.add_named(&overlay, Some("player"));
 
     let toolbar = adw::ToolbarView::new();
@@ -683,8 +782,59 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         move |split| header.set_show_end_title_buttons(!split.shows_sidebar())
     });
 
+    // Subscriptions sidebar, on the other side
+    let subs_header = adw::HeaderBar::new();
+    subs_header.set_show_end_title_buttons(false);
+    subs_header.set_title_widget(Some(
+        &gtk::Label::builder()
+            .label("Subscriptions")
+            .css_classes(["heading"])
+            .build(),
+    ));
+    let subscriptions_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar"])
+        .build();
+    let subs_bar = adw::ToolbarView::new();
+    subs_bar.add_top_bar(&subs_header);
+    subs_bar.set_content(Some(
+        &gtk::ScrolledWindow::builder()
+            .child(&subscriptions_list)
+            .build(),
+    ));
+
+    let subs_split = adw::OverlaySplitView::builder()
+        .sidebar_position(gtk::PackType::Start)
+        .collapsed(false)
+        .show_sidebar(false)
+        .min_sidebar_width(260.0)
+        .sidebar(&subs_bar)
+        .content(&split)
+        .build();
+    subs_toggle
+        .bind_property("active", &subs_split, "show-sidebar")
+        .bidirectional()
+        .sync_create()
+        .build();
+    subs_split.connect_show_sidebar_notify({
+        let header = header.clone();
+        move |split| header.set_show_start_title_buttons(!split.shows_sidebar())
+    });
+
+    // On a small screen the sidebars float over the page, and the search pickers make way.
+    let small = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        800.0,
+        adw::LengthUnit::Sp,
+    ));
+    small.add_setter(&sort, "visible", Some(&false.to_value()));
+    small.add_setter(&filter, "visible", Some(&false.to_value()));
+    small.add_setter(&split, "collapsed", Some(&true.to_value()));
+    small.add_setter(&subs_split, "collapsed", Some(&true.to_value()));
+    window.add_breakpoint(small);
+
     let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&split));
+    toasts.set_child(Some(&subs_split));
     window.set_content(Some(&toasts));
 
     // Mouse back/forward buttons and keyboard shortcuts
@@ -730,6 +880,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         back,
         forward,
         downloads,
+        history_button,
+        subs_toggle,
+        subscriptions_list,
         title_stack,
         controls_button,
         settings_button,
@@ -741,6 +894,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         channel_title,
         channel_entry,
         allow_channel,
+        subscribe_button,
         results_status,
         store,
         video_picture,
@@ -755,6 +909,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         cache_queue,
         cache_delete,
         cache_rows: RefCell::new(Vec::new()),
+        feed_store,
+        feed_status,
+        history_scroll,
+        history_box,
+        history_current: RefCell::new(None),
+        history_empty,
         controls,
         player,
         player_title,

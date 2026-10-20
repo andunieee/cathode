@@ -18,6 +18,8 @@ Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `
 - [x] Play/Pause, seekbar, playback speed (0.5× to 3×), volume, fullscreen
 - [x] Parental controls: a restricted profile that only reaches the videos, channels and playlists it allows. There is no search while it is on, and it can be protected with a password. Set it up from the home page, it is saved in `~/.config/lumpla/profiles/default.json`
 - [x] Playlist pages
+- [x] Local subscriptions, no account needed: a sidebar on the left lists the channels, and the home page shows their latest videos, checked on startup and every 30 minutes (`~/.config/lumpla/subscriptions.json`)
+- [x] Watch history, a page listing the videos by day that loads more as you scroll (`~/.config/lumpla/history.jsonl`, one entry per line, the latest first)
 - [ ] Everything else
 
 # Installation

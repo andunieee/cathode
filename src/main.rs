@@ -2,11 +2,13 @@ mod cache;
 mod controls;
 mod fetch;
 mod format;
+mod history;
 mod nav;
 mod player;
 mod preferences;
 mod profile;
 mod settings;
+mod subscriptions;
 mod tools;
 mod ui;
 

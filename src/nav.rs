@@ -13,8 +13,15 @@ use crate::cache;
 use crate::controls;
 use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo};
 use crate::format;
+use crate::history;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
+use crate::subscriptions::{self, Subscription};
 use crate::ui::{self, CacheRow, Ui};
+
+/// The videos shown at first on the history page, and each time it is scrolled to the end.
+const HISTORY_PAGE: usize = 10;
+/// How often the subscriptions are checked for new videos.
+const FEED_REFRESH_SECONDS: u32 = 30 * 60;
 
 #[derive(Clone)]
 enum Page {
@@ -38,6 +45,7 @@ enum Page {
     /// What YouTube suggests after a video.
     Related(Entry),
     Cache,
+    History,
     Player(Entry),
 }
 
@@ -59,6 +67,7 @@ impl Page {
             Page::Video(entry) => format!("v:{}", entry.id),
             Page::Related(entry) => format!("r:{}", entry.id),
             Page::Cache => "cache".to_string(),
+            Page::History => "history".to_string(),
             Page::Player(entry) => format!("p:{}", entry.id),
         }
     }
@@ -109,6 +118,14 @@ struct State {
     awaiting_play: Option<String>,
     /// Files opened from the command line.
     local_files: HashMap<String, PathBuf>,
+
+    /// Ids of the videos of the feed on screen, so it is only rebuilt when it changed.
+    feed_ids: Vec<String>,
+
+    /// Where to read the next entries of the history file from, and the day of the last one shown.
+    history_offset: u64,
+    history_done: bool,
+    history_day: Option<String>,
 }
 
 thread_local! {
@@ -128,6 +145,10 @@ thread_local! {
         progress: HashMap::new(),
         awaiting_play: None,
         local_files: HashMap::new(),
+        feed_ids: Vec::new(),
+        history_offset: 0,
+        history_done: true,
+        history_day: None,
     });
 }
 
@@ -201,13 +222,17 @@ pub fn thumbnail(id: &str, large: bool, picture: Option<&gtk::Picture>) -> Optio
 
 // Results
 
-fn append_entries(ui: &Ui, entries: &[Entry]) {
+fn append_to(store: &gio::ListStore, entries: &[Entry]) {
     let objects: Vec<glib::BoxedAnyObject> = entries
         .iter()
         .cloned()
         .map(glib::BoxedAnyObject::new)
         .collect();
-    ui.store.extend_from_slice(&objects);
+    store.extend_from_slice(&objects);
+}
+
+fn append_entries(ui: &Ui, entries: &[Entry]) {
+    append_to(&ui.store, entries);
 }
 
 fn update_results_status(key: &str) {
@@ -315,7 +340,9 @@ fn page_allowed(page: &Page) -> bool {
 
     match page {
         Page::Home => true,
-        Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache => false,
+        Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache | Page::History => {
+            false
+        }
         Page::Channel { id, .. } => profile::allows_channel(id),
         Page::Playlist { id, .. } => profile::allows_playlist(id),
         Page::Video(entry) | Page::Player(entry) => profile::allows_video(entry),
@@ -344,6 +371,12 @@ fn apply_mode() {
     ui.title_stack
         .set_visible_child_name(if restricted { "restricted" } else { "search" });
     ui.downloads.set_visible(!restricted);
+    ui.history_button.set_visible(!restricted);
+    // The subscriptions would be a way around the restricted profile.
+    ui.subs_toggle.set_visible(!restricted);
+    if restricted {
+        ui.subs_toggle.set_active(false);
+    }
     ui.settings_button.set_visible(!restricted);
     ui.controls_button.set_tooltip_text(Some(if restricted {
         "Turn off the restricted profile"
@@ -365,6 +398,9 @@ pub fn set_restricted(restricted: bool) {
     });
     apply_mode();
     show();
+    if !restricted {
+        refresh_feed();
+    }
 }
 
 fn update_allow_buttons() {
@@ -490,6 +526,9 @@ fn show() {
         Page::Home => {
             ui.stack.set_visible_child_name("home");
             controls::show_home();
+            if !profile::restricted() {
+                show_feed();
+            }
         }
         Page::Settings => {
             ui.stack.set_visible_child_name("settings");
@@ -531,10 +570,12 @@ fn show() {
             show_listing(key, Source::Related { id: entry.id });
         }
         Page::Cache => show_cache(),
+        Page::History => show_history(),
         Page::Player(entry) => show_player(&entry),
     }
 
     update_allow_buttons();
+    update_subscribe_button();
 }
 
 fn navigate(page: Page) {
@@ -547,7 +588,7 @@ fn navigate(page: Page) {
         let key = page.key();
         if state.history[state.index].key() == key {
             // Repeating a search refreshes it, anything else is already on screen.
-            let reload = matches!(page, Page::Search { .. } | Page::Cache);
+            let reload = matches!(page, Page::Search { .. } | Page::Cache | Page::History);
             if reload {
                 state.listings.remove(&key);
             }
@@ -568,10 +609,18 @@ fn navigate(page: Page) {
 pub fn init(requests: UnboundedSender<Request>) {
     with(|state| state.requests = Some(requests));
     profile::init();
+    subscriptions::init();
     apply_mode();
     // Forgets what's left of videos that are gone.
     cache::scan();
+    refresh_subscriptions();
     show();
+
+    refresh_feed();
+    glib::timeout_add_seconds_local(FEED_REFRESH_SECONDS, || {
+        refresh_feed();
+        glib::ControlFlow::Continue
+    });
 }
 
 pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
@@ -638,6 +687,10 @@ pub fn open_playlist(id: &str, title: &str) {
 
 pub fn open_cache() {
     navigate(Page::Cache);
+}
+
+pub fn open_history() {
+    navigate(Page::History);
 }
 
 pub fn back() {
@@ -735,6 +788,12 @@ fn show_player(entry: &Entry) {
 fn start_playback(entry: &Entry, path: &std::path::Path) {
     let ui = ui::get();
     ui.player.load(&entry.id, &path.to_string_lossy());
+    // Files from the command line aren't YouTube videos.
+    if !entry.url.is_empty() {
+        if let Err(error) = history::record(entry) {
+            eprintln!("Cannot write the history: {error}");
+        }
+    }
     ui.player_title.set_text(&entry.title);
     ui.player_status.set_visible(false);
     ui.play_button
@@ -778,6 +837,7 @@ pub fn toggle_fullscreen() {
     ui.toolbar.set_reveal_top_bars(!fullscreen);
     if fullscreen {
         ui.split.set_show_sidebar(false);
+        ui.subs_toggle.set_active(false);
     }
 }
 
@@ -989,6 +1049,318 @@ fn refresh_queue() {
 
         ui.queue_list.append(&row);
     }
+}
+
+// Subscriptions
+
+fn unsubscribe(id: &str) {
+    if let Err(error) = subscriptions::unsubscribe(id) {
+        toast(&format!("Could not save the subscriptions: {error}"));
+    }
+    refresh_subscriptions();
+    update_subscribe_button();
+    if matches!(current(), Page::Home) {
+        show_feed();
+    }
+}
+
+/// Subscribes to the channel on screen, or unsubscribes from it.
+pub fn toggle_subscription() {
+    let Page::Channel { id, name, .. } = current() else {
+        return;
+    };
+
+    if subscriptions::is_subscribed(&id) {
+        unsubscribe(&id);
+        return;
+    }
+
+    if let Err(error) = subscriptions::subscribe(Subscription {
+        id: id.clone(),
+        name,
+    }) {
+        toast(&format!("Could not save the subscriptions: {error}"));
+    }
+    request_latest(&id);
+    refresh_subscriptions();
+    update_subscribe_button();
+}
+
+fn update_subscribe_button() {
+    let ui = ui::get();
+    let channel = match current() {
+        Page::Channel { id, .. } if !profile::restricted() => Some(id),
+        _ => None,
+    };
+
+    ui.subscribe_button.set_visible(channel.is_some());
+    if let Some(id) = channel {
+        let subscribed = subscriptions::is_subscribed(&id);
+        ui.subscribe_button.set_label(if subscribed {
+            "Unsubscribe"
+        } else {
+            "Subscribe"
+        });
+        if subscribed {
+            ui.subscribe_button.remove_css_class("suggested-action");
+        } else {
+            ui.subscribe_button.add_css_class("suggested-action");
+        }
+    }
+}
+
+/// Fills the sidebar.
+fn refresh_subscriptions() {
+    let ui = ui::get();
+    while let Some(row) = ui.subscriptions_list.first_child() {
+        ui.subscriptions_list.remove(&row);
+    }
+
+    let list = subscriptions::list();
+    if list.is_empty() {
+        ui.subscriptions_list.append(
+            &gtk::Label::builder()
+                .label("No subscriptions yet.")
+                .justify(gtk::Justification::Center)
+                .css_classes(["dim-label"])
+                .margin_top(24)
+                .margin_start(12)
+                .margin_end(12)
+                .build(),
+        );
+    }
+
+    for subscription in list {
+        let row = adw::ActionRow::builder()
+            .title(&subscription.name)
+            .title_lines(1)
+            .use_markup(false)
+            .activatable(true)
+            .build();
+        row.connect_activated({
+            let subscription = subscription.clone();
+            move |_| open_channel(&subscription.id, &subscription.name)
+        });
+
+        let remove = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .tooltip_text("Unsubscribe")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        remove.connect_clicked({
+            let id = subscription.id.clone();
+            move |_| unsubscribe(&id)
+        });
+        row.add_suffix(&remove);
+
+        ui.subscriptions_list.append(&row);
+    }
+}
+
+fn request_latest(id: &str) {
+    if subscriptions::mark_pending(id) {
+        send(Request::Latest {
+            channel_id: id.to_string(),
+        });
+    }
+    update_feed_status();
+}
+
+/// Asks for the latest videos of every subscription.
+pub fn refresh_feed() {
+    if profile::restricted() {
+        return;
+    }
+    for subscription in subscriptions::list() {
+        request_latest(&subscription.id);
+    }
+}
+
+/// The home page: the latest videos of the subscriptions, or the invitation to search if there
+/// are none.
+fn show_feed() {
+    let ui = ui::get();
+    if subscriptions::list().is_empty() {
+        ui.controls.home.set_visible_child_name("open");
+        return;
+    }
+    ui.controls.home.set_visible_child_name("feed");
+
+    let feed = subscriptions::feed();
+    let ids: Vec<String> = feed.iter().map(|entry| entry.id.clone()).collect();
+    if with(|state| std::mem::replace(&mut state.feed_ids, ids.clone())) != ids {
+        ui.feed_store.remove_all();
+        append_to(&ui.feed_store, &feed);
+    }
+    update_feed_status();
+}
+
+fn update_feed_status() {
+    let ui = ui::get();
+    let pending = subscriptions::pending_count();
+    let (failed, error) = subscriptions::failures();
+
+    let text = if pending > 0 {
+        format!("Checking {pending} channels…")
+    } else if let (true, Some(error)) = (failed > 0, error) {
+        format!("{failed} channels could not be checked: {error}")
+    } else {
+        String::new()
+    };
+    ui.feed_status.set_text(&text);
+    ui.feed_status.set_tooltip_text(Some(&text));
+}
+
+/// Videos of the channel listing on screen go to the feed too.
+fn channel_listing_id(key: &str) -> Option<&str> {
+    let (id, query) = key.strip_prefix("c:")?.split_once(':')?;
+    query.is_empty().then_some(id)
+}
+
+// History page
+
+fn show_history() {
+    let ui = ui::get();
+    ui.stack.set_visible_child_name("history");
+
+    while let Some(list) = ui.history_box.first_child() {
+        ui.history_box.remove(&list);
+    }
+    *ui.history_current.borrow_mut() = None;
+    ui.history_empty.set_visible(false);
+    ui.history_scroll.vadjustment().set_value(0.0);
+
+    with(|state| {
+        state.history_offset = 0;
+        state.history_done = false;
+        state.history_day = None;
+    });
+    history_more();
+}
+
+/// Called as the page is scrolled (`scrolled`) or resized: reads more of the file if the end of
+/// what is shown is near, or if what is shown doesn't even fill the page.
+pub fn history_check(scrolled: bool) {
+    let ui = ui::get();
+    if ui.stack.visible_child_name().as_deref() != Some("history")
+        || with(|state| state.history_done)
+    {
+        return;
+    }
+
+    let adjustment = ui.history_scroll.vadjustment();
+    let page = adjustment.page_size();
+    let bottom = adjustment.value() + page;
+    let more = if scrolled {
+        bottom >= adjustment.upper() - 200.0
+    } else {
+        page > 0.0 && adjustment.upper() <= page
+    };
+    if more {
+        history_more();
+    }
+}
+
+fn history_more() {
+    let ui = ui::get();
+    let (offset, done) = with(|state| (state.history_offset, state.history_done));
+    if done {
+        return;
+    }
+
+    let (watched, offset, done) = history::read(offset, HISTORY_PAGE);
+    with(|state| {
+        state.history_offset = offset;
+        state.history_done = done;
+    });
+
+    for item in watched {
+        let Ok(time) = glib::DateTime::from_unix_local(item.watched) else {
+            continue;
+        };
+        let day = time
+            .format("%Y-%m-%d")
+            .map(|day| day.to_string())
+            .unwrap_or_default();
+
+        // Each day gets a heading and a list of its own.
+        if with(|state| state.history_day.replace(day.clone())).as_deref() != Some(&day) {
+            ui.history_box.append(
+                &gtk::Label::builder()
+                    .label(day_name(&time))
+                    .xalign(0.0)
+                    .css_classes(["heading"])
+                    .build(),
+            );
+            let list = gtk::ListBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .css_classes(["boxed-list"])
+                .build();
+            ui.history_box.append(&list);
+            *ui.history_current.borrow_mut() = Some(list);
+        }
+        let Some(list) = ui.history_current.borrow().clone() else {
+            continue;
+        };
+
+        let entry = item.entry;
+        let mut subtitle = Vec::new();
+        if !entry.channel.is_empty() {
+            subtitle.push(entry.channel.clone());
+        }
+        if let Some(duration) = entry.duration {
+            subtitle.push(format::duration(duration));
+        }
+        if let Ok(clock) = time.format("%H:%M") {
+            subtitle.push(clock.to_string());
+        }
+
+        let picture = gtk::Picture::builder()
+            .width_request(112)
+            .height_request(63)
+            .content_fit(gtk::ContentFit::Cover)
+            .valign(gtk::Align::Center)
+            .overflow(gtk::Overflow::Hidden)
+            .css_classes(["card"])
+            .build();
+        picture.set_widget_name(&entry.id);
+        picture.set_paintable(thumbnail(&entry.id, false, Some(&picture)).as_ref());
+
+        let row = adw::ActionRow::builder()
+            .title(&entry.title)
+            .subtitle(subtitle.join("  ·  "))
+            .title_lines(2)
+            .use_markup(false)
+            .activatable(true)
+            .build();
+        row.add_prefix(&picture);
+        row.connect_activated(move |_| open_video(entry.clone()));
+        list.append(&row);
+    }
+
+    if with(|state| state.history_day.is_none()) {
+        ui.history_empty.set_visible(true);
+    }
+}
+
+/// "Today", "Yesterday" or the date.
+fn day_name(time: &glib::DateTime) -> String {
+    let same_day = |other: &glib::DateTime| {
+        (time.year(), time.day_of_year()) == (other.year(), other.day_of_year())
+    };
+
+    if let Ok(now) = glib::DateTime::now_local() {
+        if same_day(&now) {
+            return "Today".to_string();
+        }
+        if now.add_days(-1).is_ok_and(|yesterday| same_day(&yesterday)) {
+            return "Yesterday".to_string();
+        }
+    }
+    time.format("%A, %-d %B %Y")
+        .map(|name| name.to_string())
+        .unwrap_or_default()
 }
 
 // Cache page
@@ -1220,17 +1592,23 @@ pub fn handle(response: Response) {
 
     match response {
         Response::Entries { key, entries } => {
-            with(|state| {
-                state
+            let newest = with(|state| {
+                let listing = state
                     .listings
                     .entry(key.clone())
                     .or_insert_with(|| Listing {
                         entries: Vec::new(),
                         done: false,
-                    })
-                    .entries
-                    .extend(entries.iter().cloned())
+                    });
+                listing.entries.extend(entries.iter().cloned());
+                listing.entries.clone()
             });
+
+            // A subscribed channel's page tells what's new there as well as a refresh would.
+            if let Some(id) = channel_listing_id(&key).filter(|id| subscriptions::is_subscribed(id))
+            {
+                subscriptions::set_latest(id, newest);
+            }
 
             note_listed(&key, &entries);
 
@@ -1294,6 +1672,15 @@ pub fn handle(response: Response) {
                         .set_text(&format!("Failed to load details: {error}"));
                 }
                 Err(_) => {}
+            }
+        }
+        Response::Latest { channel_id, result } => {
+            match result {
+                Ok(entries) => subscriptions::set_latest(&channel_id, entries),
+                Err(error) => subscriptions::set_failed(&channel_id, error),
+            }
+            if matches!(current(), Page::Home) && !profile::restricted() {
+                show_feed();
             }
         }
         Response::Resolved { result } => controls::resolved(result),

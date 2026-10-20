@@ -19,6 +19,11 @@ const CHANNEL_MAX_RESULTS: usize = 1000;
 /// How much of a long listing is fetched first, to have something to show early.
 const FIRST_PAGE: usize = 30;
 
+/// How many of a channel's newest videos the subscriptions keep.
+pub const LATEST_PER_CHANNEL: usize = 15;
+/// Channels whose newest videos are looked up at the same time.
+const LATEST_PARALLEL: usize = 3;
+
 /// Thumbnails shown in lists are scaled down to keep a thousand of them cheap to hold.
 const SMALL_THUMBNAIL: (u32, u32) = (168, 94);
 
@@ -135,6 +140,10 @@ pub enum Request {
     Resolve {
         input: Input,
     },
+    /// The newest videos of a channel, for the subscriptions.
+    Latest {
+        channel_id: String,
+    },
     /// Tries yt-dlp with the cookies of the browser, before the setting is accepted.
     CheckCookies {
         browser: String,
@@ -167,6 +176,10 @@ pub enum Response {
         id: String,
         large: bool,
         image: Thumbnail,
+    },
+    Latest {
+        channel_id: String,
+        result: Result<Vec<Entry>, String>,
     },
     Resolved {
         result: Result<Item, String>,
@@ -213,6 +226,7 @@ async fn run(
     on_response: Arc<impl Fn(Response) + Send + Sync + 'static>,
 ) {
     let thumbnail_slots = Arc::new(Semaphore::new(8));
+    let latest_slots = Arc::new(Semaphore::new(LATEST_PARALLEL));
     let downloads: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Default::default();
 
     // Without the tools there is nothing to run, so the first start waits for them. Later ones
@@ -263,6 +277,16 @@ async fn run(
                 if let Some(cancel) = downloads.lock().unwrap().get(&id) {
                     cancel.notify_one();
                 }
+            }
+            Request::Latest { channel_id } => {
+                let slots = latest_slots.clone();
+                tokio::spawn(async move {
+                    let _slot = slots.acquire().await;
+                    on_response(Response::Latest {
+                        result: latest(&channel_id).await,
+                        channel_id,
+                    });
+                });
             }
             Request::Resolve { input } => {
                 tokio::spawn(async move {
@@ -405,6 +429,25 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             .await
             .err(),
     );
+}
+
+/// The newest videos of a channel.
+async fn latest(channel_id: &str) -> Result<Vec<Entry>, String> {
+    let url = format!("https://www.youtube.com/channel/{channel_id}/videos");
+    let entries = Mutex::new(Vec::new());
+    stream_listing(
+        "",
+        &url,
+        LATEST_PER_CHANNEL,
+        &mut HashSet::new(),
+        &|response| {
+            if let Response::Entries { entries: batch, .. } = response {
+                entries.lock().unwrap().extend(batch);
+            }
+        },
+    )
+    .await?;
+    Ok(entries.into_inner().unwrap())
 }
 
 /// Asks YouTube's `next` endpoint, the one the watch page uses, for the videos suggested next
