@@ -10,6 +10,7 @@ use crate::controls;
 use crate::fetch::{Entry, SearchFilter, SearchSort};
 use crate::nav;
 use crate::player::Player;
+use crate::preferences;
 use crate::profile;
 
 /// Playback speeds on offer, 1.0 being the first selected.
@@ -30,8 +31,9 @@ pub struct Ui {
     pub back: gtk::Button,
     pub forward: gtk::Button,
     pub downloads: gtk::Button,
-    /// "open" has the entries to turn the profile on, "restricted" the one to turn it off.
-    pub controls_stack: gtk::Stack,
+    /// Turns the restricted profile on or off.
+    pub controls_button: gtk::Button,
+    pub settings_button: gtk::Button,
     pub title_stack: gtk::Stack,
     pub search_entry: gtk::SearchEntry,
     pub sort: gtk::DropDown,
@@ -259,49 +261,16 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     header.pack_start(&forward);
     header.pack_start(&home);
 
-    let turn_on = gtk::Button::builder()
-        .label("Turn on restricted profile")
-        .css_classes(["flat"])
-        .build();
-    let set_up = gtk::Button::builder()
-        .label("Set up restricted profile…")
-        .css_classes(["flat"])
-        .build();
-    let turn_off = gtk::Button::builder()
-        .label("Turn off restricted profile…")
-        .css_classes(["flat"])
-        .build();
-    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    menu_box.append(&turn_on);
-    menu_box.append(&set_up);
-    let controls_stack = gtk::Stack::new();
-    controls_stack.add_named(&menu_box, Some("open"));
-    controls_stack.add_named(&turn_off, Some("restricted"));
-    let popover = gtk::Popover::builder().child(&controls_stack).build();
-    let controls_menu = gtk::MenuButton::builder()
-        .icon_name("system-users-symbolic")
-        .tooltip_text("Parental controls")
-        .popover(&popover)
-        .build();
-    {
-        let popover = popover.clone();
-        turn_on.connect_clicked(move |_| {
-            popover.popdown();
+    // Straight to the restricted profile: on from here, off asks for the password if any.
+    let controls_button = icon_button("system-users-symbolic", "Turn on the restricted profile");
+    controls_button.connect_clicked(|_| {
+        if profile::restricted() {
+            controls::unlock_profile();
+        } else {
             nav::set_restricted(true);
-        });
-    }
-    {
-        let popover = popover.clone();
-        set_up.connect_clicked(move |_| {
-            popover.popdown();
-            nav::open_settings();
-        });
-    }
-    turn_off.connect_clicked(move |_| {
-        popover.popdown();
-        controls::unlock_profile();
+        }
     });
-    header.pack_start(&controls_menu);
+    header.pack_start(&controls_button);
 
     let search_entry = gtk::SearchEntry::builder()
         .placeholder_text("Search YouTube")
@@ -347,6 +316,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let downloads = icon_button("folder-download-symbolic", "Downloaded videos");
     downloads.connect_clicked(|_| nav::open_cache());
+    let settings_button = icon_button("emblem-system-symbolic", "Settings");
+    settings_button.connect_clicked(|_| nav::open_settings());
+    header.pack_end(&settings_button);
     header.pack_end(&queue_toggle);
     header.pack_end(&downloads);
 
@@ -652,7 +624,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let stack = gtk::Stack::new();
     let controls = controls::Widgets::new();
     stack.add_named(&controls.home, Some("home"));
-    stack.add_named(&controls.settings, Some("settings"));
+    stack.add_named(&preferences::build(&controls.settings), Some("settings"));
     stack.add_named(&results, Some("results"));
     stack.add_named(&video_scroll, Some("video"));
     stack.add_named(&cache_page, Some("cache"));
@@ -751,7 +723,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         forward,
         downloads,
         title_stack,
-        controls_stack,
+        controls_button,
+        settings_button,
         search_entry,
         sort,
         filter,

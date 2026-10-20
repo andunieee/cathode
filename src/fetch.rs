@@ -390,7 +390,7 @@ async fn stream_listing(
     on_response: &impl Fn(Response),
 ) -> Result<(), String> {
     // The results and channel pages keep paging forever, so the limit is needed here.
-    let mut child = crate::tools::command("yt-dlp")
+    let mut child = crate::settings::yt_dlp()
         .args([
             "--no-warnings",
             "--flat-playlist",
@@ -502,7 +502,7 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
 }
 
 async fn info(url: &str) -> Result<VideoInfo, String> {
-    let output = crate::tools::command("yt-dlp")
+    let output = crate::settings::yt_dlp()
         .args([
             "--no-warnings",
             "--no-playlist",
@@ -552,7 +552,7 @@ async fn download(
         return Ok(path);
     }
 
-    let mut child = crate::tools::command("yt-dlp")
+    let mut child = crate::settings::yt_dlp()
         .args([
             "--no-warnings",
             "--no-playlist",
@@ -560,15 +560,14 @@ async fn download(
             "--newline",
             "--progress-template",
             "download:PROG %(progress.downloaded_bytes|0)s %(progress.total_bytes|0)s %(progress.total_bytes_estimate|0)s",
-            "-f",
-            "bv*[height<=1080]+ba/b[height<=1080]/b",
             "--merge-output-format",
             "mp4",
             "--no-simulate",
             "--print",
             "after_move:filepath",
-            "-o",
         ])
+        .args(crate::settings::download_args())
+        .arg("-o")
         .arg(dir.join(format!("{}.%(ext)s", entry.id)))
         .arg(&entry.url)
         .stdin(Stdio::null())
@@ -653,7 +652,7 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
 
 /// The first entry of a listing, with the listing's own details.
 async fn listing_head(url: &str) -> Result<Value, String> {
-    let output = crate::tools::command("yt-dlp")
+    let output = crate::settings::yt_dlp()
         .args([
             "--no-warnings",
             "--flat-playlist",

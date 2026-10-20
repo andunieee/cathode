@@ -4,7 +4,9 @@ mod fetch;
 mod format;
 mod nav;
 mod player;
+mod preferences;
 mod profile;
+mod settings;
 mod tools;
 mod ui;
 
