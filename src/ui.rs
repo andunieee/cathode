@@ -10,6 +10,9 @@ use crate::fetch::Entry;
 use crate::nav;
 use crate::player::Player;
 
+/// Playback speeds on offer, 1.0 being the first selected.
+const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
 pub struct CacheRow {
     pub entry: Entry,
     pub check: gtk::CheckButton,
@@ -54,7 +57,6 @@ pub struct Ui {
     pub time_label: gtk::Label,
 
     pub queue_list: gtk::ListBox,
-    pub queue_clear: gtk::Button,
 
     /// Set while the widgets are being updated by code, so their signals can be ignored.
     pub syncing: Cell<bool>,
@@ -462,6 +464,38 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     });
     let time_label = gtk::Label::new(Some("0:00 / 0:00"));
     time_label.add_css_class("numeric");
+    let speed = gtk::DropDown::from_strings(&SPEEDS.map(|speed| format!("{speed}×")).iter().map(String::as_str).collect::<Vec<_>>());
+    speed.set_selected(SPEEDS.iter().position(|&speed| speed == 1.0).unwrap() as u32);
+    speed.set_tooltip_text(Some("Playback speed"));
+    speed.connect_selected_notify(|speed| {
+        if let Some(&speed) = SPEEDS.get(speed.selected() as usize) {
+            nav::set_speed(speed);
+        }
+    });
+    let volume_scale = gtk::Scale::with_range(gtk::Orientation::Vertical, 0.0, 1.0, 0.01);
+    volume_scale.set_inverted(true);
+    volume_scale.set_draw_value(false);
+    volume_scale.set_height_request(140);
+    volume_scale.set_value(1.0);
+    let volume = gtk::MenuButton::builder()
+        .icon_name("audio-volume-high-symbolic")
+        .tooltip_text("Volume")
+        .direction(gtk::ArrowType::Up)
+        .popover(&gtk::Popover::builder().child(&volume_scale).build())
+        .build();
+    volume_scale.connect_value_changed({
+        let volume = volume.clone();
+        move |scale| {
+            let value = scale.value();
+            volume.set_icon_name(match value {
+                v if v <= 0.0 => "audio-volume-muted-symbolic",
+                v if v < 0.34 => "audio-volume-low-symbolic",
+                v if v < 0.67 => "audio-volume-medium-symbolic",
+                _ => "audio-volume-high-symbolic",
+            });
+            nav::set_volume(value);
+        }
+    });
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
@@ -475,6 +509,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     player_controls.append(&play_button);
     player_controls.append(&seek);
     player_controls.append(&time_label);
+    player_controls.append(&speed);
+    player_controls.append(&volume);
     player_controls.append(&fullscreen);
 
     let click = gtk::GestureClick::new();
@@ -503,11 +539,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     toolbar.set_content(Some(&stack));
 
     // Queue sidebar
-    let queue_clear = icon_button("edit-clear-all-symbolic", "Clear the queue");
-    queue_clear.connect_clicked(|_| nav::queue_clear());
     let queue_header = adw::HeaderBar::new();
     queue_header.set_title_widget(Some(&gtk::Label::builder().label("Queue").css_classes(["heading"]).build()));
-    queue_header.pack_end(&queue_clear);
 
     let queue_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -610,7 +643,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         seek,
         time_label,
         queue_list,
-        queue_clear,
         syncing: Cell::new(false),
     });
     UI.with(|slot| *slot.borrow_mut() = Some(ui.clone()));

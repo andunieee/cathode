@@ -10,12 +10,12 @@ Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `
 # Features
 - [x] Search YouTube (up to 100 results, with thumbnails), sorted by relevance or date
 - [x] Channel pages (up to 1000 videos), with search inside the channel
-- [x] Video pages with metadata
+- [x] Video pages with metadata and the upload date
 - [x] Back/forward history (also Alt+Left/Right and the mouse buttons)
 - [x] Video queue in a side panel: downloads happen one after the other, and playback moves on to the next downloaded video
 - [x] Download through yt-dlp, with progress, into a cache (`~/.cache/lumpla`)
 - [x] A page listing the cached videos, to queue or delete them one by one or in bulk. The files are the source of truth, `index.json` only remembers their titles and is cleaned up when files are gone
-- [x] Play/Pause, seekbar, fullscreen
+- [x] Play/Pause, seekbar, playback speed (0.5× to 3×), volume, fullscreen
 - [ ] Everything else
 
 # Installation

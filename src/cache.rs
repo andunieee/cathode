@@ -90,6 +90,7 @@ pub fn scan() -> Vec<CachedVideo> {
                 channel_id: String::new(),
                 duration: None,
                 views: None,
+                published: None,
             });
 
             CachedVideo {

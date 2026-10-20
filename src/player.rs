@@ -214,6 +214,16 @@ impl Player {
         self.mpv.get_property::<bool>("pause").unwrap_or(true)
     }
 
+    /// Playback speed, 1.0 is the normal one.
+    pub fn set_speed(&self, speed: f64) {
+        let _ = self.mpv.set_property("speed", speed);
+    }
+
+    /// Volume from 0 to 100.
+    pub fn set_volume(&self, volume: f64) {
+        let _ = self.mpv.set_property("volume", volume);
+    }
+
     pub fn position(&self) -> f64 {
         self.mpv.get_property::<f64>("time-pos").unwrap_or(0.0)
     }

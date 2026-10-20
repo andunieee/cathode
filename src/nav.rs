@@ -133,6 +133,9 @@ pub fn details(entry: &Entry) -> String {
     if let Some(views) = entry.views {
         details.push(format!("{} views", format::count(views)));
     }
+    if let Some(published) = entry.published {
+        details.push(format::ago(published));
+    }
     details.join("  ·  ")
 }
 
@@ -234,8 +237,11 @@ fn show_video(entry: &Entry) {
     ui.video_channel.set_visible(!entry.channel_id.is_empty());
 
     let mut meta = Vec::new();
+    // The exact date comes with the details, a listing only knows roughly how long ago it was.
     if let Some(date) = info.as_ref().and_then(|info| info.upload_date.as_deref()) {
         meta.push(format::date(date));
+    } else if let Some(published) = entry.published {
+        meta.push(format::ago(published));
     }
     if let Some(views) = info.as_ref().and_then(|info| info.views).or(entry.views) {
         meta.push(format!("{} views", format::count(views)));
@@ -442,6 +448,7 @@ pub fn open_file(path: PathBuf) {
         channel_id: String::new(),
         duration: None,
         views: None,
+        published: None,
     }));
 }
 
@@ -507,6 +514,15 @@ pub fn toggle_pause() {
         ui.player.set_paused(!ui.player.is_paused());
         tick();
     }
+}
+
+pub fn set_speed(speed: f64) {
+    ui::get().player.set_speed(speed);
+}
+
+/// `volume` goes from 0 to 1.
+pub fn set_volume(volume: f64) {
+    ui::get().player.set_volume(volume * 100.0);
 }
 
 pub fn seek(fraction: f64) {
@@ -623,13 +639,6 @@ fn queue_remove(id: &str) {
     pump_queue();
 }
 
-pub fn queue_clear() {
-    let ids: Vec<String> = with(|state| state.queue.iter().map(|i| i.entry.id.clone()).collect());
-    for id in ids {
-        queue_remove(&id);
-    }
-}
-
 /// Starts the next download of the queue, if none is going on.
 fn pump_queue() {
     loop {
@@ -690,7 +699,6 @@ fn refresh_queue() {
             .collect()
     });
 
-    ui.queue_clear.set_sensitive(!items.is_empty());
     if items.is_empty() {
         ui.queue_list.append(
             &gtk::Label::builder()

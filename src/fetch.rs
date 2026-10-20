@@ -28,6 +28,9 @@ pub struct Entry {
     pub channel_id: String,
     pub duration: Option<f64>,
     pub views: Option<u64>,
+    /// When it was uploaded, in seconds since the epoch. Listings only know it approximately.
+    #[serde(default)]
+    pub published: Option<i64>,
 }
 
 /// What yt-dlp knows about a video beyond what the listings carry.
@@ -232,6 +235,10 @@ async fn stream_listing(
         .args([
             "--no-warnings",
             "--flat-playlist",
+            // Without this the listings have no dates, the extractor works them out from
+            // the relative ones YouTube shows ("3 days ago").
+            "--extractor-args",
+            "youtubetab:approximate_date",
             &format!("--playlist-end={end}"),
             "-j",
             url,
@@ -331,6 +338,7 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
             .unwrap_or_default(),
         duration: Some(duration),
         views: entry["view_count"].as_u64(),
+        published: entry["timestamp"].as_i64(),
     })
 }
 
@@ -364,6 +372,7 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
             channel_id: string(&video, "channel_id").unwrap_or_default(),
             duration: video["duration"].as_f64(),
             views: video["view_count"].as_u64(),
+            published: video["timestamp"].as_i64(),
         },
         description: string(&video, "description").unwrap_or_default(),
         upload_date: string(&video, "upload_date"),
