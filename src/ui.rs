@@ -24,7 +24,6 @@ pub struct CacheRow {
 pub struct Ui {
     pub window: adw::ApplicationWindow,
     pub toasts: adw::ToastOverlay,
-    pub split: adw::OverlaySplitView,
     pub toolbar: adw::ToolbarView,
     /// Shows the progress of the startup check of the external tools.
     pub setup_banner: adw::Banner,
@@ -34,6 +33,7 @@ pub struct Ui {
     pub history_button: gtk::Button,
     /// Opens the sidebar listing the subscriptions.
     pub subs_toggle: gtk::ToggleButton,
+    pub queue_toggle: gtk::ToggleButton,
     pub subscriptions_list: gtk::ListBox,
     /// Turns the restricted profile on or off.
     pub controls_button: gtk::Button,
@@ -874,7 +874,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let ui = Rc::new(Ui {
         window,
         toasts,
-        split,
         toolbar,
         setup_banner,
         back,
@@ -882,6 +881,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         downloads,
         history_button,
         subs_toggle,
+        queue_toggle,
         subscriptions_list,
         title_stack,
         controls_button,

@@ -15,6 +15,7 @@ use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source, V
 use crate::format;
 use crate::history;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
+use crate::state;
 use crate::subscriptions::{self, Subscription};
 use crate::ui::{self, CacheRow, Ui};
 
@@ -375,7 +376,7 @@ fn apply_mode() {
     // The subscriptions would be a way around the restricted profile.
     ui.subs_toggle.set_visible(!restricted);
     if restricted {
-        ui.subs_toggle.set_active(false);
+        set_sidebar_toggle(&ui.subs_toggle, false);
     }
     ui.settings_button.set_visible(!restricted);
     ui.controls_button.set_tooltip_text(Some(if restricted {
@@ -610,6 +611,8 @@ pub fn init(requests: UnboundedSender<Request>) {
     with(|state| state.requests = Some(requests));
     profile::init();
     subscriptions::init();
+    state::init();
+    restore_sidebars();
     apply_mode();
     // Forgets what's left of videos that are gone.
     cache::scan();
@@ -836,8 +839,8 @@ pub fn toggle_fullscreen() {
     ui.window.set_fullscreened(fullscreen);
     ui.toolbar.set_reveal_top_bars(!fullscreen);
     if fullscreen {
-        ui.split.set_show_sidebar(false);
-        ui.subs_toggle.set_active(false);
+        set_sidebar_toggle(&ui.queue_toggle, false);
+        set_sidebar_toggle(&ui.subs_toggle, false);
     }
 }
 
@@ -1049,6 +1052,40 @@ fn refresh_queue() {
 
         ui.queue_list.append(&row);
     }
+}
+
+// Sidebars
+
+/// Opens or closes a sidebar from code, which is not the user's choice to remember.
+fn set_sidebar_toggle(toggle: &gtk::ToggleButton, open: bool) {
+    let ui = ui::get();
+    ui.syncing.set(true);
+    toggle.set_active(open);
+    ui.syncing.set(false);
+}
+
+/// Opens the sidebars that were open last time, and remembers when the user changes them.
+fn restore_sidebars() {
+    let ui = ui::get();
+    let saved = state::get();
+    set_sidebar_toggle(&ui.queue_toggle, saved.queue_sidebar_open);
+    set_sidebar_toggle(&ui.subs_toggle, saved.subscriptions_sidebar_open);
+
+    let remember = |toggle: &gtk::ToggleButton, change: fn(&mut state::State, bool)| {
+        toggle.connect_toggled(move |toggle| {
+            if !ui::get().syncing.get() {
+                if let Err(error) = state::update(|state| change(state, toggle.is_active())) {
+                    eprintln!("Cannot write the state: {error}");
+                }
+            }
+        });
+    };
+    remember(&ui.queue_toggle, |state, open| {
+        state.queue_sidebar_open = open
+    });
+    remember(&ui.subs_toggle, |state, open| {
+        state.subscriptions_sidebar_open = open
+    });
 }
 
 // Subscriptions

@@ -8,6 +8,7 @@ mod player;
 mod preferences;
 mod profile;
 mod settings;
+mod state;
 mod subscriptions;
 mod tools;
 mod ui;
