@@ -1397,6 +1397,10 @@ fn show_fullscreen(fullscreen: bool) {
         _ => 16.0 / 9.0,
     });
 
+    // Sit under the queue normally, take the whole sidebar once the queue is hidden.
+    ui.player_frame.set_vexpand(fullscreen);
+    ui.player_frame.set_valign(if fullscreen { gtk::Align::Fill } else { gtk::Align::End });
+
     if let Some(content) = split.content() {
         content.set_visible(!fullscreen);
     }

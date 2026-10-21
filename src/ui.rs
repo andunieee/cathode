@@ -911,6 +911,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     overlay.add_overlay(&player_controls);
     let player_frame = gtk::AspectFrame::new(0.5, 0.5, 16.0 / 9.0, false);
     player_frame.set_child(Some(&overlay));
+    // The player's expand flags would otherwise share the sidebar's height with the queue.
+    player_frame.set_vexpand(false);
+    player_frame.set_valign(gtk::Align::End);
     // Nothing to show until something plays.
     player_frame.set_visible(false);
 
