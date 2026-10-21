@@ -283,7 +283,7 @@ fn show_channel_results(channels: &[ChannelRef]) {
         .iter()
         .filter(|c| !profile::restricted() || profile::allows_channel(&c.id))
     {
-        let button = gtk::Button::builder()
+        let button = gtk::Button::builder().cursor(&crate::ui::pointer())
             .label(&channel.name)
             .tooltip_text("Open the channel")
             .build();
@@ -1346,7 +1346,7 @@ fn refresh_queue() {
             .use_markup(false)
             .build();
 
-        let play = gtk::Button::builder()
+        let play = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("media-playback-start-symbolic")
             .tooltip_text("Play")
             .valign(gtk::Align::Center)
@@ -1359,7 +1359,7 @@ fn refresh_queue() {
         });
         row.add_prefix(&play);
 
-        let remove = gtk::Button::builder()
+        let remove = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
             .tooltip_text("Remove from the queue")
             .valign(gtk::Align::Center)
@@ -1500,7 +1500,7 @@ fn refresh_subscriptions() {
             move |_| open_channel(&subscription.id, &subscription.name)
         });
 
-        let remove = gtk::Button::builder()
+        let remove = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
             .tooltip_text("Unsubscribe")
             .valign(gtk::Align::Center)
@@ -1775,6 +1775,8 @@ fn show_cache() {
             .build();
 
         let check = gtk::CheckButton::new();
+
+        check.set_cursor(Some(&crate::ui::pointer()));
         check.set_valign(gtk::Align::Center);
         check.connect_toggled(|_| {
             if !ui::get().syncing.get() {
@@ -1783,7 +1785,7 @@ fn show_cache() {
         });
         row.add_prefix(&check);
 
-        let queue = gtk::Button::builder()
+        let queue = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("list-add-symbolic")
             .tooltip_text("Add to queue")
             .valign(gtk::Align::Center)
@@ -1795,7 +1797,7 @@ fn show_cache() {
         });
         row.add_suffix(&queue);
 
-        let save = gtk::Button::builder()
+        let save = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("document-save-symbolic")
             .tooltip_text("Save to a collection")
             .valign(gtk::Align::Center)
@@ -1810,7 +1812,7 @@ fn show_cache() {
         });
         row.add_suffix(&save);
 
-        let delete = gtk::Button::builder()
+        let delete = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("user-trash-symbolic")
             .tooltip_text("Delete from the cache")
             .valign(gtk::Align::Center)

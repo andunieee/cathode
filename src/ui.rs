@@ -139,7 +139,7 @@ impl Card {
             .css_classes(["heading"])
             .build();
 
-        let channel = gtk::LinkButton::builder()
+        let channel = gtk::LinkButton::builder().cursor(&crate::ui::pointer())
             .uri("lumpla:channel")
             .halign(gtk::Align::Start)
             .build();
@@ -171,7 +171,7 @@ impl Card {
         text.append(&title);
         text.append(&line);
 
-        let queue = gtk::Button::builder()
+        let queue = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("list-add-symbolic")
             .tooltip_text("Add to queue")
             .valign(gtk::Align::Center)
@@ -259,8 +259,13 @@ fn results_view(store: &gio::ListStore) -> gtk::ListView {
     view
 }
 
+/// The hand cursor the web shows over clickable things; GTK widgets don't get it by default.
+pub fn pointer() -> gtk::gdk::Cursor {
+    gtk::gdk::Cursor::from_name("pointer", None).expect("the default cursor theme has a pointer")
+}
+
 fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
-    gtk::Button::builder()
+    gtk::Button::builder().cursor(&crate::ui::pointer())
         .icon_name(icon)
         .tooltip_text(tooltip)
         .build()
@@ -291,7 +296,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     controls_button.connect_clicked(|_| controls::toggle_profile());
     header.pack_start(&controls_button);
 
-    let subs_toggle = gtk::ToggleButton::builder()
+    let subs_toggle = gtk::ToggleButton::builder().cursor(&crate::ui::pointer())
         .icon_name("starred-symbolic")
         .tooltip_text("Subscriptions and collections")
         .build();
@@ -302,6 +307,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .hexpand(true)
         .build();
     let sort = gtk::DropDown::from_strings(&["Relevance", "Newest", "Most viewed"]);
+    sort.set_cursor(Some(&crate::ui::pointer()));
     let filter = gtk::DropDown::from_strings(&[
         "No filter",
         "Last hour",
@@ -313,6 +319,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         "4 to 20 minutes",
         "Over 20 minutes",
     ]);
+    filter.set_cursor(Some(&crate::ui::pointer()));
     let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     search_box.append(&search_entry);
     search_box.append(&sort);
@@ -335,7 +342,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     );
     header.set_title_widget(Some(&title_stack));
 
-    let queue_toggle = gtk::ToggleButton::builder()
+    let queue_toggle = gtk::ToggleButton::builder().cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
         .tooltip_text("Queue")
         .build();
@@ -396,12 +403,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     channel_header.set_margin_end(12);
     channel_header.append(&channel_title);
     channel_header.append(&channel_entry);
-    let allow_channel = gtk::Button::builder()
+    let allow_channel = gtk::Button::builder().cursor(&crate::ui::pointer())
         .valign(gtk::Align::Center)
         .visible(false)
         .build();
     allow_channel.connect_clicked(|_| nav::toggle_allowed());
-    let subscribe_button = gtk::Button::builder()
+    let subscribe_button = gtk::Button::builder().cursor(&crate::ui::pointer())
         .valign(gtk::Align::Center)
         .visible(false)
         .build();
@@ -461,7 +468,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .focusable(false)
         .css_classes(["title-2"])
         .build();
-    let video_channel = gtk::LinkButton::builder()
+    let video_channel = gtk::LinkButton::builder().cursor(&crate::ui::pointer())
         .uri("lumpla:channel")
         .halign(gtk::Align::Start)
         .build();
@@ -476,12 +483,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .focusable(false)
         .css_classes(["dim-label"])
         .build();
-    let play = gtk::Button::builder()
+    let play = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Play")
         .css_classes(["suggested-action", "pill"])
         .build();
     play.connect_clicked(|_| nav::play_current());
-    let queue_video = gtk::Button::builder()
+    let queue_video = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Add to queue")
         .css_classes(["pill"])
         .build();
@@ -490,7 +497,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons.set_margin_top(6);
     buttons.append(&play);
     buttons.append(&queue_video);
-    let related = gtk::Button::builder()
+    let related = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Suggestions")
         .css_classes(["pill"])
         .build();
@@ -498,7 +505,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons.append(&related);
     let library = library::Widgets::new();
     buttons.append(&library.save);
-    let allow_video = gtk::Button::builder()
+    let allow_video = gtk::Button::builder().cursor(&crate::ui::pointer())
         .css_classes(["pill"])
         .visible(false)
         .build();
@@ -542,20 +549,21 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Cache page
     let cache_select_all = gtk::CheckButton::with_label("Select all");
+    cache_select_all.set_cursor(Some(&crate::ui::pointer()));
     let cache_summary = gtk::Label::builder()
         .hexpand(true)
         .xalign(0.0)
         .css_classes(["dim-label"])
         .build();
-    let cache_queue = gtk::Button::builder()
+    let cache_queue = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Add to queue")
         .sensitive(false)
         .build();
-    let cache_save = gtk::Button::builder()
+    let cache_save = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Save")
         .sensitive(false)
         .build();
-    let cache_delete = gtk::Button::builder()
+    let cache_delete = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Delete")
         .sensitive(false)
         .css_classes(["destructive-action"])
@@ -685,6 +693,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let play_button = icon_button("media-playback-pause-symbolic", "Play/Pause");
     play_button.connect_clicked(|_| nav::toggle_pause());
     let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.001);
+    seek.set_cursor(Some(&crate::ui::pointer()));
     seek.set_hexpand(true);
     seek.set_draw_value(false);
     seek.connect_change_value(|_, _, value| {
@@ -700,6 +709,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             .map(String::as_str)
             .collect::<Vec<_>>(),
     );
+    speed.set_cursor(Some(&crate::ui::pointer()));
     speed.set_selected(SPEEDS.iter().position(|&speed| speed == 1.0).unwrap() as u32);
     speed.set_tooltip_text(Some("Playback speed"));
     speed.connect_selected_notify(|speed| {
@@ -708,11 +718,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         }
     });
     let volume_scale = gtk::Scale::with_range(gtk::Orientation::Vertical, 0.0, 1.0, 0.01);
+    volume_scale.set_cursor(Some(&crate::ui::pointer()));
     volume_scale.set_inverted(true);
     volume_scale.set_draw_value(false);
     volume_scale.set_height_request(140);
     volume_scale.set_value(1.0);
-    let volume = gtk::MenuButton::builder()
+    let volume = gtk::MenuButton::builder().cursor(&crate::ui::pointer())
         .icon_name("audio-volume-high-symbolic")
         .tooltip_text("Volume")
         .direction(gtk::ArrowType::Up)
@@ -735,7 +746,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .selection_mode(gtk::SelectionMode::None)
         .build();
     chapters_list.connect_row_activated(|_, row| nav::play_chapter(row.index() as usize));
-    let chapters_button = gtk::MenuButton::builder()
+    let chapters_button = gtk::MenuButton::builder().cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
         .tooltip_text("Chapters")
         .direction(gtk::ArrowType::Up)

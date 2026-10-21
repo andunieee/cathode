@@ -36,7 +36,7 @@ pub struct Widgets {
 }
 
 fn flat_button(label: &str) -> gtk::Button {
-    let button = gtk::Button::builder().css_classes(["flat"]).build();
+    let button = gtk::Button::builder().cursor(&crate::ui::pointer()).css_classes(["flat"]).build();
     let label = gtk::Label::builder()
         .label(label)
         .xalign(0.0)
@@ -47,7 +47,7 @@ fn flat_button(label: &str) -> gtk::Button {
 }
 
 fn remove_button(tooltip: &str, icon: &str, on_click: impl Fn() + 'static) -> gtk::Button {
-    let button = gtk::Button::builder()
+    let button = gtk::Button::builder().cursor(&crate::ui::pointer())
         .icon_name(icon)
         .tooltip_text(tooltip)
         .valign(gtk::Align::Center)
@@ -86,7 +86,7 @@ impl Widgets {
             .css_classes(["title-2"])
             .build();
         let summary = gtk::Label::builder().css_classes(["dim-label"]).build();
-        let allow = gtk::Button::builder()
+        let allow = gtk::Button::builder().cursor(&crate::ui::pointer())
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
@@ -144,7 +144,7 @@ impl Widgets {
                 import_folder();
             }
         });
-        let add = gtk::MenuButton::builder()
+        let add = gtk::MenuButton::builder().cursor(&crate::ui::pointer())
             .icon_name("list-add-symbolic")
             .tooltip_text("New collection or import a folder")
             .popover(&popover)
@@ -176,7 +176,7 @@ impl Widgets {
         // The Save button
         let save_choices = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let save_popover = gtk::Popover::builder().child(&save_choices).build();
-        let save = adw::SplitButton::builder()
+        let save = adw::SplitButton::builder().cursor(&crate::ui::pointer())
             .label("Save")
             .popover(&save_popover)
             .visible(false)
@@ -552,6 +552,8 @@ pub fn new_collection() {
     });
 
     let choose = gtk::Button::with_label("Choose folder…");
+
+    choose.set_cursor(Some(&crate::ui::pointer()));
     choose.connect_clicked({
         let (folder, show_folder) = (folder.clone(), show_folder.clone());
         move |_| {
