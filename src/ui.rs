@@ -25,7 +25,6 @@ pub struct CacheRow {
 pub struct Ui {
     pub window: adw::ApplicationWindow,
     pub toasts: adw::ToastOverlay,
-    pub toolbar: adw::ToolbarView,
     /// Shows the progress of the startup check of the external tools.
     pub setup_banner: adw::Banner,
     pub back: gtk::Button,
@@ -89,6 +88,12 @@ pub struct Ui {
     pub controls: controls::Widgets,
     pub library: library::Widgets,
 
+    /// The queue sidebar, which takes the whole window in fullscreen.
+    pub queue_split: adw::OverlaySplitView,
+    pub queue_header: adw::HeaderBar,
+    pub queue_scroll: gtk::ScrolledWindow,
+    /// Keeps the player in proportion, in the queue sidebar.
+    pub player_frame: gtk::AspectFrame,
     pub player: Rc<Player>,
     pub player_title: gtk::Label,
     pub player_status: gtk::Label,
@@ -673,7 +678,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     adjustment.connect_value_changed(|_| nav::history_check(true));
     adjustment.connect_upper_notify(|_| nav::history_check(false));
 
-    // Player page
+    // Player, which lives in the queue sidebar
     let player = Player::new();
     let player_title = gtk::Label::builder()
         .halign(gtk::Align::Start)
@@ -745,7 +750,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let chapters_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .build();
-    chapters_list.connect_row_activated(|_, row| nav::play_chapter(row.index() as usize));
+    chapters_list.connect_row_activated(|_, row| nav::play_playing_chapter(row.index() as usize));
     let chapters_button = gtk::MenuButton::builder().cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
         .tooltip_text("Chapters")
@@ -767,20 +772,26 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
-    let player_controls = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    // Two rows, the sidebar is narrow.
+    let seek_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    seek_row.append(&seek);
+    seek_row.append(&time_label);
+    let buttons_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    buttons_row.append(&play_button);
+    buttons_row.append(&speed);
+    buttons_row.append(&gtk::Box::builder().hexpand(true).build());
+    buttons_row.append(&volume);
+    buttons_row.append(&chapters_button);
+    buttons_row.append(&fullscreen);
+    let player_controls = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_controls.add_css_class("osd");
     player_controls.set_halign(gtk::Align::Fill);
     player_controls.set_valign(gtk::Align::End);
-    player_controls.set_margin_bottom(12);
-    player_controls.set_margin_start(12);
-    player_controls.set_margin_end(12);
-    player_controls.append(&play_button);
-    player_controls.append(&seek);
-    player_controls.append(&time_label);
-    player_controls.append(&speed);
-    player_controls.append(&volume);
-    player_controls.append(&chapters_button);
-    player_controls.append(&fullscreen);
+    player_controls.set_margin_bottom(8);
+    player_controls.set_margin_start(8);
+    player_controls.set_margin_end(8);
+    player_controls.append(&seek_row);
+    player_controls.append(&buttons_row);
 
     let click = gtk::GestureClick::new();
     click.connect_released(|_, presses, _, _| match presses {
@@ -795,6 +806,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     overlay.add_overlay(&player_title);
     overlay.add_overlay(&player_status);
     overlay.add_overlay(&player_controls);
+    let player_frame = gtk::AspectFrame::new(0.5, 0.5, 16.0 / 9.0, false);
+    player_frame.set_child(Some(&overlay));
+    // Nothing to show until something plays.
+    player_frame.set_visible(false);
 
     // Pages
     let stack = gtk::Stack::new();
@@ -807,7 +822,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     stack.add_named(&cache_page, Some("cache"));
     stack.add_named(&history_scroll, Some("history"));
     stack.add_named(&library.page, Some("collection"));
-    stack.add_named(&overlay, Some("player"));
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
@@ -830,15 +844,20 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let queue_bar = adw::ToolbarView::new();
     queue_bar.add_top_bar(&queue_header);
-    queue_bar.set_content(Some(
-        &gtk::ScrolledWindow::builder().child(&queue_list).build(),
-    ));
+    let queue_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    queue_content.append(&player_frame);
+    let queue_scroll = gtk::ScrolledWindow::builder()
+        .vexpand(true)
+        .child(&queue_list)
+        .build();
+    queue_content.append(&queue_scroll);
+    queue_bar.set_content(Some(&queue_content));
 
     let split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::End)
         .collapsed(false)
         .show_sidebar(false)
-        .min_sidebar_width(300.0)
+        .min_sidebar_width(360.0)
         .sidebar(&queue_bar)
         .content(&toolbar)
         .build();
@@ -916,6 +935,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     small.add_setter(&subs_split, "collapsed", Some(&true.to_value()));
     window.add_breakpoint(small);
 
+    window.connect_fullscreened_notify(|_| nav::fullscreen_changed());
+
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&subs_split));
     window.set_content(Some(&toasts));
@@ -941,9 +962,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             gdk::Key::Escape if get().window.is_fullscreen() => nav::toggle_fullscreen(),
             gdk::Key::space => {
                 let ui = get();
-                let typing = GtkWindowExt::focus(&ui.window)
-                    .is_some_and(|widget| widget.is::<gtk::Editable>());
-                if typing || ui.stack.visible_child_name().as_deref() != Some("player") {
+                let busy = GtkWindowExt::focus(&ui.window).is_some_and(|widget| {
+                    widget.is::<gtk::Editable>()
+                        || widget.is::<gtk::Button>()
+                        || widget.is::<gtk::Scale>()
+                });
+                if busy || ui.player.id().is_none() {
                     return glib::Propagation::Proceed;
                 }
                 nav::toggle_pause();
@@ -957,7 +981,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let ui = Rc::new(Ui {
         window,
         toasts,
-        toolbar,
         setup_banner,
         back,
         forward,
@@ -1006,6 +1029,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         history_empty,
         controls,
         library,
+        queue_split: split,
+        queue_header,
+        queue_scroll,
+        player_frame,
         player,
         player_title,
         player_status,

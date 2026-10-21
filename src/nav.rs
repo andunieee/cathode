@@ -50,7 +50,6 @@ enum Page {
     Cache,
     History,
     Collection(String),
-    Player(Entry),
 }
 
 impl Page {
@@ -73,7 +72,6 @@ impl Page {
             Page::Cache => "cache".to_string(),
             Page::History => "history".to_string(),
             Page::Collection(name) => format!("collection:{name}"),
-            Page::Player(entry) => format!("p:{}", entry.id),
         }
     }
 }
@@ -121,7 +119,9 @@ struct State {
     /// Downloads running, whoever asked for them.
     inflight: HashMap<String, Entry>,
     progress: HashMap<String, f64>,
-    /// Video the player page is waiting for to be downloaded.
+    /// The video in the player, which may still be downloading.
+    playing: Option<Entry>,
+    /// Video the player is waiting for to be downloaded.
     awaiting_play: Option<String>,
     /// Videos to save to a collection (the name) once they are downloaded.
     pending_saves: HashMap<String, String>,
@@ -129,6 +129,8 @@ struct State {
     local_files: HashMap<String, PathBuf>,
     /// Chapter picked for a video that is still loading: where to seek to once it plays.
     pending_seek: Option<(String, f64)>,
+    /// Width limits of the queue sidebar to go back to, while in fullscreen.
+    sidebar_widths: Option<(f64, f64)>,
     /// Where to pause, when the playback started from a chapter.
     chapter_stop: Option<f64>,
 
@@ -149,6 +151,7 @@ thread_local! {
         listings: HashMap::new(),
         pending_seek: None,
         chapter_stop: None,
+        sidebar_widths: None,
         infos: HashMap::new(),
         info_lookups: HashSet::new(),
         thumbnails: [HashMap::new(), HashMap::new()],
@@ -158,6 +161,7 @@ thread_local! {
         queue_downloading: None,
         inflight: HashMap::new(),
         progress: HashMap::new(),
+        playing: None,
         awaiting_play: None,
         pending_saves: HashMap::new(),
         local_files: HashMap::new(),
@@ -462,9 +466,19 @@ fn show_player_chapters() {
 
 /// Plays a chapter of the video on the current page, and pauses when it ends.
 pub fn play_chapter(index: usize) {
-    let (Page::Video(entry) | Page::Player(entry)) = current() else {
-        return;
-    };
+    if let Page::Video(entry) = current() {
+        play_chapter_of(entry, index);
+    }
+}
+
+/// Plays a chapter of the video in the player.
+pub fn play_playing_chapter(index: usize) {
+    if let Some(entry) = with(|state| state.playing.clone()) {
+        play_chapter_of(entry, index);
+    }
+}
+
+fn play_chapter_of(entry: Entry, index: usize) {
     let Some(chapter) = chapters_of(&entry.id).get(index).cloned() else {
         return;
     };
@@ -477,9 +491,7 @@ pub fn play_chapter(index: usize) {
     } else {
         // The video isn't loaded yet, tick() seeks once it is.
         with(|state| state.pending_seek = Some((entry.id.clone(), chapter.start)));
-    }
-    if !matches!(current(), Page::Player(_)) {
-        navigate(Page::Player(entry));
+        play(entry);
     }
 }
 
@@ -511,7 +523,7 @@ fn page_allowed(page: &Page) -> bool {
         Page::Channel { id, .. } => profile::allows_channel(id),
         Page::Playlist { id, .. } => profile::allows_playlist(id),
         Page::Collection(name) => profile::allows_collection(name),
-        Page::Video(entry) | Page::Player(entry) => profile::allows_video(entry),
+        Page::Video(entry) => profile::allows_video(entry),
     }
 }
 
@@ -675,16 +687,6 @@ fn show() {
     ui.back.set_sensitive(can_back);
     ui.forward.set_sensitive(can_forward);
 
-    if !matches!(page, Page::Player(_)) {
-        if ui.player.id().is_some() {
-            ui.player.set_paused(true);
-        }
-        if ui.window.is_fullscreen() {
-            ui.window.set_fullscreened(false);
-            ui.toolbar.set_reveal_top_bars(true);
-        }
-    }
-
     let key = page.key();
     match page {
         Page::Search {
@@ -761,18 +763,6 @@ fn show() {
         Page::Collection(name) => {
             ui.stack.set_visible_child_name("collection");
             library::show_collection(&name);
-        }
-        Page::Player(entry) => {
-            show_player(&entry);
-
-            // The chapters come with the details.
-            let key = Page::Video(entry.clone()).key();
-            if !entry.url.is_empty() && !with(|state| state.infos.contains_key(&key)) {
-                send(Request::Info {
-                    key,
-                    url: entry.url,
-                });
-            }
         }
     }
 
@@ -948,7 +938,7 @@ pub fn open_file(path: PathBuf) {
     let id = format!("file:{}", path.display());
 
     with(|state| state.local_files.insert(id.clone(), path));
-    navigate(Page::Player(Entry {
+    play(Entry {
         id,
         url: String::new(),
         title: name,
@@ -957,7 +947,7 @@ pub fn open_file(path: PathBuf) {
         duration: None,
         views: None,
         published: None,
-    }));
+    });
 }
 
 // Downloads
@@ -1061,13 +1051,38 @@ fn refresh_after_save(entry: &Entry) {
 
 pub fn play_current() {
     if let Page::Video(entry) = current() {
-        navigate(Page::Player(entry));
+        if video_allowed(&entry) {
+            enqueue(entry.clone());
+        }
+        play(entry);
+    }
+}
+
+/// Plays a video in the player of the queue sidebar, wherever the user is.
+pub fn play(entry: Entry) {
+    if !video_allowed(&entry) {
+        toast("This is not available in the restricted profile");
+        return;
+    }
+
+    let ui = ui::get();
+    set_sidebar_toggle(&ui.queue_toggle, true);
+    with(|state| state.playing = Some(entry.clone()));
+    show_player(&entry);
+
+    // The chapters come with the details.
+    let key = Page::Video(entry.clone()).key();
+    if !entry.url.is_empty() && !with(|state| state.infos.contains_key(&key)) {
+        send(Request::Info {
+            key,
+            url: entry.url,
+        });
     }
 }
 
 fn show_player(entry: &Entry) {
     let ui = ui::get();
-    ui.stack.set_visible_child_name("player");
+    ui.player_frame.set_visible(true);
     ui.player_title.set_text(&entry.title);
 
     if ui.player.id().as_deref() == Some(&entry.id) {
@@ -1138,22 +1153,66 @@ pub fn seek(fraction: f64) {
 pub fn toggle_fullscreen() {
     let ui = ui::get();
     let fullscreen = !ui.window.is_fullscreen();
-    if fullscreen && ui.stack.visible_child_name().as_deref() != Some("player") {
+    if fullscreen && ui.player.id().is_none() {
         return;
     }
 
+    // The window only reports being fullscreen once the compositor agrees, don't wait for that.
     ui.window.set_fullscreened(fullscreen);
-    ui.toolbar.set_reveal_top_bars(!fullscreen);
-    if fullscreen {
-        set_sidebar_toggle(&ui.queue_toggle, false);
-        set_sidebar_toggle(&ui.subs_toggle, false);
+    show_fullscreen(fullscreen);
+}
+
+/// Fullscreen makes the sidebar take the whole window, with only the player in it.
+fn show_fullscreen(fullscreen: bool) {
+    let ui = ui::get();
+    let split = &ui.queue_split;
+    let saved = with(|state| state.sidebar_widths);
+    if fullscreen == saved.is_some() {
+        return;
     }
+
+    if fullscreen {
+        with(|state| {
+            state.sidebar_widths = Some((split.max_sidebar_width(), split.sidebar_width_fraction()))
+        });
+        set_sidebar_toggle(&ui.subs_toggle, false);
+        set_sidebar_toggle(&ui.queue_toggle, true);
+        split.set_max_sidebar_width(100000.0);
+        split.set_sidebar_width_fraction(1.0);
+    } else if let Some((max, fraction)) = saved {
+        with(|state| state.sidebar_widths = None);
+        split.set_max_sidebar_width(max);
+        split.set_sidebar_width_fraction(fraction);
+    }
+
+    // The player takes the shape of the screen rather than a video's.
+    let screen = ui
+        .window
+        .surface()
+        .and_then(|surface| surface.display().monitor_at_surface(&surface))
+        .map(|monitor| monitor.geometry())
+        .filter(|geometry| geometry.height() > 0);
+    ui.player_frame.set_ratio(match screen {
+        Some(geometry) if fullscreen => geometry.width() as f32 / geometry.height() as f32,
+        _ => 16.0 / 9.0,
+    });
+
+    if let Some(content) = split.content() {
+        content.set_visible(!fullscreen);
+    }
+    ui.queue_header.set_visible(!fullscreen);
+    ui.queue_scroll.set_visible(!fullscreen);
+}
+
+/// The window left or entered fullscreen on its own, for instance from the compositor.
+pub fn fullscreen_changed() {
+    show_fullscreen(ui::get().window.is_fullscreen());
 }
 
 /// Called a few times a second to keep the player controls up to date.
 pub fn tick() {
     let ui = ui::get();
-    if ui.stack.visible_child_name().as_deref() != Some("player") || ui.player.id().is_none() {
+    if ui.player.id().is_none() {
         return;
     }
 
@@ -1208,7 +1267,7 @@ fn play_next_in_queue() {
     });
 
     if let Some(next) = next {
-        navigate(Page::Player(next));
+        play(next);
     }
 }
 
@@ -1226,23 +1285,28 @@ pub fn queue_add(entry: Entry) {
         return;
     }
 
+    if !enqueue(entry) {
+        toast("Already in the queue");
+    }
+}
+
+/// Puts the video at the end of the queue, unless it is there already.
+fn enqueue(entry: Entry) -> bool {
     let added = with(|state| {
         if state.queue.iter().any(|item| item.entry.id == entry.id) {
             return false;
         }
         state.queue.push(QueueItem {
-            entry: entry.clone(),
+            entry,
             state: QueueState::Waiting,
         });
         true
     });
 
     if added {
-        toast("Added to the queue");
         pump_queue();
-    } else {
-        toast("Already in the queue");
     }
+    added
 }
 
 fn queue_remove(id: &str) {
@@ -1355,7 +1419,7 @@ fn refresh_queue() {
             .build();
         play.connect_clicked({
             let entry = entry.clone();
-            move |_| navigate(Page::Player(entry.clone()))
+            move |_| self::play(entry.clone())
         });
         row.add_prefix(&play);
 
@@ -2211,11 +2275,10 @@ pub fn handle(response: Response) {
             });
 
             if queued {
-                match (&result, current()) {
-                    (Ok(path), Page::Player(entry)) if entry.id == id => {
-                        start_playback(&entry, path)
-                    }
-                    (Err(error), Page::Player(entry)) if entry.id == id => {
+                let entry = with(|state| state.playing.clone()).filter(|entry| entry.id == id);
+                match (&result, entry) {
+                    (Ok(path), Some(entry)) => start_playback(&entry, path),
+                    (Err(error), Some(_)) => {
                         ui.player_status
                             .set_text(&format!("Download failed: {error}"));
                     }
