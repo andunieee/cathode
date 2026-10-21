@@ -134,6 +134,8 @@ struct State {
     local_files: HashMap<String, PathBuf>,
     /// Chapter picked for a video that is still loading: where to seek to once it plays.
     pending_seek: Option<(String, f64)>,
+    /// Where each video was left, by YouTube id, whatever file it was played from.
+    positions: HashMap<String, f64>,
     /// Width limits of the queue sidebar to go back to, while in fullscreen.
     sidebar_widths: Option<(f64, f64)>,
     /// Where to pause, when the playback started from a chapter.
@@ -155,6 +157,7 @@ thread_local! {
         index: 0,
         listings: HashMap::new(),
         pending_seek: None,
+        positions: HashMap::new(),
         chapter_stop: None,
         sidebar_widths: None,
         infos: HashMap::new(),
@@ -1250,12 +1253,35 @@ fn show_player(entry: &Entry) {
     }
 }
 
+/// Keeps where the video in the player is, to go back to it later.
+fn remember_position() {
+    let ui = ui::get();
+    let Some(id) = ui.player.id() else {
+        return;
+    };
+
+    let (position, duration) = (ui.player.position(), ui.player.duration());
+    with(|state| {
+        // A video that played to its end starts over.
+        if duration > 0.0 && position < duration - 1.0 {
+            state.positions.insert(id, position);
+        } else if duration > 0.0 {
+            state.positions.remove(&id);
+        }
+    });
+}
+
 fn start_playback(entry: &Entry, path: &std::path::Path) {
     let ui = ui::get();
+    remember_position();
     ui.player.load(&entry.id, &path.to_string_lossy());
     with(|state| {
         if state.pending_seek.as_ref().map(|(id, _)| id) != Some(&entry.id) {
             state.chapter_stop = None;
+            state.pending_seek = state
+                .positions
+                .get(&entry.id)
+                .map(|&position| (entry.id.clone(), position));
         }
     });
     show_player_chapters();
@@ -1275,6 +1301,9 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
 pub fn toggle_pause() {
     let ui = ui::get();
     if ui.player.id().is_some() {
+        if !ui.player.is_paused() {
+            remember_position();
+        }
         ui.player.set_paused(!ui.player.is_paused());
         tick();
     }
@@ -1288,6 +1317,7 @@ pub fn stop_player() {
     }
     ui.player.stop();
     with(|state| {
+        state.positions.clear();
         state.playing = None;
         state.awaiting_play = None;
         state.chapter_stop = None;
@@ -1416,6 +1446,9 @@ pub fn tick() {
     });
 
     if ui.player.take_ended() {
+        if let Some(id) = ui.player.id() {
+            with(|state| state.positions.remove(&id));
+        }
         play_next_in_queue();
     }
 }
