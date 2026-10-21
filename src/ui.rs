@@ -521,8 +521,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .label("Queue")
         .build();
     queue_video.connect_clicked(|_| nav::queue_current());
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.set_margin_top(6);
+    let buttons = adw::WrapBox::builder()
+        .child_spacing(8)
+        .line_spacing(8)
+        .margin_top(6)
+        .build();
     buttons.append(&play);
     buttons.append(&queue_video);
     let related = gtk::Button::builder().cursor(&crate::ui::pointer())
