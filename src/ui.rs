@@ -37,7 +37,7 @@ pub struct Ui {
     pub subs_toggle: gtk::ToggleButton,
     pub queue_toggle: gtk::ToggleButton,
     pub subscriptions_list: gtk::ListBox,
-    /// Turns the restricted profile on or off.
+    /// Turns the restricted mode on or off.
     pub controls_button: gtk::Button,
     pub settings_button: gtk::Button,
     pub title_stack: gtk::Stack,
@@ -224,7 +224,7 @@ impl Card {
         self.title.set_text(&entry.title);
         self.channel.set_label(&entry.channel);
         self.channel.set_visible(!entry.channel.is_empty());
-        // In the restricted profile only the channels that are allowed can be visited.
+        // In the restricted mode only the channels that are allowed can be visited.
         self.channel
             .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
         self.details.set_text(&nav::details(entry));
@@ -321,8 +321,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     // The window buttons are made by the header bar itself, so they are found once it has them.
     header.connect_map(|header| point_window_controls(header.upcast_ref()));
 
-    // Straight to the restricted profile, asking for the password if there is one.
-    let controls_button = icon_button("system-users-symbolic", "Turn on the restricted profile");
+    // Straight to the restricted mode, asking for the password if there is one.
+    let controls_button = icon_button("system-users-symbolic", "Turn on the restricted mode");
     controls_button.connect_clicked(|_| controls::toggle_profile());
     header.pack_start(&controls_button);
 
@@ -354,7 +354,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     search_box.append(&search_entry);
     search_box.append(&sort);
     search_box.append(&filter);
-    // The search bar is replaced by a title in the restricted profile.
+    // The search bar is replaced by a title in the restricted mode.
     let title_stack = gtk::Stack::new();
     title_stack.add_named(
         &adw::Clamp::builder()
@@ -365,7 +365,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     );
     title_stack.add_named(
         &gtk::Label::builder()
-            .label("Restricted profile")
+            .label("Restricted mode")
             .css_classes(["heading"])
             .build(),
         Some("restricted"),
@@ -1010,9 +1010,21 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .bidirectional()
         .sync_create()
         .build();
+    // Without the toggle there is no way to open it, not even by swiping.
+    subs_toggle
+        .bind_property("visible", &subs_split, "enable-show-gesture")
+        .sync_create()
+        .build();
     subs_split.connect_show_sidebar_notify({
         let header = header.clone();
-        move |split| header.set_show_start_title_buttons(!split.shows_sidebar())
+        let subs_toggle = subs_toggle.clone();
+        move |split| {
+            // Resizing can open it on its own, which the restricted mode doesn't allow.
+            if split.shows_sidebar() && !subs_toggle.is_visible() {
+                split.set_show_sidebar(false);
+            }
+            header.set_show_start_title_buttons(!split.shows_sidebar())
+        }
     });
 
     // On a small screen the sidebars float over the page, and the search pickers make way.

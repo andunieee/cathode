@@ -1,4 +1,4 @@
-//! The parental controls: the home page, which shows what the restricted profile allows or
+//! The parental controls: the home page, which shows what the restricted mode allows or
 //! lets one turn it on, and the page where the profile is set up.
 
 use adw::prelude::*;
@@ -86,7 +86,7 @@ impl Widgets {
 
         // Home, profile on
         let home_empty = gtk::Label::builder()
-            .label("Nothing is allowed in this profile yet")
+            .label("Nothing is allowed in restricted mode yet")
             .css_classes(["dim-label"])
             .margin_top(24)
             .build();
@@ -115,12 +115,12 @@ impl Widgets {
 
         // Setting the profile up
         let heading = gtk::Label::builder()
-            .label("Restricted profile")
+            .label("Restricted mode")
             .xalign(0.0)
             .css_classes(["title-2"])
             .build();
         let explanation = gtk::Label::builder()
-            .label("While the profile is on, there is no search and only what is listed here can be watched: the videos, the collections, and the videos of the channels and of the playlists.")
+            .label("While restricted mode is on, there is no search and only what is listed here can be watched: the videos, the collections, and the videos of the channels and of the playlists.")
             .xalign(0.0)
             .wrap(true)
             .css_classes(["dim-label"])
@@ -166,7 +166,7 @@ impl Widgets {
         password_row.add_suffix(&password_remove);
         let password = adw::PreferencesGroup::builder()
             .title("Password")
-            .description("Asked for to turn the restricted profile on or off")
+            .description("Asked for to turn the restricted mode on or off")
             .build();
         password.add(&password_row);
 
@@ -212,6 +212,7 @@ fn row(title: &str, subtitle: &str, icon: &str) -> adw::ActionRow {
         .subtitle(subtitle)
         .use_markup(false)
         .activatable(true)
+        .cursor(&crate::ui::pointer())
         .build();
     row.add_prefix(&gtk::Image::from_icon_name(icon));
     row
@@ -220,7 +221,7 @@ fn row(title: &str, subtitle: &str, icon: &str) -> adw::ActionRow {
 fn remove_button(on_remove: impl Fn() + 'static) -> gtk::Button {
     let button = gtk::Button::builder().cursor(&crate::ui::pointer())
         .icon_name("user-trash-symbolic")
-        .tooltip_text("Remove from the profile")
+        .tooltip_text("Remove from restricted mode")
         .valign(gtk::Align::Center)
         .css_classes(["flat", "circular"])
         .build();
@@ -292,6 +293,7 @@ fn video_row(entry: &Entry, removable: bool) -> adw::ActionRow {
         .subtitle(subtitle.join("  ·  "))
         .use_markup(false)
         .activatable(true)
+        .cursor(&crate::ui::pointer())
         .build();
 
     let picture = gtk::Picture::builder()
@@ -323,7 +325,7 @@ fn video_row(entry: &Entry, removable: bool) -> adw::ActionRow {
 /// Takes something out of the profile.
 fn remove(change: impl FnOnce(&mut profile::Profile)) {
     if let Err(error) = profile::update(change) {
-        nav::toast(&format!("Could not save the profile: {error}"));
+        nav::toast(&format!("Could not save restricted mode: {error}"));
     }
     show_settings();
 }
@@ -451,8 +453,8 @@ pub fn resolved(result: Result<Item, String>) {
                     ui.controls.settings_entry.set_text("");
                     set_status(&format!("Added “{name}”"));
                 }
-                Ok(false) => set_status(&format!("“{name}” is already in the profile")),
-                Err(error) => set_status(&format!("Could not save the profile: {error}")),
+                Ok(false) => set_status(&format!("“{name}” is already allowed in restricted mode")),
+                Err(error) => set_status(&format!("Could not save restricted mode: {error}")),
             }
 
             if ui.stack.visible_child_name().as_deref() == Some("settings") {
@@ -514,7 +516,7 @@ fn prompt(
 fn set_password() {
     prompt(
         "Set a password",
-        "It will be asked for to turn the restricted profile on or off.",
+        "It will be asked for to turn the restricted mode on or off.",
         "Set",
         &["New password", "Repeat the password"],
         |passwords| {
@@ -525,7 +527,7 @@ fn set_password() {
             } else {
                 match profile::set_password(Some(&passwords[0])) {
                     Ok(()) => nav::toast("Password set"),
-                    Err(error) => nav::toast(&format!("Could not save the profile: {error}")),
+                    Err(error) => nav::toast(&format!("Could not save restricted mode: {error}")),
                 }
                 show_settings();
             }
@@ -545,7 +547,7 @@ fn remove_password() {
             } else {
                 match profile::set_password(None) {
                     Ok(()) => nav::toast("Password removed"),
-                    Err(error) => nav::toast(&format!("Could not save the profile: {error}")),
+                    Err(error) => nav::toast(&format!("Could not save restricted mode: {error}")),
                 }
                 show_settings();
             }
@@ -553,7 +555,7 @@ fn remove_password() {
     );
 }
 
-/// Turns the restricted profile on or off, after asking for the password if there is one.
+/// Turns the restricted mode on or off, after asking for the password if there is one.
 pub fn toggle_profile() {
     let turn_on = !profile::restricted();
     if !profile::has_password() {
@@ -562,9 +564,9 @@ pub fn toggle_profile() {
     }
 
     let (heading, confirm) = if turn_on {
-        ("Turn on the restricted profile", "Turn on")
+        ("Turn on the restricted mode", "Turn on")
     } else {
-        ("Turn off the restricted profile", "Turn off")
+        ("Turn off the restricted mode", "Turn off")
     };
     prompt(
         heading,

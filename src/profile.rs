@@ -1,4 +1,4 @@
-//! The restricted profile: the only videos, channels, playlists and collections that can be
+//! The restricted mode: the only videos, channels, playlists and collections that can be
 //! reached while it is on, and the optional password protecting it. It lives in `profiles/default.json` in the
 //! config directory of the app.
 

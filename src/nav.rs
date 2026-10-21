@@ -410,6 +410,7 @@ fn show_video(entry: &Entry) {
             .subtitle(format::duration(chapter.start))
             .use_markup(false)
             .activatable(true)
+            .cursor(&crate::ui::pointer())
             .build();
         row.add_prefix(&gtk::Image::from_icon_name("media-playback-start-symbolic"));
         ui.video_chapters.append(&row);
@@ -513,14 +514,14 @@ fn local_path(id: &str) -> Option<PathBuf> {
         .or_else(|| collections::find(id))
 }
 
-// The restricted profile
+// The restricted mode
 
-/// Whether the video can be watched, given the restricted profile if it is on.
+/// Whether the video can be watched, given the restricted mode if it is on.
 fn video_allowed(entry: &Entry) -> bool {
     !profile::restricted() || profile::allows_video(entry)
 }
 
-/// The restricted profile only gets to see what it was given.
+/// The restricted mode only gets to see what it was given.
 fn page_allowed(page: &Page) -> bool {
     if !profile::restricted() {
         return true;
@@ -562,20 +563,20 @@ fn apply_mode() {
     ui.downloads.set_visible(!restricted);
     ui.related.set_visible(!restricted);
     ui.history_button.set_visible(!restricted);
-    // The subscriptions would be a way around the restricted profile.
+    // The subscriptions would be a way around the restricted mode.
     ui.subs_toggle.set_visible(!restricted);
     if restricted {
         set_sidebar_toggle(&ui.subs_toggle, false);
     }
     ui.settings_button.set_visible(!restricted);
     ui.controls_button.set_tooltip_text(Some(if restricted {
-        "Turn off the restricted profile"
+        "Turn off the restricted mode"
     } else {
-        "Turn on the restricted profile"
+        "Turn on the restricted mode"
     }));
 }
 
-/// Turns the restricted profile on or off, starting over from the home page.
+/// Turns the restricted mode on or off, starting over from the home page.
 pub fn set_restricted(restricted: bool) {
     if let Err(error) = profile::update(|profile| profile.restricted = restricted) {
         toast(&format!("Could not save the profile: {error}"));
@@ -597,9 +598,9 @@ fn update_allow_buttons() {
     let ui = ui::get();
     let label = |allowed: bool| {
         if allowed {
-            "Remove from restricted profile"
+            "Remove from restricted mode"
         } else {
-            "Add to restricted profile"
+            "Add to restricted mode"
         }
     };
 
@@ -633,7 +634,7 @@ fn update_allow_buttons() {
     library::show_save_button(savable);
 }
 
-/// Adds the page on screen to the restricted profile, or takes it out of it.
+/// Adds the page on screen to the restricted mode, or takes it out of it.
 pub fn toggle_allowed() {
     let toggle = |allowed: bool, item: Item, remove: Box<dyn FnOnce(&mut profile::Profile)>| {
         if allowed {
@@ -677,8 +678,8 @@ pub fn toggle_allowed() {
     };
 
     match result {
-        Ok(true) => toast("Added to the restricted profile"),
-        Ok(false) => toast("Removed from the restricted profile"),
+        Ok(true) => toast("Added to the restricted mode"),
+        Ok(false) => toast("Removed from the restricted mode"),
         Err(error) => toast(&format!("Could not save the profile: {error}")),
     }
     update_allow_buttons();
@@ -784,7 +785,7 @@ fn show() {
 
 fn navigate(page: Page) {
     if !page_allowed(&page) {
-        toast("This is not available in the restricted profile");
+        toast("This is not available in the restricted mode");
         return;
     }
 
@@ -1204,7 +1205,7 @@ pub fn play_current() {
 /// Plays a video in the player of the queue sidebar, wherever the user is.
 pub fn play(entry: Entry) {
     if !video_allowed(&entry) {
-        toast("This is not available in the restricted profile");
+        toast("This is not available in the restricted mode");
         return;
     }
 
@@ -1429,7 +1430,7 @@ pub fn queue_current() {
 
 pub fn queue_add(entry: Entry) {
     if !video_allowed(&entry) {
-        toast("This video is not available in the restricted profile");
+        toast("This video is not available in the restricted mode");
         return;
     }
 
@@ -1706,6 +1707,7 @@ fn refresh_subscriptions() {
             .title_lines(1)
             .use_markup(false)
             .activatable(true)
+            .cursor(&crate::ui::pointer())
             .build();
         row.connect_activated({
             let subscription = subscription.clone();
@@ -1903,6 +1905,7 @@ fn history_more() {
             .title_lines(2)
             .use_markup(false)
             .activatable(true)
+            .cursor(&crate::ui::pointer())
             .build();
         row.add_prefix(&picture);
         row.connect_activated(move |_| open_video(entry.clone()));
@@ -1989,6 +1992,7 @@ fn show_cache() {
             .subtitle(subtitle.join("  ·  "))
             .use_markup(false)
             .activatable(true)
+            .cursor(&crate::ui::pointer())
             .build();
 
         let check = gtk::CheckButton::new();

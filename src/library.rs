@@ -233,6 +233,7 @@ pub fn refresh() {
             .title_lines(1)
             .use_markup(false)
             .activatable(true)
+            .cursor(&crate::ui::pointer())
             .build();
         row.add_prefix(&gtk::Image::from_icon_name("folder-symbolic"));
         row.connect_activated({
@@ -294,7 +295,7 @@ pub fn show_save_button(visible: bool) {
     ui::get().library.save.set_visible(visible);
 }
 
-/// The button of the collection page that adds it to the restricted profile.
+/// The button of the collection page that adds it to the restricted mode.
 pub fn set_allow_button(visible: bool, label: &str) {
     let allow = &ui::get().library.allow;
     allow.set_visible(visible);
@@ -369,6 +370,7 @@ fn video_row(collection: &Collection, video: &SavedVideo) -> adw::ActionRow {
         .subtitle_lines(1)
         .use_markup(false)
         .activatable(true)
+        .cursor(&crate::ui::pointer())
         .build();
 
     let picture = gtk::Picture::builder()
@@ -391,7 +393,7 @@ fn video_row(collection: &Collection, video: &SavedVideo) -> adw::ActionRow {
     queue.set_sensitive(present);
     row.add_suffix(&queue);
 
-    // The restricted profile only watches.
+    // The restricted mode only watches.
     if !profile::restricted() {
         let (tooltip, icon) = if collection.owns(video) {
             ("Delete the video", "user-trash-symbolic")
@@ -498,7 +500,7 @@ fn forget(name: &str) {
     }
     let result = profile::update(|profile| profile.collections.retain(|c| c != name));
     if let Err(error) = result {
-        nav::toast(&format!("Could not save the profile: {error}"));
+        nav::toast(&format!("Could not save restricted mode: {error}"));
     }
 
     changed();
