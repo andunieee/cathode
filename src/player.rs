@@ -246,6 +246,14 @@ impl Player {
         self.set_paused(false);
     }
 
+    /// Unloads the file, nothing is loaded afterwards.
+    pub fn stop(&self) {
+        *self.id.borrow_mut() = None;
+        self.ended.set(false);
+        let _ = self.mpv.command("stop", &[]);
+        self.area.queue_render();
+    }
+
     pub fn set_paused(&self, paused: bool) {
         let _ = self.mpv.set_property("pause", paused);
         self.area.queue_render();

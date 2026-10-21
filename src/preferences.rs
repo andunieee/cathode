@@ -195,7 +195,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
         .build();
     for (name, title, icon) in [
         ("general", "General", "preferences-system-symbolic"),
-        ("parental", "Parental Control", "system-users-symbolic"),
+        ("parental", "Restricted Mode", "system-users-symbolic"),
     ] {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         content.set_margin_top(8);

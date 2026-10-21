@@ -1280,6 +1280,25 @@ pub fn toggle_pause() {
     }
 }
 
+/// Closes the player entirely, unlike pausing.
+pub fn stop_player() {
+    let ui = ui::get();
+    if ui.window.is_fullscreen() {
+        toggle_fullscreen();
+    }
+    ui.player.stop();
+    with(|state| {
+        state.playing = None;
+        state.awaiting_play = None;
+        state.chapter_stop = None;
+    });
+    ui.player_status.set_visible(false);
+    ui.player_frame.set_visible(false);
+    ui.play_button
+        .set_icon_name("media-playback-pause-symbolic");
+    refresh_queue();
+}
+
 pub fn set_speed(speed: f64) {
     ui::get().player.set_speed(speed);
 }

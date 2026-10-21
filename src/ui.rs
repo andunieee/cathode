@@ -794,6 +794,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
                 .build(),
         )
         .build();
+    let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
+    stop_button.connect_clicked(|_| nav::stop_player());
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
@@ -874,6 +876,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     }
     let buttons_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     buttons_row.append(&play_button);
+    buttons_row.append(&stop_button);
     buttons_row.append(&speed);
     buttons_row.append(&skip_row);
     buttons_row.append(&volume);
@@ -943,12 +946,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let queue_bar = adw::ToolbarView::new();
     queue_bar.add_top_bar(&queue_header);
     let queue_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    queue_content.append(&player_frame);
     let queue_scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
         .child(&queue_list)
         .build();
     queue_content.append(&queue_scroll);
+    queue_content.append(&player_frame);
     queue_bar.set_content(Some(&queue_content));
 
     let split = adw::OverlaySplitView::builder()
