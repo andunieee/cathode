@@ -298,6 +298,9 @@ fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
         .build()
 }
 
+/// The queue sidebar's width when the window is small, and what it's reserved in the layout.
+const QUEUE_MIN_WIDTH: f64 = 360.0;
+
 pub fn build(app: &adw::Application) -> Rc<Ui> {
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -958,7 +961,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .sidebar_position(gtk::PackType::End)
         .collapsed(false)
         .show_sidebar(false)
-        .min_sidebar_width(360.0)
+        .min_sidebar_width(QUEUE_MIN_WIDTH)
+        .max_sidebar_width(480.0)
+        .sidebar_width_fraction(0.25)
         .sidebar(&queue_bar)
         .content(&toolbar)
         .build();
@@ -1030,7 +1035,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         }
     });
 
-    // On a small screen the sidebars float over the page, and the search pickers make way.
+    // On a small screen the search pickers make way.
     let small = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
         adw::BreakpointConditionLengthType::MaxWidth,
         800.0,
@@ -1038,9 +1043,52 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     ));
     small.add_setter(&sort, "visible", Some(&false.to_value()));
     small.add_setter(&filter, "visible", Some(&false.to_value()));
-    small.add_setter(&split, "collapsed", Some(&true.to_value()));
-    small.add_setter(&subs_split, "collapsed", Some(&true.to_value()));
     window.add_breakpoint(small);
+
+    // The queue sidebar floats over the page when, at its minimal width, it would squeeze the
+    // main content below its own minimum. The subscriptions sidebar pushes the content instead,
+    // and so counts against it when open.
+    let update_overlay = {
+        let window = window.clone();
+        let split = split.clone();
+        let subs_split = subs_split.clone();
+        let toolbar = toolbar.clone();
+        move || {
+            let width = f64::from(window.width());
+            let content_min = f64::from(toolbar.measure(gtk::Orientation::Horizontal, -1).0);
+            let subs = if subs_split.shows_sidebar() {
+                (width * subs_split.sidebar_width_fraction())
+                    .clamp(subs_split.min_sidebar_width(), subs_split.max_sidebar_width())
+            } else {
+                0.0
+            };
+            // At the threshold itself the window can't shrink further, so it counts as overflow.
+            let overflow = width > 0.0 && width <= content_min + subs + QUEUE_MIN_WIDTH;
+            if split.is_collapsed() != overflow {
+                // Collapsing or expanding resets whether the sidebar is shown.
+                let shown = split.shows_sidebar();
+                split.set_collapsed(overflow);
+                split.set_show_sidebar(shown);
+            }
+        }
+    };
+    // The content's minimum is asked for only when it can have changed: on startup, on every
+    // screen change, when the subscriptions sidebar opens or closes, and when the window resizes.
+    update_overlay();
+    stack.connect_visible_child_name_notify({
+        let update = update_overlay.clone();
+        move |_| update()
+    });
+    subs_split.connect_show_sidebar_notify({
+        let update = update_overlay.clone();
+        move |_| update()
+    });
+    window.connect_realize(move |window| {
+        if let Some(surface) = window.surface() {
+            let update = update_overlay.clone();
+            surface.connect_layout(move |_, _, _| update());
+        }
+    });
 
     window.connect_fullscreened_notify(|_| nav::fullscreen_changed());
 
