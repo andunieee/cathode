@@ -560,6 +560,7 @@ fn apply_mode() {
     ui.title_stack
         .set_visible_child_name(if restricted { "restricted" } else { "search" });
     ui.downloads.set_visible(!restricted);
+    ui.related.set_visible(!restricted);
     ui.history_button.set_visible(!restricted);
     // The subscriptions would be a way around the restricted profile.
     ui.subs_toggle.set_visible(!restricted);

@@ -68,6 +68,7 @@ pub struct Ui {
     pub chapters_button: gtk::MenuButton,
     pub chapters_list: gtk::ListBox,
     pub allow_video: gtk::Button,
+    pub related: gtk::Button,
 
     pub cache_list: gtk::ListBox,
     pub cache_select_all: gtk::CheckButton,
@@ -1105,6 +1106,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         chapters_button,
         chapters_list,
         allow_video,
+        related,
         cache_list,
         cache_select_all,
         cache_summary,
