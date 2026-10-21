@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn old_videos_expire() {
-        let root = std::env::temp_dir().join(format!("lumpla-cache-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("cathode-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::env::set_var("XDG_CACHE_HOME", &root);
         let dir = cache_dir();

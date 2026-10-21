@@ -1,4 +1,4 @@
-//! The external programs Lumpla runs, kept in `<cache>/tools`.
+//! The external programs Cathode runs, kept in `<cache>/tools`.
 //!
 //! * `yt-dlp` is always managed by us and checked daily: it breaks every time YouTube changes
 //!   something, so an old copy (including a distro's) is the most likely thing to fail.
@@ -289,7 +289,7 @@ pub async fn update(report: impl Fn(Status)) {
     }
 
     let client = match reqwest::Client::builder()
-        .user_agent(concat!("lumpla/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("cathode/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(15))
         .build()
     {
@@ -436,7 +436,7 @@ async fn resolve(client: &reqwest::Client, package: &Package) -> Result<Resolved
             // The redirect is read rather than followed: the address it leads to contains the
             // version, and the checksum lives next to it.
             let plain = reqwest::Client::builder()
-                .user_agent(concat!("lumpla/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("cathode/", env!("CARGO_PKG_VERSION")))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .map_err(|e| e.to_string())?;
@@ -717,7 +717,7 @@ mod tests {
     #[ignore]
     async fn resolves_other_platforms() {
         let client = reqwest::Client::builder()
-            .user_agent("lumpla-test")
+            .user_agent("cathode-test")
             .build()
             .unwrap();
         let github = |repo, asset| Package {

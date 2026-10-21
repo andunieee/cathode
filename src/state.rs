@@ -54,7 +54,7 @@ thread_local! {
 fn path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("lumpla")
+        .join("cathode")
         .join("state.json")
 }
 

@@ -1,7 +1,9 @@
-# Lumpla
-![Lumpla playing a video in fullscreen](assets/fullscreen.jpg)
+<p align="center"><img src="assets/io.github.andunieee.Cathode.svg" alt="Cathode icon" width="128"></p>
 
-Lumpla is a YouTube client for the desktop. Search for a video, hit play, and watch it in the built-in player. It may work.
+# Cathode
+![Cathode playing a video in fullscreen](assets/fullscreen.jpg)
+
+Cathode is a YouTube client for the desktop. Search for a video, hit play, and watch it in the built-in player. It may work.
 
 # Features
 
@@ -61,14 +63,14 @@ Lumpla is a YouTube client for the desktop. Search for a video, hit play, and wa
 
 # Installation
 ## Releases
-Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` for Windows and a `.zip` with `lumpla.app` for Apple Silicon macOS.
+Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
 
 ## Building from source
 ### Dependencies
 * rustc
 * GTK 4.10+ and libadwaita 1.7+ (and their development headers)
 * libmpv (and its development headers)
-* Nothing else: on startup Lumpla downloads yt-dlp (kept up to date daily), and ffmpeg/ffprobe and deno if they aren't in your `PATH`, into the `tools` folder of the cache (`~/.cache/lumpla/tools` on Linux), verifying their checksums
+* Nothing else: on startup Cathode downloads yt-dlp (kept up to date daily), and ffmpeg/ffprobe and deno if they aren't in your `PATH`, into the `tools` folder of the cache (`~/.cache/cathode/tools` on Linux), verifying their checksums
 
 ### Running
 Open the search page:

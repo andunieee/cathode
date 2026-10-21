@@ -212,7 +212,7 @@ impl Card {
             .build();
 
         let channel = gtk::LinkButton::builder().cursor(&crate::ui::pointer())
-            .uri("lumpla:channel")
+            .uri("cathode:channel")
             .halign(gtk::Align::Start)
             .build();
         channel.set_has_tooltip(false);
@@ -361,7 +361,7 @@ const QUEUE_MIN_WIDTH: f64 = 360.0;
 pub fn build(app: &adw::Application) -> Rc<Ui> {
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Lumpla")
+        .title("Cathode")
         .default_width(1100)
         .default_height(720)
         .build();
@@ -559,7 +559,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .css_classes(["title-2"])
         .build();
     let video_channel = gtk::LinkButton::builder().cursor(&crate::ui::pointer())
-        .uri("lumpla:channel")
+        .uri("cathode:channel")
         .halign(gtk::Align::Start)
         .build();
     video_channel.connect_activate_link(|_| {

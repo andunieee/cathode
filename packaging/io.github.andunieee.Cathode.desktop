@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Lumpla
+Name=Cathode
 GenericName=YouTube Client
 Comment=Search, download and watch YouTube videos
-Exec=lumpla %f
-Icon=io.github.andunieee.Lumpla
+Exec=cathode %f
+Icon=io.github.andunieee.Cathode
 Terminal=false
 Categories=AudioVideo;Video;Player;GTK;
 Keywords=youtube;video;yt-dlp;mpv;

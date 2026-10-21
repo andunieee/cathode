@@ -23,7 +23,7 @@ use gtk::glib;
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder()
-        .application_id("io.github.andunieee.Lumpla")
+        .application_id("io.github.andunieee.Cathode")
         .build();
 
     app.connect_startup(|_| load_css());

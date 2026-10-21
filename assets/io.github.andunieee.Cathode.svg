@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <clipPath id="tile"><rect x="8" y="8" width="112" height="112" rx="26"/></clipPath>
+    <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.75">
+      <stop offset="0.55" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.65"/>
+    </radialGradient>
+    <radialGradient id="sheen" cx="0.35" cy="0.2" r="0.6">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="scan" width="3" height="3" patternUnits="userSpaceOnUse">
+      <rect width="3" height="1.4" fill="#000" fill-opacity="0.22"/>
+    </pattern>
+    <filter id="fuzz" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.1"/>
+    </filter>
+    <filter id="bloom" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#0b0d12"/>
+  <g clip-path="url(#tile)">
+    <!-- colour bars -->
+    <g>
+      <rect x="8"     y="8" width="16.1" height="62" fill="#e8e6dc"/>
+      <rect x="24.1"  y="8" width="16.1" height="62" fill="#e6d83a"/>
+      <rect x="40.2"  y="8" width="16.1" height="62" fill="#2fd6d0"/>
+      <rect x="56.3"  y="8" width="16.1" height="62" fill="#3bd35a"/>
+      <rect x="72.4"  y="8" width="16.1" height="62" fill="#d83ad0"/>
+      <rect x="88.5"  y="8" width="16.1" height="62" fill="#e03a3a"/>
+      <rect x="104.6" y="8" width="16.1" height="62" fill="#3a4ae0"/>
+    </g>
+    <!-- lower strip: reversed bars, then grey ramp -->
+    <g opacity="0.95">
+      <rect x="8"     y="70" width="16.1" height="9" fill="#3a4ae0"/>
+      <rect x="40.2"  y="70" width="16.1" height="9" fill="#d83ad0"/>
+      <rect x="72.4"  y="70" width="16.1" height="9" fill="#2fd6d0"/>
+      <rect x="104.6" y="70" width="16.1" height="9" fill="#e8e6dc"/>
+      <rect x="24.1"  y="70" width="16.1" height="9" fill="#14161c"/>
+      <rect x="56.3"  y="70" width="16.1" height="9" fill="#14161c"/>
+      <rect x="88.5"  y="70" width="16.1" height="9" fill="#14161c"/>
+    </g>
+    <rect x="8" y="79" width="112" height="41" fill="#0b0d12"/>
+    <g>
+      <rect x="8"     y="96" width="22.4" height="24" fill="#2a2d34"/>
+      <rect x="30.4"  y="96" width="22.4" height="24" fill="#555964"/>
+      <rect x="52.8"  y="96" width="22.4" height="24" fill="#858a95"/>
+      <rect x="75.2"  y="96" width="22.4" height="24" fill="#b7bbc4"/>
+      <rect x="97.6"  y="96" width="22.4" height="24" fill="#eceef2"/>
+    </g>
+
+    <!-- centre disc and rings -->
+    <circle cx="64" cy="64" r="39" fill="#0b0d12" fill-opacity="0.92"/>
+    <circle cx="64" cy="64" r="39" fill="none" stroke="#f1ead6" stroke-width="3.5"/>
+    <circle cx="64" cy="64" r="31" fill="none" stroke="#f1ead6" stroke-opacity="0.5" stroke-width="1.5"/>
+    <path d="M64 25V103M25 64H103" stroke="#f1ead6" stroke-opacity="0.28" stroke-width="1.2"/>
+
+    <!-- play glyph, split into RGB phosphor ghosts and blurred -->
+    <g filter="url(#bloom)" opacity="0.8">
+      <path d="M55 48V80L83 64Z" fill="#ff5a5a" transform="translate(-3 0)"/>
+      <path d="M55 48V80L83 64Z" fill="#5a8bff" transform="translate(3 0)"/>
+    </g>
+    <g filter="url(#fuzz)">
+      <path d="M55 48V80L83 64Z" fill="#ff2a2a" stroke="#ff2a2a" stroke-width="5" stroke-linejoin="round" transform="translate(-2.4 0)" opacity="0.9"/>
+      <path d="M55 48V80L83 64Z" fill="#2a6bff" stroke="#2a6bff" stroke-width="5" stroke-linejoin="round" transform="translate(2.4 0)" opacity="0.9"/>
+      <path d="M55 48V80L83 64Z" fill="#2aff6a" stroke="#2aff6a" stroke-width="5" stroke-linejoin="round" transform="translate(0 0.8)" opacity="0.8"/>
+    </g>
+    <path d="M55 48V80L83 64Z" fill="#fffaf0" stroke="#fffaf0" stroke-width="4" stroke-linejoin="round" filter="url(#fuzz)"/>
+
+    <!-- CRT finish -->
+    <rect x="8" y="8" width="112" height="112" fill="url(#scan)"/>
+    <rect x="8" y="8" width="112" height="112" fill="url(#vignette)"/>
+    <rect x="8" y="8" width="112" height="112" fill="url(#sheen)"/>
+  </g>
+  <rect x="8.75" y="8.75" width="110.5" height="110.5" rx="25.5" fill="none" stroke="#fff" stroke-opacity="0.2" stroke-width="1.5"/>
+</svg>

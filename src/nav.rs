@@ -2585,7 +2585,7 @@ pub fn handle(response: Response) {
                     Some(error) => {
                         let message = glib::markup_escape_text(&format!("Failed to load: {error}"));
                         let link = if error.starts_with(crate::fetch::COOKIES_ERROR) {
-                            " <a href=\"lumpla:settings\">Open the settings</a>"
+                            " <a href=\"cathode:settings\">Open the settings</a>"
                         } else {
                             ""
                         };

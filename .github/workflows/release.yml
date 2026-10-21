@@ -3,8 +3,8 @@ name: Release
 # Build portable release bundles when a "v" tag is pushed:
 #   linux   : x86_64 .tar.gz (plain binary), portable .AppImage, .deb (Debian 13+),
 #             .rpm (Fedora, needs RPM Fusion's mpv-libs) and a .flatpak bundle
-#   windows : x86_64 .zip   (UCRT64 GTK4 + libmpv runtime, launch via lumpla.bat)
-#   macos   : arm64  .zip   (lumpla.app with bundled Homebrew libraries)
+#   windows : x86_64 .zip   (UCRT64 GTK4 + libmpv runtime, launch via cathode.bat)
+#   macos   : arm64  .zip   (cathode.app with bundled Homebrew libraries)
 #
 # GTK4 cannot be linked statically upstream, so every bundle simply ships
 # all runtime libraries next to the binary. yt-dlp is not bundled: the app
@@ -66,17 +66,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          tar -czf "dist/lumpla-linux-x86_64-${TAG}.tar.gz" -C target/release lumpla
+          tar -czf "dist/cathode-linux-x86_64-${TAG}.tar.gz" -C target/release cathode
 
-          cargo deb --no-build --output "dist/lumpla-linux-amd64-${TAG}.deb"
+          cargo deb --no-build --output "dist/cathode-linux-amd64-${TAG}.deb"
 
           mkdir -p AppDir/usr/bin \
             AppDir/usr/share/applications \
             AppDir/usr/share/icons/hicolor/256x256/apps
-          install -m0755 target/release/lumpla AppDir/usr/bin/lumpla
-          install -m0644 packaging/io.github.andunieee.Lumpla.desktop AppDir/usr/share/applications/
-          rsvg-convert -w 256 -h 256 assets/io.github.andunieee.Lumpla.svg \
-            -o AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Lumpla.png
+          install -m0755 target/release/cathode AppDir/usr/bin/cathode
+          install -m0644 packaging/io.github.andunieee.Cathode.desktop AppDir/usr/share/applications/
+          rsvg-convert -w 256 -h 256 assets/io.github.andunieee.Cathode.svg \
+            -o AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Cathode.png
 
           wget -qc https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -qc https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
@@ -87,15 +87,15 @@ jobs:
           # the gtk plugin adds themes, glib schemas, pixbuf loaders, IMs etc.
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
-            -e AppDir/usr/bin/lumpla \
-            -d AppDir/usr/share/applications/io.github.andunieee.Lumpla.desktop \
-            -i AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Lumpla.png \
+            -e AppDir/usr/bin/cathode \
+            -d AppDir/usr/share/applications/io.github.andunieee.Cathode.desktop \
+            -i AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Cathode.png \
             --plugin gtk \
             --output appimage \
             --exclude-library 'libEGL.so*' \
             --exclude-library 'libGL.so*'
 
-          mv Lumpla-*.AppImage "dist/lumpla-linux-x86_64-${TAG}.AppImage"
+          mv Cathode-*.AppImage "dist/cathode-linux-x86_64-${TAG}.AppImage"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -130,9 +130,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          strip target/release/lumpla
+          strip target/release/cathode
           mkdir -p dist
-          cargo generate-rpm --output "dist/lumpla-linux-x86_64-${TAG}.rpm"
+          cargo generate-rpm --output "dist/cathode-linux-x86_64-${TAG}.rpm"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -169,15 +169,15 @@ jobs:
           path: packaging/flatpak
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: lumpla-linux-x86_64-${{ github.ref_name }}.flatpak
-          manifest-path: packaging/flatpak/io.github.andunieee.Lumpla.yml
+          bundle: cathode-linux-x86_64-${{ github.ref_name }}.flatpak
+          manifest-path: packaging/flatpak/io.github.andunieee.Cathode.yml
           cache-key: flatpak-builder-${{ github.sha }}
           arch: x86_64
           upload-artifact: false
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak
-          path: lumpla-linux-x86_64-${{ github.ref_name }}.flatpak
+          path: cathode-linux-x86_64-${{ github.ref_name }}.flatpak
 
   macos:
     name: macos (arm64)
@@ -205,23 +205,23 @@ jobs:
           set -euo pipefail
           VERSION="${TAG#v}"
 
-          APP="lumpla.app"
+          APP="cathode.app"
           MACOS_DIR="$APP/Contents/MacOS"
           RES_DIR="$APP/Contents/Resources"
           LIBDIR="$MACOS_DIR/lib"
           mkdir -p "$LIBDIR" "$RES_DIR/share" "$RES_DIR/lib/gdk-pixbuf-2.0/2.10.0/loaders"
 
-          cp target/release/lumpla "$MACOS_DIR/lumpla-bin"
+          cp target/release/cathode "$MACOS_DIR/cathode-bin"
 
           cat > "$APP/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleIdentifier</key><string>io.github.andunieee.Lumpla</string>
-            <key>CFBundleName</key><string>Lumpla</string>
-            <key>CFBundleExecutable</key><string>lumpla</string>
-            <key>CFBundleIconFile</key><string>Lumpla</string>
+            <key>CFBundleIdentifier</key><string>io.github.andunieee.Cathode</string>
+            <key>CFBundleName</key><string>Cathode</string>
+            <key>CFBundleExecutable</key><string>cathode</string>
+            <key>CFBundleIconFile</key><string>Cathode</string>
             <key>LSMinimumSystemVersion</key><string>15.0</string>
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>
             <key>CFBundleVersion</key><string>${VERSION}</string>
@@ -251,7 +251,7 @@ jobs:
               collect "$dep"
             done < <(otool -L "$abs" | awk 'NR>1{print $1}' | sed "s|^@rpath|$BREW/lib|")
           }
-          otool -L "$MACOS_DIR/lumpla-bin" | awk 'NR>1{print $1}' | sed "s|^@rpath|$BREW/lib|" | while read -r dep; do
+          otool -L "$MACOS_DIR/cathode-bin" | awk 'NR>1{print $1}' | sed "s|^@rpath|$BREW/lib|" | while read -r dep; do
             collect "$dep"
           done
 
@@ -275,7 +275,7 @@ jobs:
               install_name_tool -change "$dep" "@executable_path/lib/$(basename "$dep")" "$1"
             done < <(otool -L "$1" | awk 'NR>1{print $1}')
           }
-          rewrite "$MACOS_DIR/lumpla-bin"
+          rewrite "$MACOS_DIR/cathode-bin"
           for lib in "$LIBDIR"/* "$PIXBUF"/*.so; do
             install_name_tool -id "@executable_path/lib/$(basename "$lib")" "$lib" 2>/dev/null || true
             rewrite "$lib"
@@ -294,35 +294,35 @@ jobs:
             | sed "s|$PIXBUF|@RES@/lib/gdk-pixbuf-2.0/2.10.0/loaders|" > "$RES_DIR/loaders.cache.in"
 
           # 4. App icon.
-          ICONSET="$(mktemp -d)/Lumpla.iconset"
+          ICONSET="$(mktemp -d)/Cathode.iconset"
           mkdir -p "$ICONSET"
           for size in 16 32 128 256 512; do
-            rsvg-convert -w "$size" -h "$size" assets/io.github.andunieee.Lumpla.svg -o "$ICONSET/icon_${size}x${size}.png"
-            rsvg-convert -w "$((size * 2))" -h "$((size * 2))" assets/io.github.andunieee.Lumpla.svg -o "$ICONSET/icon_${size}x${size}@2x.png"
+            rsvg-convert -w "$size" -h "$size" assets/io.github.andunieee.Cathode.svg -o "$ICONSET/icon_${size}x${size}.png"
+            rsvg-convert -w "$((size * 2))" -h "$((size * 2))" assets/io.github.andunieee.Cathode.svg -o "$ICONSET/icon_${size}x${size}@2x.png"
           done
-          iconutil -c icns "$ICONSET" -o "$RES_DIR/Lumpla.icns"
+          iconutil -c icns "$ICONSET" -o "$RES_DIR/Cathode.icns"
 
-          cat > "$MACOS_DIR/lumpla" <<'EOF'
+          cat > "$MACOS_DIR/cathode" <<'EOF'
           #!/bin/bash
           HERE="$(cd "$(dirname "$0")" && pwd)"
           RES="$(cd "$HERE/../Resources" && pwd)"
-          CACHE="${TMPDIR:-/tmp}/lumpla-pixbuf-$(id -u).cache"
+          CACHE="${TMPDIR:-/tmp}/cathode-pixbuf-$(id -u).cache"
           sed "s|@RES@|$RES|g" "$RES/loaders.cache.in" > "$CACHE"
           export GDK_PIXBUF_MODULE_FILE="$CACHE"
           export XDG_DATA_DIRS="$RES/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
           export GSETTINGS_SCHEMA_DIR="$RES/share/glib-2.0/schemas"
-          exec "$HERE/lumpla-bin" "$@"
+          exec "$HERE/cathode-bin" "$@"
           EOF
-          chmod +x "$MACOS_DIR/lumpla"
+          chmod +x "$MACOS_DIR/cathode"
 
           # install_name_tool invalidated every ad-hoc signature; on Apple
           # Silicon unsigned/modded binaries get killed on load, so re-sign
           # everything ad-hoc (`-` = no Apple Developer identity needed).
           find "$APP" -name '*.dylib' | while read -r f; do codesign --force --sign - "$f"; done
-          codesign --force --sign - "$MACOS_DIR/lumpla-bin"
+          codesign --force --sign - "$MACOS_DIR/cathode-bin"
 
           mkdir -p dist
-          ditto -c -k --keepParent "$APP" "dist/lumpla-macos-arm64-${TAG}.zip"
+          ditto -c -k --keepParent "$APP" "dist/cathode-macos-arm64-${TAG}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -345,7 +345,6 @@ jobs:
           release: false
           install: >-
             mingw-w64-ucrt-x86_64-rust
-            mingw-w64-ucrt-x86_64-cargo
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-gtk4
             mingw-w64-ucrt-x86_64-libadwaita
@@ -372,11 +371,11 @@ jobs:
             bundle/share/icons \
             bundle/lib/gdk-pixbuf-2.0/2.10.0/loaders
 
-          cp target/release/lumpla.exe bundle/bin/
+          cp target/release/cathode.exe bundle/bin/
 
           # Copy every dependency DLL (recursively via ntldd), skipping the
           # Windows system ones that are already present on any machine.
-          ntldd -R bundle/bin/lumpla.exe | tr -s '[:space:]' '\n' | while read -r tok; do
+          ntldd -R bundle/bin/cathode.exe | tr -s '[:space:]' '\n' | while read -r tok; do
             case "$tok" in
               /ucrt64/*|?:/*)
                 # Direct POSIX path or "D:/msys64/ucrt64/…" (runner root varies).
@@ -394,10 +393,10 @@ jobs:
             > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache)
 
           # CRLF batch wrapper (Finder-style entry point, LF breaks cmd.exe).
-          printf '@echo off\r\nset GDK_PIXBUF_MODULE_FILE=%%~dp0lib\\gdk-pixbuf-2.0\\2.10.0\\loaders.cache\r\nstart "" "%%~dp0bin\\lumpla.exe" %%*\r\n' > bundle/lumpla.bat
+          printf '@echo off\r\nset GDK_PIXBUF_MODULE_FILE=%%~dp0lib\\gdk-pixbuf-2.0\\2.10.0\\loaders.cache\r\nstart "" "%%~dp0bin\\cathode.exe" %%*\r\n' > bundle/cathode.bat
 
           mkdir -p dist
-          powershell -NoProfile -Command "Compress-Archive -Force -Path bundle/* -DestinationPath 'dist/lumpla-windows-x64-v${VERSION}.zip'"
+          powershell -NoProfile -Command "Compress-Archive -Force -Path bundle/* -DestinationPath 'dist/cathode-windows-x64-v${VERSION}.zip'"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -416,15 +415,16 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           FLAT=$(mktemp -d); NOTES=$(mktemp); cp -v -r dist/*/* "$FLAT"/; rm -f "$NOTES"
           cat > "$NOTES" <<'EOF'
           Portable bundles — all runtime libraries included (GTK4 cannot be linked statically upstream).
 
-          - **linux**: `.flatpak` (`flatpak install lumpla-*.flatpak`), `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, needs [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise, and glibc 2.41+), or `.tar.gz` (requires system GTK4 4.10+/libadwaita 1.7+/libmpv).
-          - **macos**: Apple Silicon (arm64) only, unsigned — first launch: right-click > Open, or `xattr -d com.apple.quarantine lumpla.app`.
-          - **windows**: extract, run `lumpla.bat`.
+          - **linux**: `.flatpak` (`flatpak install cathode-*.flatpak`), `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, needs [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise, and glibc 2.41+), or `.tar.gz` (requires system GTK4 4.10+/libadwaita 1.7+/libmpv).
+          - **macos**: Apple Silicon (arm64) only, unsigned — first launch: right-click > Open, or `xattr -d com.apple.quarantine cathode.app`.
+          - **windows**: extract, run `cathode.bat`.
           yt-dlp is managed by the app at runtime, not bundled.
           EOF
           gh release create "$TAG" --verify-tag --generate-notes --notes-file "$NOTES"

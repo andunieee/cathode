@@ -1,10 +1,10 @@
-app-id: io.github.andunieee.Lumpla
+app-id: io.github.andunieee.Cathode
 runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: lumpla
+command: cathode
 finish-args:
   - --share=ipc
   - --share=network
@@ -59,7 +59,7 @@ modules:
         url: https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz
         sha256: 2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc
 
-  # Only libmpv: the player lives inside Lumpla's own window.
+  # Only libmpv: the player lives inside Cathode's own window.
   - name: libmpv
     buildsystem: meson
     config-opts:
@@ -80,18 +80,20 @@ modules:
         url: https://github.com/mpv-player/mpv/archive/v0.41.0.tar.gz
         sha256: ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209
 
-  - name: lumpla
+  - name: cathode
     buildsystem: simple
     build-options:
       append-path: /usr/lib/sdk/rust-stable/bin
       env:
-        CARGO_HOME: /run/build/lumpla/cargo
+        CARGO_HOME: /run/build/cathode/cargo
+        # libmpv is installed in /app/lib; cc does not search it by default
+        LIBRARY_PATH: /app/lib
     build-commands:
       - cargo --offline build --release --locked
-      - install -Dm755 target/release/lumpla -t /app/bin
-      - install -Dm644 packaging/io.github.andunieee.Lumpla.desktop -t /app/share/applications
-      - install -Dm644 packaging/io.github.andunieee.Lumpla.metainfo.xml -t /app/share/metainfo
-      - install -Dm644 assets/io.github.andunieee.Lumpla.svg -t /app/share/icons/hicolor/scalable/apps
+      - install -Dm755 target/release/cathode -t /app/bin
+      - install -Dm644 packaging/io.github.andunieee.Cathode.desktop -t /app/share/applications
+      - install -Dm644 packaging/io.github.andunieee.Cathode.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 assets/io.github.andunieee.Cathode.svg -t /app/share/icons/hicolor/scalable/apps
     sources:
       - type: dir
         path: ../..

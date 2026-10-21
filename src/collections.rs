@@ -62,7 +62,7 @@ fn with<R>(f: impl FnOnce(&mut Vec<Collection>) -> R) -> R {
 fn directory() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("lumpla")
+        .join("cathode")
         .join("collections")
 }
 
@@ -70,7 +70,7 @@ fn directory() -> PathBuf {
 pub fn default_directory(name: &str) -> PathBuf {
     let base = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("lumpla");
+        .join("cathode");
     if name == DEFAULT_NAME {
         base.join("saved")
     } else {
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn saving_and_importing() {
-        let root = std::env::temp_dir().join(format!("lumpla-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("cathode-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
         std::env::set_var("XDG_DATA_HOME", root.join("data"));
@@ -462,7 +462,7 @@ mod tests {
         // The first run makes the default place to save to.
         init();
         assert_eq!(savable(), [DEFAULT_NAME]);
-        assert!(root.join("config/lumpla/collections/Saved.json").exists());
+        assert!(root.join("config/cathode/collections/Saved.json").exists());
 
         let source = root.join("cache/abc.mp4");
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
@@ -472,7 +472,7 @@ mod tests {
         entry.title = "A/B title".to_string();
 
         let saved = save(DEFAULT_NAME, &entry, &source, false).unwrap();
-        assert_eq!(saved, root.join("data/lumpla/saved/A_B title [abc].mp4"));
+        assert_eq!(saved, root.join("data/cathode/saved/A_B title [abc].mp4"));
         assert!(saved.exists() && !source.exists());
         assert!(contains(DEFAULT_NAME, "yt:abc") && find("yt:abc") == Some(saved.clone()));
 
@@ -495,7 +495,7 @@ mod tests {
         remove_video("movies", &imported.videos[0].entry.id).unwrap();
         assert!(folder.join("one.mkv").exists());
         remove("movies").unwrap();
-        assert!(!root.join("config/lumpla/collections/movies.json").exists());
+        assert!(!root.join("config/cathode/collections/movies.json").exists());
         assert!(folder.join("sub/two.MP4").exists());
 
         // The ones that are ours are deleted for real.

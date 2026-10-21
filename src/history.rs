@@ -19,7 +19,7 @@ pub struct Watched {
 fn path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("lumpla")
+        .join("cathode")
         .join("history.jsonl")
 }
 
