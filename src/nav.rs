@@ -212,6 +212,22 @@ pub fn toast(message: &str) {
     ui::get().toasts.add_toast(adw::Toast::new(message));
 }
 
+/// Shows a message at the top of the video for a moment.
+pub fn player_message(message: &str) {
+    let ui = ui::get();
+    ui.player_message.set_text(message);
+    ui.player_message.set_visible(true);
+    if let Some(timer) = ui.player_message_timer.borrow_mut().take() {
+        timer.remove();
+    }
+    let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(1200), || {
+        let ui = ui::get();
+        ui.player_message_timer.borrow_mut().take();
+        ui.player_message.set_visible(false);
+    });
+    *ui.player_message_timer.borrow_mut() = Some(timer);
+}
+
 /// "3:21  ·  1.2M views"
 pub fn details(entry: &Entry) -> String {
     let mut details = Vec::new();
@@ -1194,8 +1210,13 @@ pub fn skip(seconds: f64) {
     let duration = ui.player.duration();
     if duration > 0.0 {
         with(|state| state.chapter_stop = None);
-        ui.player
-            .seek_to((ui.player.position() + seconds).clamp(0.0, duration));
+        let target = (ui.player.position() + seconds).clamp(0.0, duration);
+        ui.player.seek_to(target);
+        player_message(&format!(
+            "{} / {}",
+            format::duration(target),
+            format::duration(duration)
+        ));
     }
 }
 
@@ -1512,6 +1533,7 @@ pub fn toggle_mute() {
     ui.player.set_muted(muted);
     ui.volume
         .set_icon_name(volume_icon(ui.volume_scale.value(), muted));
+    player_message(if muted { "Muted" } else { "Unmuted" });
 }
 
 /// Moves the volume by `delta`, on the scale of 0 to 1.
@@ -1522,7 +1544,7 @@ pub fn change_volume(delta: f64) {
     }
     ui.volume_scale
         .set_value((ui.volume_scale.value() + delta).clamp(0.0, 1.0));
-    toast(&format!("Volume: {}%", (ui.volume_scale.value() * 100.0).round()));
+    player_message(&format!("Volume: {}%", (ui.volume_scale.value() * 100.0).round()));
 }
 
 /// Picks the next or the previous of the playback speeds on offer.
@@ -1531,15 +1553,24 @@ pub fn step_speed(direction: i32) {
     let last = ui.speed.model().map_or(0, |model| model.n_items()).saturating_sub(1);
     let selected = (ui.speed.selected() as i64 + direction as i64).clamp(0, last as i64);
     ui.speed.set_selected(selected as u32);
+    show_speed();
+}
+
+fn show_speed() {
+    if let Some(speed) = ui::speed_at(ui::get().speed.selected()) {
+        player_message(&format!("Speed: {speed}×"));
+    }
 }
 
 pub fn reset_speed() {
     ui::get().speed.set_selected(ui::NORMAL_SPEED);
+    show_speed();
 }
 
 pub fn step_frame(forward: bool) {
     let ui = ui::get();
     ui.player.step_frame(forward);
+    player_message(if forward { "Next frame" } else { "Previous frame" });
 }
 
 /// Jumps to the start of the next chapter, or of the current one if it was left a while ago.
@@ -1559,7 +1590,10 @@ pub fn step_chapter(direction: i32) {
         (Some(i), _) => i.checked_sub(1),
     };
     match target {
-        Some(i) if i < chapters.len() => ui.player.seek_to(chapters[i].start),
+        Some(i) if i < chapters.len() => {
+            ui.player.seek_to(chapters[i].start);
+            player_message(&chapters[i].title);
+        }
         _ if direction < 0 => ui.player.seek_to(0.0),
         _ => {}
     }
@@ -1585,7 +1619,11 @@ pub fn queue_step(direction: i32) {
     });
     match target {
         Some(entry) => play(entry),
-        None => toast(if direction > 0 { "No next video in the queue" } else { "No previous video in the queue" }),
+        None => player_message(if direction > 0 {
+            "No next video in the queue"
+        } else {
+            "No previous video in the queue"
+        }),
     }
 }
 

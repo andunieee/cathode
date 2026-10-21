@@ -56,7 +56,10 @@ fn load_css() {
          listview.rich-list > row, tab, dropdown { cursor: pointer; }
          button:disabled, checkbutton:disabled, row:disabled { cursor: default; }
          row.queue-playing { background-color: alpha(@accent_bg_color, 0.25); }
-         row.queue-playing .title { font-weight: bold; }",
+         row.queue-playing .title { font-weight: bold; }
+         label.player-message { color: white; font-weight: bold; font-size: 1.4em;
+           text-shadow: -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black, 1px 1px 0 black,
+             0 -1px 0 black, 0 1px 0 black, -1px 0 0 black, 1px 0 0 black; }",
     );
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(

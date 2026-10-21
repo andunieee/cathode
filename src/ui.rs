@@ -101,6 +101,9 @@ pub struct Ui {
     pub player_frame: gtk::AspectFrame,
     pub player: Rc<Player>,
     pub player_status: gtk::Label,
+    /// A quick message at the top of the video, like the volume after changing it.
+    pub player_message: gtk::Label,
+    pub player_message_timer: RefCell<Option<glib::SourceId>>,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
     /// Paints the sponsor segments over the seek bar.
@@ -127,6 +130,11 @@ pub struct Ui {
 
 thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
+}
+
+/// The playback speed at this index of the speed list.
+pub fn speed_at(index: u32) -> Option<f64> {
+    SPEEDS.get(index as usize).copied()
 }
 
 /// Handles the keys of the player, which follow the ones of mpv. Returns whether it was one.
@@ -769,6 +777,14 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Player, which lives in the queue sidebar
     let player = Player::new();
+    let player_message = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
+        .margin_top(12)
+        .can_target(false)
+        .visible(false)
+        .css_classes(["player-message"])
+        .build();
     let player_status = gtk::Label::builder()
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
@@ -988,6 +1004,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&player.area));
     overlay.add_overlay(&player_status);
+    overlay.add_overlay(&player_message);
     overlay.add_overlay(&player_controls);
     let player_frame = gtk::AspectFrame::new(0.5, 0.5, 16.0 / 9.0, false);
     player_frame.set_child(Some(&overlay));
@@ -1269,6 +1286,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         player_frame,
         player,
         player_status,
+        player_message,
+        player_message_timer: RefCell::new(None),
         play_button,
         seek,
         seek_marks,
