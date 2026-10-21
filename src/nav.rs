@@ -547,7 +547,9 @@ fn note_listed(key: &str, entries: &[Entry]) {
     let allowed = if let Some(id) = key.strip_prefix("l:") {
         profile::allows_playlist(id)
     } else if let Some(rest) = key.strip_prefix("c:") {
-        rest.split(':').next().is_some_and(profile::allows_channel)
+        // The id has a colon of its own, the query comes after the next one.
+        let end = rest.match_indices(':').nth(1).map_or(rest.len(), |(i, _)| i);
+        profile::allows_channel(&rest[..end])
     } else {
         false
     };
@@ -581,8 +583,8 @@ fn apply_mode() {
 
 /// Turns the restricted mode on or off, starting over from the home page.
 pub fn set_restricted(restricted: bool) {
-    if let Err(error) = profile::update(|profile| profile.restricted = restricted) {
-        toast(&format!("Could not save the profile: {error}"));
+    if let Err(error) = profile::set_restricted(restricted) {
+        toast(&format!("Could not save the restricted mode: {error}"));
     }
     profile::forget_listed();
 
@@ -1173,7 +1175,7 @@ fn finish_save(
         Ok(path) => {
             if !copy {
                 // The file is gone from the cache, this forgets what the index knew about it.
-                cache::delete(std::slice::from_ref(&entry.id));
+                cache::delete(&[cache::stem(&entry.id, None)]);
             }
             toast(&format!("Saved to “{collection}”"));
             Some(path)
@@ -2125,7 +2127,7 @@ fn selected_cache_rows() -> Vec<(Entry, String)> {
 fn selected_cache_entries() -> Vec<Entry> {
     selected_cache_rows()
         .into_iter()
-        .filter(|(entry, stem)| *stem == entry.id)
+        .filter(|(entry, stem)| *stem == cache::stem(&entry.id, None))
         .map(|(entry, _)| entry)
         .collect()
 }
@@ -2245,7 +2247,7 @@ fn delete_from_cache(entries: &[(Entry, String)]) {
     // Only the usual size of a video is what the queue plays.
     let ids: Vec<String> = entries
         .iter()
-        .filter(|(entry, stem)| *stem == entry.id)
+        .filter(|(entry, stem)| *stem == cache::stem(&entry.id, None))
         .map(|(entry, _)| entry.id.clone())
         .collect();
     cache::delete(&stems);

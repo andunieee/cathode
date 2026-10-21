@@ -1,8 +1,8 @@
 //! The restricted mode: the only videos, channels, playlists and collections that can be
-//! reached while it is on, and the optional password protecting it. It lives in `profiles/default.json` in the
+//! reached while it is on, and the optional password protecting it. It lives in `restricted/default.json` in the
 //! config directory of the app.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::PathBuf;
@@ -30,7 +30,6 @@ pub struct PlaylistRef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
-    pub restricted: bool,
     pub password_hash: Option<String>,
     pub channels: Vec<ChannelRef>,
     pub playlists: Vec<PlaylistRef>,
@@ -52,7 +51,7 @@ fn path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("lumpla")
-        .join("profiles")
+        .join("restricted")
         .join("default.json")
 }
 
@@ -67,10 +66,8 @@ impl Profile {
         serde_json::from_slice(&bytes).unwrap_or_else(|error| {
             // Better to lock everything than to let a broken file switch the lock off.
             eprintln!("Cannot read {}: {error}", path.display());
-            Self {
-                restricted: true,
-                ..Self::default()
-            }
+            BROKEN.with(|broken| broken.set(true));
+            Self::default()
         })
     }
 
@@ -87,6 +84,8 @@ impl Profile {
 }
 
 thread_local! {
+    /// The file could not be read, which keeps the restricted mode on.
+    static BROKEN: Cell<bool> = Cell::new(false);
     static PROFILE: RefCell<Profile> = RefCell::new(Profile::default());
     /// Videos seen in the listings of allowed channels and playlists.
     static LISTED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
@@ -109,8 +108,14 @@ pub fn update(f: impl FnOnce(&mut Profile)) -> Result<(), String> {
     })
 }
 
+/// Whether the restricted mode is on. Whether it is on lives in the state of the app, not in
+/// the profile.
 pub fn restricted() -> bool {
-    read(|profile| profile.restricted)
+    BROKEN.with(Cell::get) || crate::state::get().restricted
+}
+
+pub fn set_restricted(restricted: bool) -> Result<(), String> {
+    crate::state::update(|state| state.restricted = restricted)
 }
 
 pub fn allows_channel(id: &str) -> bool {
@@ -441,12 +446,12 @@ mod tests {
     #[test]
     fn missing_fields_take_their_defaults() {
         let profile: Profile = serde_json::from_str("{}").unwrap();
-        assert!(!profile.restricted && profile.channels.is_empty());
+        assert!(profile.channels.is_empty());
 
         let profile: Profile = serde_json::from_str(
-            r#"{"restricted": true, "channels": [{"id": "UC1", "name": "A"}]}"#,
+            r#"{"channels": [{"id": "yt:UC1", "name": "A"}]}"#,
         )
         .unwrap();
-        assert!(profile.restricted && profile.channels[0].id == "UC1");
+        assert!(profile.channels[0].id == "yt:UC1");
     }
 }

@@ -27,6 +27,22 @@ const LATEST_PARALLEL: usize = 3;
 /// Thumbnails shown in lists are scaled down to keep a thousand of them cheap to hold.
 const SMALL_THUMBNAIL: (u32, u32) = (168, 94);
 
+/// What the id of a YouTube video starts with, so it can't clash with the id of a file.
+pub const YOUTUBE_PREFIX: &str = "yt:";
+
+/// The id of a YouTube video, as an `Entry` has it.
+pub fn youtube_id(id: &str) -> String {
+    if id.is_empty() {
+        return String::new();
+    }
+    format!("{YOUTUBE_PREFIX}{}", bare_id(id))
+}
+
+/// The id YouTube knows the video by, without the prefix.
+pub fn bare_id(id: &str) -> &str {
+    id.strip_prefix(YOUTUBE_PREFIX).unwrap_or(id)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
@@ -426,15 +442,15 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             }
         }
         Source::Playlist { id } => (
-            format!("https://www.youtube.com/playlist?list={id}"),
+            format!("https://www.youtube.com/playlist?list={}", bare_id(&id)),
             CHANNEL_MAX_RESULTS,
         ),
         Source::Channel { id, query } if query.is_empty() => (
-            format!("https://www.youtube.com/channel/{id}/videos"),
+            format!("https://www.youtube.com/channel/{}/videos", bare_id(&id)),
             CHANNEL_MAX_RESULTS,
         ),
         Source::Channel { id, query } => match reqwest::Url::parse_with_params(
-            &format!("https://www.youtube.com/channel/{id}/search"),
+            &format!("https://www.youtube.com/channel/{}/search", bare_id(&id)),
             [("query", query.as_str())],
         ) {
             Ok(url) => (url.to_string(), CHANNEL_MAX_RESULTS),
@@ -459,7 +475,7 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
 
 /// The newest videos of a channel.
 async fn latest(channel_id: &str) -> Result<Vec<Entry>, String> {
-    let url = format!("https://www.youtube.com/channel/{channel_id}/videos");
+    let url = format!("https://www.youtube.com/channel/{}/videos", bare_id(channel_id));
     let entries = Mutex::new(Vec::new());
     stream_listing(
         "",
@@ -488,7 +504,7 @@ async fn related(id: &str) -> Result<Vec<Entry>, String> {
                 "gl": "US",
             },
         },
-        "videoId": id,
+        "videoId": bare_id(id),
     });
 
     let response = reqwest::Client::new()
@@ -584,14 +600,14 @@ fn parse_lockup(lockup: &Value) -> Option<Entry> {
 
     Some(Entry {
         url: format!("https://www.youtube.com/watch?v={id}"),
-        id,
+        id: youtube_id(&id),
         title: string(&metadata["title"], "content")?,
         channel: rows
             .first()
             .and_then(|row| row.first())
             .map(|name| name.to_string())
             .unwrap_or_default(),
-        channel_id: channel_id.to_string(),
+        channel_id: youtube_id(channel_id),
         duration: Some(duration),
         views: stats.and_then(|stats| parse_count(stats[0])),
         published: stats.and_then(|stats| parse_ago(stats[1])),
@@ -762,7 +778,10 @@ fn parse_channel(entry: &Value) -> Option<ChannelRef> {
     let name = string(entry, "channel")
         .or_else(|| string(entry, "title"))
         .or_else(|| string(entry, "uploader"))?;
-    Some(ChannelRef { id, name })
+    Some(ChannelRef {
+        id: youtube_id(&id),
+        name,
+    })
 }
 
 /// Parses one line of `yt-dlp --flat-playlist -j` output.
@@ -784,7 +803,7 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
 
     // Entries of a channel's own tabs don't repeat which channel they belong to.
     Some(Entry {
-        id: string(entry, "id")?,
+        id: youtube_id(&string(entry, "id")?),
         url,
         title: string(entry, "title")?,
         channel: string(entry, "channel")
@@ -792,9 +811,11 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
             .or_else(|| string(entry, "playlist_channel"))
             .or_else(|| string(entry, "playlist_uploader"))
             .unwrap_or_default(),
-        channel_id: string(entry, "channel_id")
-            .or_else(|| string(entry, "playlist_channel_id"))
-            .unwrap_or_default(),
+        channel_id: youtube_id(
+            &string(entry, "channel_id")
+                .or_else(|| string(entry, "playlist_channel_id"))
+                .unwrap_or_default(),
+        ),
         duration: Some(duration),
         views: entry["view_count"].as_u64(),
         published: entry["timestamp"].as_i64(),
@@ -856,13 +877,13 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
 
     Ok(VideoInfo {
         entry: Entry {
-            id: string(&video, "id").ok_or("yt-dlp did not report the video id")?,
+            id: youtube_id(&string(&video, "id").ok_or("yt-dlp did not report the video id")?),
             url: string(&video, "webpage_url").unwrap_or_else(|| url.to_string()),
             title: string(&video, "title").unwrap_or_default(),
             channel: string(&video, "channel")
                 .or_else(|| string(&video, "uploader"))
                 .unwrap_or_default(),
-            channel_id: string(&video, "channel_id").unwrap_or_default(),
+            channel_id: youtube_id(&string(&video, "channel_id").unwrap_or_default()),
             duration: video["duration"].as_f64(),
             views: video["view_count"].as_u64(),
             published: video["timestamp"].as_i64(),
@@ -979,7 +1000,7 @@ async fn download(
 }
 
 async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
-    let bytes = reqwest::get(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"))
+    let bytes = reqwest::get(format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", bare_id(id)))
         .await
         .and_then(|response| response.error_for_status())
         .map_err(|e| e.to_string())?
@@ -1025,7 +1046,7 @@ async fn resolve(input: Input) -> Result<Item, String> {
         Input::Channel(url) => {
             let channel = listing_head(&format!("{url}/videos")).await?;
             Ok(Item::Channel(ChannelRef {
-                id: string(&channel, "channel_id").ok_or("This channel could not be found")?,
+                id: youtube_id(&string(&channel, "channel_id").ok_or("This channel could not be found")?),
                 name: string(&channel, "channel")
                     .or_else(|| string(&channel, "uploader"))
                     .unwrap_or_else(|| "Unnamed channel".to_string()),
@@ -1034,7 +1055,7 @@ async fn resolve(input: Input) -> Result<Item, String> {
         Input::Playlist(url) => {
             let playlist = listing_head(&url).await?;
             Ok(Item::Playlist(PlaylistRef {
-                id: string(&playlist, "id").ok_or("This playlist could not be found")?,
+                id: youtube_id(&string(&playlist, "id").ok_or("This playlist could not be found")?),
                 title: string(&playlist, "title").unwrap_or_else(|| "Unnamed playlist".to_string()),
             }))
         }

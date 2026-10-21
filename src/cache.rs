@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::fetch::{cache_dir, Entry};
+use crate::fetch::{bare_id, cache_dir, youtube_id, Entry};
 
 const INDEX_FILE: &str = "index.json";
 /// Downloaded videos that are not saved anywhere are deleted once they are this old.
@@ -46,6 +46,7 @@ fn write_index(dir: &Path, index: &Index) {
 /// The name of the file of a video, without its extension. The usual size is just the id, the
 /// other ones add the size, like `id.720p`.
 pub fn stem(id: &str, height: Option<u32>) -> String {
+    let id = bare_id(id);
     match height {
         None => id.to_string(),
         Some(0) => format!("{id}.best"),
@@ -106,7 +107,7 @@ pub fn sizes(id: &str) -> Vec<u32> {
     let mut sizes: Vec<u32> = video_files(&cache_dir())
         .into_iter()
         .filter_map(|(file_stem, _)| match parse_stem(&file_stem) {
-            (file_id, Some(height)) if file_id == id => Some(height),
+            (file_id, Some(height)) if file_id == bare_id(id) => Some(height),
             _ => None,
         })
         .collect();
@@ -136,7 +137,7 @@ pub fn scan() -> Vec<CachedVideo> {
             let entry = index.get(&id).cloned().unwrap_or_else(|| Entry {
                 url: format!("https://www.youtube.com/watch?v={id}"),
                 title: id.clone(),
-                id,
+                id: youtube_id(&id),
                 channel: String::new(),
                 channel_id: String::new(),
                 duration: None,
@@ -196,7 +197,7 @@ pub fn touch(id: &str, height: Option<u32>) {
 pub fn record(entry: &Entry) {
     let dir = cache_dir();
     let mut index = read_index(&dir);
-    index.insert(entry.id.clone(), entry.clone());
+    index.insert(bare_id(&entry.id).to_string(), entry.clone());
     write_index(&dir, &index);
 }
 

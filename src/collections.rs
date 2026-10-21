@@ -393,10 +393,10 @@ fn free_path(directory: &Path, entry: &Entry, source: &Path) -> PathBuf {
         .map(|ext| ext.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mp4".to_string());
 
-    let mut path = directory.join(format!("{title} [{}].{extension}", entry.id));
+    let mut path = directory.join(format!("{title} [{}].{extension}", crate::fetch::bare_id(&entry.id)));
     let mut number = 2;
     while path.exists() {
-        path = directory.join(format!("{title} [{}] {number}.{extension}", entry.id));
+        path = directory.join(format!("{title} [{}] {number}.{extension}", crate::fetch::bare_id(&entry.id)));
         number += 1;
     }
     path
@@ -468,18 +468,18 @@ mod tests {
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
         std::fs::write(&source, b"video").unwrap();
         let mut entry = local_entry(&source);
-        entry.id = "abc".to_string();
+        entry.id = "yt:abc".to_string();
         entry.title = "A/B title".to_string();
 
         let saved = save(DEFAULT_NAME, &entry, &source, false).unwrap();
         assert_eq!(saved, root.join("data/lumpla/saved/A_B title [abc].mp4"));
         assert!(saved.exists() && !source.exists());
-        assert!(contains(DEFAULT_NAME, "abc") && find("abc") == Some(saved.clone()));
+        assert!(contains(DEFAULT_NAME, "yt:abc") && find("yt:abc") == Some(saved.clone()));
 
         // What was written can be read back after a restart.
         with(|list| list.clear());
         init();
-        assert!(contains(DEFAULT_NAME, "abc"));
+        assert!(contains(DEFAULT_NAME, "yt:abc"));
 
         // Imported folders point to the files, which are never touched.
         let folder = root.join("movies");
@@ -499,7 +499,7 @@ mod tests {
         assert!(folder.join("sub/two.MP4").exists());
 
         // The ones that are ours are deleted for real.
-        remove_video(DEFAULT_NAME, "abc").unwrap();
+        remove_video(DEFAULT_NAME, "yt:abc").unwrap();
         assert!(!saved.exists());
 
         let _ = std::fs::remove_dir_all(&root);

@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub struct State {
     pub queue_sidebar_open: bool,
     pub subscriptions_sidebar_open: bool,
+    /// Whether the restricted mode is on.
+    pub restricted: bool,
     /// The collection the Save button saves to.
     pub save_collection: Option<String>,
 }
