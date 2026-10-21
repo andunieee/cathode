@@ -14,6 +14,10 @@ const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mkv", "webm", "mov", "m4v"];
 
 pub struct CachedVideo {
     pub entry: Entry,
+    /// The file name without its extension: the id, plus the size for the other sizes of a video.
+    pub stem: String,
+    /// The size of a video that was downloaded at one other than the usual, `0` for the best.
+    pub height: Option<u32>,
     pub size: u64,
     pub modified: Option<SystemTime>,
     /// Whether `entry` comes from the index, as opposed to being made up from the file name.
@@ -39,6 +43,30 @@ fn write_index(dir: &Path, index: &Index) {
     }
 }
 
+/// The name of the file of a video, without its extension. The usual size is just the id, the
+/// other ones add the size, like `id.720p`.
+pub fn stem(id: &str, height: Option<u32>) -> String {
+    match height {
+        None => id.to_string(),
+        Some(0) => format!("{id}.best"),
+        Some(height) => format!("{id}.{height}p"),
+    }
+}
+
+/// The id and the size of the video a file stem is for.
+pub fn parse_stem(stem: &str) -> (&str, Option<u32>) {
+    let Some((id, size)) = stem.split_once('.') else {
+        return (stem, None);
+    };
+    match size {
+        "best" => (id, Some(0)),
+        _ => match size.strip_suffix('p').and_then(|height| height.parse().ok()) {
+            Some(height) => (id, Some(height)),
+            None => (stem, None),
+        },
+    }
+}
+
 fn video_files(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -59,12 +87,31 @@ fn video_files(dir: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// The file of an already downloaded video.
+/// The file of an already downloaded video, the one of the usual size.
 pub fn find(id: &str) -> Option<PathBuf> {
+    find_size(id, None)
+}
+
+/// The file of an already downloaded video at that size, `None` being the usual one.
+pub fn find_size(id: &str, height: Option<u32>) -> Option<PathBuf> {
+    let wanted = stem(id, height);
     video_files(&cache_dir())
         .into_iter()
-        .find(|(file_id, _)| file_id == id)
+        .find(|(file_stem, _)| *file_stem == wanted)
         .map(|(_, path)| path)
+}
+
+/// The other sizes a video was downloaded at.
+pub fn sizes(id: &str) -> Vec<u32> {
+    let mut sizes: Vec<u32> = video_files(&cache_dir())
+        .into_iter()
+        .filter_map(|(file_stem, _)| match parse_stem(&file_stem) {
+            (file_id, Some(height)) if file_id == id => Some(height),
+            _ => None,
+        })
+        .collect();
+    sizes.sort_by(|a, b| b.cmp(a));
+    sizes
 }
 
 /// Lists the videos on disk, newest first, dropping index entries whose file is gone.
@@ -74,14 +121,16 @@ pub fn scan() -> Vec<CachedVideo> {
     let files = video_files(&dir);
 
     let before = index.len();
-    index.retain(|id, _| files.iter().any(|(file_id, _)| file_id == id));
+    index.retain(|id, _| files.iter().any(|(stem, _)| parse_stem(stem).0 == id));
     if index.len() != before {
         write_index(&dir, &index);
     }
 
     let mut videos: Vec<CachedVideo> = files
         .into_iter()
-        .map(|(id, path)| {
+        .map(|(stem, path)| {
+            let (id, height) = parse_stem(&stem);
+            let id = id.to_string();
             let metadata = std::fs::metadata(&path).ok();
             let known = index.contains_key(&id);
             let entry = index.get(&id).cloned().unwrap_or_else(|| Entry {
@@ -97,6 +146,8 @@ pub fn scan() -> Vec<CachedVideo> {
 
             CachedVideo {
                 entry,
+                stem,
+                height,
                 size: metadata.as_ref().map_or(0, |m| m.len()),
                 modified: metadata.and_then(|m| m.modified().ok()),
                 known,
@@ -129,8 +180,8 @@ pub fn expire() -> usize {
 
 /// Makes a video that was just downloaded count as new: its age is counted from now, whatever
 /// date the file came with.
-pub fn touch(id: &str) {
-    if let Some(path) = find(id) {
+pub fn touch(id: &str, height: Option<u32>) {
+    if let Some(path) = find_size(id, height) {
         let touched = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
@@ -149,19 +200,21 @@ pub fn record(entry: &Entry) {
     write_index(&dir, &index);
 }
 
-/// Deletes the files of these videos, and forgets about them.
-pub fn delete(ids: &[String]) {
+/// Deletes the files with these names (see `stem`), and forgets about the videos that have
+/// none left.
+pub fn delete(stems: &[String]) {
     let dir = cache_dir();
 
-    for (id, path) in video_files(&dir) {
-        if ids.contains(&id) {
+    for (stem, path) in video_files(&dir) {
+        if stems.contains(&stem) {
             let _ = std::fs::remove_file(path);
         }
     }
 
+    let left = video_files(&dir);
     let mut index = read_index(&dir);
     let before = index.len();
-    index.retain(|id, _| !ids.contains(id));
+    index.retain(|id, _| left.iter().any(|(stem, _)| parse_stem(stem).0 == id));
     if index.len() != before {
         write_index(&dir, &index);
     }
@@ -170,6 +223,14 @@ pub fn delete(ids: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stems_tell_the_sizes_apart() {
+        assert_eq!(parse_stem("abc-_1"), ("abc-_1", None));
+        assert_eq!(parse_stem(&stem("abc", Some(720))), ("abc", Some(720)));
+        assert_eq!(parse_stem(&stem("abc", Some(0))), ("abc", Some(0)));
+        assert_eq!(stem("abc", None), "abc");
+    }
 
     #[test]
     fn old_videos_expire() {

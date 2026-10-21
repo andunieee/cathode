@@ -133,9 +133,12 @@ pub enum Request {
         key: String,
         url: String,
     },
-    /// Download the video into the cache directory, if it isn't there yet.
+    /// Download the video into the cache directory, if it isn't there yet. `height` is a size
+    /// other than the usual one, `0` for the best. Asking for a video that is being downloaded
+    /// stops that download, and only the new one is reported.
     Download {
         entry: Entry,
+        height: Option<u32>,
     },
     /// Stops the download of the video with this id, if one is running.
     Cancel {
@@ -184,6 +187,7 @@ pub enum Response {
     },
     Downloaded {
         id: String,
+        height: Option<u32>,
         result: Result<PathBuf, String>,
     },
     Thumbnail {
@@ -270,21 +274,38 @@ async fn run(
                     });
                 });
             }
-            Request::Download { entry } => {
+            Request::Download { entry, height } => {
                 let cancel = Arc::new(Notify::new());
-                downloads
+                let before = downloads
                     .lock()
                     .unwrap()
                     .insert(entry.id.clone(), cancel.clone());
+                if let Some(before) = before {
+                    before.notify_one();
+                }
 
                 let downloads = downloads.clone();
                 tokio::spawn(async move {
-                    let result = download(&entry, cancel, on_response.as_ref()).await;
-                    downloads.lock().unwrap().remove(&entry.id);
-                    on_response(Response::Downloaded {
-                        id: entry.id,
-                        result,
-                    });
+                    let result =
+                        download(&entry, height, cancel.clone(), on_response.as_ref()).await;
+                    let replaced = {
+                        let mut downloads = downloads.lock().unwrap();
+                        let ours = downloads
+                            .get(&entry.id)
+                            .is_some_and(|current| Arc::ptr_eq(current, &cancel));
+                        if ours {
+                            downloads.remove(&entry.id);
+                        }
+                        !ours
+                    };
+                    // A newer download of the video took over, it is the one to report.
+                    if !replaced {
+                        on_response(Response::Downloaded {
+                            id: entry.id,
+                            height,
+                            result,
+                        });
+                    }
                 });
             }
             Request::Cancel { id } => {
@@ -870,13 +891,14 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
 
 async fn download(
     entry: &Entry,
+    height: Option<u32>,
     cancel: Arc<Notify>,
     on_response: &impl Fn(Response),
 ) -> Result<PathBuf, String> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    if let Some(path) = crate::cache::find(&entry.id) {
+    if let Some(path) = crate::cache::find_size(&entry.id, height) {
         return Ok(path);
     }
 
@@ -894,9 +916,9 @@ async fn download(
             "--print",
             "after_move:filepath",
         ])
-        .args(crate::settings::download_args())
+        .args(crate::settings::download_args(height))
         .arg("-o")
-        .arg(dir.join(format!("{}.%(ext)s", entry.id)))
+        .arg(dir.join(format!("{}.%(ext)s", crate::cache::stem(&entry.id, height))))
         .arg(&entry.url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -952,7 +974,7 @@ async fn download(
         return Err(error_line(&stderr.await.unwrap_or_default()));
     }
 
-    path.or_else(|| crate::cache::find(&entry.id))
+    path.or_else(|| crate::cache::find_size(&entry.id, height))
         .ok_or_else(|| "yt-dlp did not report the downloaded file".to_string())
 }
 

@@ -16,6 +16,7 @@ use crate::fetch::{Chapter, Entry, Request, Response, SearchFilter, SearchSort, 
 use crate::format;
 use crate::history;
 use crate::library;
+use crate::settings;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::state;
 use crate::subscriptions::{self, Subscription};
@@ -118,6 +119,10 @@ struct State {
 
     /// Downloads running, whoever asked for them.
     inflight: HashMap<String, Entry>,
+    /// The size picked in the player for a video, when it is not the usual one.
+    picked: HashMap<String, u32>,
+    /// The video in the player that another size is being downloaded for.
+    switching: Option<String>,
     progress: HashMap<String, f64>,
     /// The video in the player, which may still be downloading.
     playing: Option<Entry>,
@@ -160,6 +165,8 @@ thread_local! {
         queue: Vec::new(),
         queue_downloading: None,
         inflight: HashMap::new(),
+        picked: HashMap::new(),
+        switching: None,
         progress: HashMap::new(),
         playing: None,
         awaiting_play: None,
@@ -372,14 +379,17 @@ fn show_video(entry: &Entry) {
         meta.push(format::duration(duration));
     }
     if local_path(&entry.id).is_some() {
-        meta.push(
-            if entry.url.is_empty() {
-                "On disk"
-            } else {
-                "Downloaded"
-            }
-            .to_string(),
-        );
+        let mut saved = if entry.url.is_empty() {
+            "On disk"
+        } else {
+            "Downloaded"
+        }
+        .to_string();
+        let sizes: Vec<String> = cache::sizes(&entry.id).into_iter().map(size_name).collect();
+        if !sizes.is_empty() {
+            saved.push_str(&format!(" (also {})", sizes.join(", ")));
+        }
+        meta.push(saved);
     }
     ui.video_meta.set_text(&meta.join("  ·  "));
 
@@ -498,6 +508,7 @@ fn play_chapter_of(entry: Entry, index: usize) {
 /// The file of a video that is on disk: opened from the command line, cached or in a collection.
 fn local_path(id: &str) -> Option<PathBuf> {
     with(|state| state.local_files.get(id).cloned())
+        .or_else(|| cache::find_size(id, wanted_size(id)))
         .or_else(|| cache::find(id))
         .or_else(|| collections::find(id))
 }
@@ -952,7 +963,22 @@ pub fn open_file(path: PathBuf) {
 
 // Downloads
 
+/// The size picked in the player for the video, `None` for the usual one.
+fn wanted_size(id: &str) -> Option<u32> {
+    with(|state| state.picked.get(id).copied())
+}
+
+/// How a size is called: `720p`, or `best`.
+fn size_name(height: u32) -> String {
+    if height == 0 {
+        "best".to_string()
+    } else {
+        format!("{height}p")
+    }
+}
+
 fn start_download(entry: Entry) {
+    let height = wanted_size(&entry.id);
     let start = with(|state| {
         if state.inflight.contains_key(&entry.id) {
             false
@@ -963,7 +989,123 @@ fn start_download(entry: Entry) {
     });
 
     if start {
-        send(Request::Download { entry });
+        send(Request::Download { entry, height });
+    }
+}
+
+/// Checks the size the video has in the player in the settings menu of the player.
+fn sync_size_buttons(id: &str) {
+    let ui = ui::get();
+    let height = wanted_size(id).unwrap_or(settings::get().max_height);
+
+    ui.syncing.set(true);
+    for (button, (size, _)) in ui.size_buttons.iter().zip(settings::QUALITIES) {
+        if size == height {
+            button.set_active(true);
+        }
+    }
+    ui.syncing.set(false);
+}
+
+/// Plays the video from another file, from where it was.
+fn swap_playback(entry: &Entry, path: &std::path::Path) {
+    let ui = ui::get();
+    let (position, paused) = (ui.player.position(), ui.player.is_paused());
+
+    ui.player.load(&entry.id, &path.to_string_lossy());
+    with(|state| state.pending_seek = Some((entry.id.clone(), position)));
+    ui.player.set_paused(paused);
+}
+
+/// Picks the size of the video in the player. If it is not on disk it is downloaded, which
+/// stops the download going on for the video, and the player moves on to it once it is there.
+pub fn set_size(height: u32) {
+    let ui = ui::get();
+    let Some(entry) = with(|state| state.playing.clone()).filter(|entry| !entry.url.is_empty())
+    else {
+        return;
+    };
+
+    let size = (height != settings::get().max_height).then_some(height);
+    if wanted_size(&entry.id) == size {
+        return;
+    }
+    with(|state| match size {
+        Some(size) => {
+            state.picked.insert(entry.id.clone(), size);
+        }
+        None => {
+            state.picked.remove(&entry.id);
+        }
+    });
+
+    let loaded = ui.player.id().as_deref() == Some(&entry.id);
+    if let Some(path) = cache::find_size(&entry.id, size) {
+        let stop = with(|state| state.switching.take_if(|id| *id == entry.id).is_some());
+        if stop {
+            send(Request::Cancel {
+                id: entry.id.clone(),
+            });
+        }
+        ui.size_status.set_visible(false);
+        if loaded {
+            swap_playback(&entry, &path);
+        } else {
+            start_playback(&entry, &path);
+        }
+        return;
+    }
+
+    with(|state| {
+        state.inflight.insert(entry.id.clone(), entry.clone());
+        state.progress.remove(&entry.id);
+        if loaded {
+            state.switching = Some(entry.id.clone());
+        } else {
+            state.awaiting_play = Some(entry.id.clone());
+        }
+    });
+    if loaded {
+        ui.size_status
+            .set_text(&format!("Downloading {}…", size_name(height)));
+        ui.size_status.set_visible(true);
+    } else {
+        ui.player_status.set_text("Downloading…");
+        ui.player_status.set_visible(true);
+    }
+    send(Request::Download {
+        entry,
+        height: size,
+    });
+}
+
+/// Shows or hides the progress bar of the player.
+pub fn set_progress_bar(visible: bool) {
+    if let Err(error) = settings::update(|s| s.hide_progress_bar = !visible) {
+        toast(&format!("Could not save the settings: {error}"));
+    }
+    apply_progress_bar(ui::get().window.is_fullscreen());
+}
+
+/// Shows the progress bar with the time, or the skip buttons when it is hidden. Fullscreen has
+/// more of them.
+pub fn apply_progress_bar(fullscreen: bool) {
+    let ui = ui::get();
+    let hidden = settings::get().hide_progress_bar;
+    ui.seek_row.set_visible(!hidden);
+    for (button, fullscreen_only) in &ui.skip_buttons {
+        button.set_visible(hidden && (fullscreen || !fullscreen_only));
+    }
+}
+
+/// Jumps forward or back in the video.
+pub fn skip(seconds: f64) {
+    let ui = ui::get();
+    let duration = ui.player.duration();
+    if duration > 0.0 {
+        with(|state| state.chapter_stop = None);
+        ui.player
+            .seek_to((ui.player.position() + seconds).clamp(0.0, duration));
     }
 }
 
@@ -1084,6 +1226,10 @@ fn show_player(entry: &Entry) {
     let ui = ui::get();
     ui.player_frame.set_visible(true);
     ui.player_title.set_text(&entry.title);
+    sync_size_buttons(&entry.id);
+    if with(|state| state.switching.as_deref() != Some(&entry.id)) {
+        ui.size_status.set_visible(false);
+    }
 
     if ui.player.id().as_deref() == Some(&entry.id) {
         ui.player_status.set_visible(false);
@@ -1166,6 +1312,7 @@ pub fn toggle_fullscreen() {
 fn show_fullscreen(fullscreen: bool) {
     let ui = ui::get();
     let split = &ui.queue_split;
+    apply_progress_bar(fullscreen);
     let saved = with(|state| state.sidebar_widths);
     if fullscreen == saved.is_some() {
         return;
@@ -1801,6 +1948,8 @@ fn show_cache() {
 
     for video in videos {
         let entry = video.entry;
+        let stem = video.stem;
+        let variant = video.height.is_some();
 
         // Videos we know nothing about get their details looked up, once.
         if !video.known {
@@ -1822,6 +1971,9 @@ fn show_cache() {
         }
         if let Some(duration) = entry.duration {
             subtitle.push(format::duration(duration));
+        }
+        if let Some(height) = video.height {
+            subtitle.push(size_name(height));
         }
         subtitle.push(format::bytes(video.size));
         if let Some(modified) = video
@@ -1859,6 +2011,8 @@ fn show_cache() {
             let entry = entry.clone();
             move |_| queue_add(entry.clone())
         });
+        // Only the usual size can be queued or saved, those go by the id of the video.
+        queue.set_visible(!variant);
         row.add_suffix(&queue);
 
         let save = gtk::Button::builder().cursor(&crate::ui::pointer())
@@ -1874,6 +2028,7 @@ fn show_cache() {
                 None => toast("There is no collection to save to"),
             }
         });
+        save.set_visible(!variant);
         row.add_suffix(&save);
 
         let delete = gtk::Button::builder().cursor(&crate::ui::pointer())
@@ -1883,13 +2038,13 @@ fn show_cache() {
             .css_classes(["flat", "circular"])
             .build();
         delete.connect_clicked({
-            let entry = entry.clone();
-            move |_| confirm_delete(vec![entry.clone()])
+            let (entry, stem) = (entry.clone(), stem.clone());
+            move |_| confirm_delete(vec![(entry.clone(), stem.clone())])
         });
         row.add_suffix(&delete);
 
         ui.cache_list.append(&row);
-        rows.push(CacheRow { entry, check });
+        rows.push(CacheRow { entry, stem, check });
     }
 
     let count = rows.len();
@@ -1899,13 +2054,22 @@ fn show_cache() {
     update_cache_selection();
 }
 
-fn selected_cache_entries() -> Vec<Entry> {
+fn selected_cache_rows() -> Vec<(Entry, String)> {
     ui::get()
         .cache_rows
         .borrow()
         .iter()
         .filter(|row| row.check.is_active())
-        .map(|row| row.entry.clone())
+        .map(|row| (row.entry.clone(), row.stem.clone()))
+        .collect()
+}
+
+/// The selected videos of the usual size, which are the ones that can be queued or saved.
+fn selected_cache_entries() -> Vec<Entry> {
+    selected_cache_rows()
+        .into_iter()
+        .filter(|(entry, stem)| *stem == entry.id)
+        .map(|(entry, _)| entry)
         .collect()
 }
 
@@ -1973,7 +2137,7 @@ pub fn cache_save_selected() {
 }
 
 pub fn cache_delete_selected() {
-    confirm_delete(selected_cache_entries());
+    confirm_delete(selected_cache_rows());
 }
 
 pub fn cache_open(index: usize) {
@@ -1987,13 +2151,13 @@ pub fn cache_open(index: usize) {
     }
 }
 
-fn confirm_delete(entries: Vec<Entry>) {
+fn confirm_delete(entries: Vec<(Entry, String)>) {
     if entries.is_empty() {
         return;
     }
 
     let (heading, body) = match entries.as_slice() {
-        [entry] => (
+        [(entry, _)] => (
             "Delete this video?".to_string(),
             format!("“{}” will be removed from the cache.", entry.title),
         ),
@@ -2019,9 +2183,15 @@ fn confirm_delete(entries: Vec<Entry>) {
     );
 }
 
-fn delete_from_cache(entries: &[Entry]) {
-    let ids: Vec<String> = entries.iter().map(|entry| entry.id.clone()).collect();
-    cache::delete(&ids);
+fn delete_from_cache(entries: &[(Entry, String)]) {
+    let stems: Vec<String> = entries.iter().map(|(_, stem)| stem.clone()).collect();
+    // Only the usual size of a video is what the queue plays.
+    let ids: Vec<String> = entries
+        .iter()
+        .filter(|(entry, stem)| *stem == entry.id)
+        .map(|(entry, _)| entry.id.clone())
+        .collect();
+    cache::delete(&stems);
 
     // Downloaded videos of the queue would just be downloaded again otherwise.
     with(|state| {
@@ -2031,7 +2201,7 @@ fn delete_from_cache(entries: &[Entry]) {
     });
     refresh_queue();
 
-    toast(&match ids.len() {
+    toast(&match stems.len() {
         1 => "Deleted 1 video".to_string(),
         count => format!("Deleted {count} videos"),
     });
@@ -2226,20 +2396,50 @@ pub fn handle(response: Response) {
             if with(|state| state.queue_downloading.as_deref() == Some(&id)) {
                 refresh_queue();
             }
+            if with(|state| state.switching.as_deref() == Some(&id)) {
+                let size = wanted_size(&id).unwrap_or(0);
+                ui.size_status.set_text(&format!(
+                    "Downloading {}… {:.0}%",
+                    size_name(size),
+                    fraction * 100.0
+                ));
+            }
             if with(|state| state.awaiting_play.as_deref() == Some(&id)) {
                 ui.player_status
                     .set_text(&format!("Downloading… {:.0}%", fraction * 100.0));
             }
         }
-        Response::Downloaded { id, result } => {
+        Response::Downloaded { id, height, result } => {
             let entry = with(|state| {
                 state.progress.remove(&id);
                 state.inflight.remove(&id)
             });
 
             if let (Ok(_), Some(entry)) = (&result, &entry) {
-                cache::touch(&entry.id);
+                cache::touch(&entry.id, height);
                 cache::record(entry);
+            }
+
+            // The player moves on to the size it was waiting for.
+            let switched = with(|state| {
+                (height == state.picked.get(&id).copied())
+                    .then(|| state.switching.take_if(|switching| *switching == id))
+                    .flatten()
+                    .is_some()
+            });
+            if switched {
+                ui.size_status.set_visible(false);
+                let playing = with(|state| state.playing.clone()).filter(|entry| entry.id == id);
+                match (&result, playing) {
+                    (Ok(path), Some(entry)) => {
+                        swap_playback(&entry, path);
+                        toast(&format!("Playing at {}", size_name(height.unwrap_or(settings::get().max_height))));
+                    }
+                    _ => {
+                        with(|state| state.picked.remove(&id));
+                        sync_size_buttons(&id);
+                    }
+                }
             }
 
             // Saving moves the file, so whoever else is waiting for it has to be told where it is.

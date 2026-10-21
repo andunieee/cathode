@@ -19,6 +19,8 @@ const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 pub struct CacheRow {
     pub entry: Entry,
+    /// The name of the file, which tells apart the sizes a video was downloaded at.
+    pub stem: String,
     pub check: gtk::CheckButton,
 }
 
@@ -100,6 +102,13 @@ pub struct Ui {
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
     pub time_label: gtk::Label,
+    /// The sizes the video in the player can be downloaded at, in the order of `QUALITIES`.
+    pub size_buttons: Vec<gtk::CheckButton>,
+    pub size_status: gtk::Label,
+    pub seek_row: gtk::Box,
+    /// Skip buttons, which show when the progress bar is hidden, and whether each one is only
+    /// for fullscreen.
+    pub skip_buttons: Vec<(gtk::Button, bool)>,
 
     pub queue_list: gtk::ListBox,
 
@@ -787,16 +796,88 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
+    // The settings of the player
+    let progress_bar = gtk::CheckButton::with_label("Show the progress bar");
+    progress_bar.set_cursor(Some(&crate::ui::pointer()));
+    progress_bar.set_active(!crate::settings::get().hide_progress_bar);
+    progress_bar.connect_toggled(|button| nav::set_progress_bar(button.is_active()));
+    let size_heading = gtk::Label::builder()
+        .label("Download size")
+        .xalign(0.0)
+        .css_classes(["heading"])
+        .build();
+    let size_status = gtk::Label::builder()
+        .xalign(0.0)
+        .css_classes(["dim-label"])
+        .visible(false)
+        .build();
+    let mut size_buttons: Vec<gtk::CheckButton> = Vec::new();
+    for (height, label) in crate::settings::QUALITIES.iter() {
+        let button = gtk::CheckButton::with_label(label);
+        button.set_cursor(Some(&crate::ui::pointer()));
+        if let Some(first) = size_buttons.first() {
+            button.set_group(Some(first));
+        }
+        let height = *height;
+        button.connect_toggled(move |button| {
+            if button.is_active() && !get().syncing.get() {
+                nav::set_size(height);
+            }
+        });
+        size_buttons.push(button);
+    }
+    let settings_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    settings_box.append(&progress_bar);
+    settings_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    settings_box.append(&size_heading);
+    for button in &size_buttons {
+        settings_box.append(button);
+    }
+    settings_box.append(&size_status);
+    let player_settings = gtk::MenuButton::builder()
+        .cursor(&crate::ui::pointer())
+        .icon_name("emblem-system-symbolic")
+        .tooltip_text("Settings")
+        .direction(gtk::ArrowType::Up)
+        .popover(&gtk::Popover::builder().child(&settings_box).build())
+        .build();
+
     // Two rows, the sidebar is narrow.
     let seek_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     seek_row.append(&seek);
     seek_row.append(&time_label);
+    let skip_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    skip_row.set_halign(gtk::Align::Center);
+    skip_row.set_hexpand(true);
+    let mut skip_buttons = Vec::new();
+    for seconds in [-300_i32, -60, -30, -10, 10, 30, 60, 300] {
+        let magnitude: i32 = seconds.abs();
+        let label = format!(
+            "{}{}",
+            if seconds < 0 { "−" } else { "+" },
+            if magnitude >= 60 {
+                format!("{}min", magnitude / 60)
+            } else {
+                format!("{magnitude}s")
+            }
+        );
+        let button = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .label(label)
+            .css_classes(["flat"])
+            .build();
+        button.connect_clicked(move |_| nav::skip(seconds as f64));
+        button.set_visible(false);
+        skip_buttons.push((button.clone(), magnitude != 30));
+        skip_row.append(&button);
+    }
     let buttons_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     buttons_row.append(&play_button);
     buttons_row.append(&speed);
-    buttons_row.append(&gtk::Box::builder().hexpand(true).build());
+    buttons_row.append(&skip_row);
     buttons_row.append(&volume);
     buttons_row.append(&chapters_button);
+    buttons_row.append(&player_settings);
     buttons_row.append(&fullscreen);
     let player_controls = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_controls.add_css_class("osd");
@@ -1049,10 +1130,15 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         play_button,
         seek,
         time_label,
+        size_buttons,
+        size_status,
+        seek_row,
+        skip_buttons,
         queue_list,
         syncing: Cell::new(false),
     });
     UI.with(|slot| *slot.borrow_mut() = Some(ui.clone()));
+    nav::apply_progress_bar(false);
 
     // Position and state of the player
     glib::timeout_add_local(std::time::Duration::from_millis(250), || {

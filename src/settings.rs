@@ -38,6 +38,8 @@ pub struct Settings {
     pub limit_rate: String,
     /// Cuts the sponsor segments out of the downloaded videos (SponsorBlock).
     pub remove_sponsors: bool,
+    /// Hides the seek bar of the player.
+    pub hide_progress_bar: bool,
 }
 
 impl Default for Settings {
@@ -48,6 +50,7 @@ impl Default for Settings {
             proxy: String::new(),
             limit_rate: String::new(),
             remove_sponsors: false,
+            hide_progress_bar: false,
         }
     }
 }
@@ -127,15 +130,17 @@ pub fn yt_dlp() -> Command {
     command
 }
 
-/// The settings that only matter for downloading a video.
-pub fn download_args() -> Vec<String> {
+/// The settings that only matter for downloading a video, at `height` instead of the usual one
+/// when it is given.
+pub fn download_args(height: Option<u32>) -> Vec<String> {
     let settings = get();
     let mut args = Vec::new();
 
-    let format = if settings.max_height == 0 {
+    let height = height.unwrap_or(settings.max_height);
+    let format = if height == 0 {
         "bv*+ba/b".to_string()
     } else {
-        let h = settings.max_height;
+        let h = height;
         format!("bv*[height<={h}]+ba/b[height<={h}]/b")
     };
     args.extend(["-f".to_string(), format]);
