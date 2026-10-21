@@ -4,7 +4,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -227,8 +226,7 @@ fn derive(salt: &[u8], password: &str, rounds: u32) -> Vec<u8> {
 
 fn random_salt() -> [u8; 16] {
     let mut salt = [0u8; 16];
-    let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut salt));
-    if read.is_err() {
+    if getrandom::fill(&mut salt).is_err() {
         // No randomness to be had, the clock will have to do.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

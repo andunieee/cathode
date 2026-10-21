@@ -1,3 +1,6 @@
+// No console window behind the GUI on Windows.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod cache;
 mod collections;
 mod controls;
@@ -20,7 +23,7 @@ use gtk::glib;
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder()
-        .application_id("io.dusklabs.Lumpla")
+        .application_id("io.github.andunieee.Lumpla")
         .build();
 
     app.connect_startup(|_| load_css());

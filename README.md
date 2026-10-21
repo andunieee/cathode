@@ -1,35 +1,76 @@
 # Lumpla
-![demo](assets/demo.jpg)
+![Lumpla playing a video in fullscreen](assets/fullscreen.jpg)
 
-Lumpla is a YouTube client based on [yt-dlp](https://github.com/yt-dlp/yt-dlp), built with GTK4, libadwaita and libmpv. It may work.
-
-Search for a video, open it and hit play, and Lumpla downloads it with yt-dlp into a cache directory and plays the result in the built-in player.
-
-Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `GtkGLArea`, so the player controls are plain widgets overlaid on the video.
+Lumpla is a YouTube client for the desktop. Search for a video, hit play, and watch it in the built-in player. It may work.
 
 # Features
-- [x] Search YouTube (up to 100 results, with thumbnails, and the channels that match above them), sorted by relevance or date
-- [x] Channel pages (up to 1000 videos), with search inside the channel
-- [x] Video pages with metadata and the upload date
-- [x] Back/forward history (also Alt+Left/Right and the mouse buttons)
-- [x] Video queue in a side panel: downloads happen one after the other, and playback moves on to the next downloaded video
-- [x] Download through yt-dlp, with progress, into a cache (`~/.cache/lumpla`). Videos that were not saved are deleted 48 hours after the download, checked on startup
-- [x] A page listing the cached videos, to queue or delete them one by one or in bulk. The files are the source of truth, `index.json` only remembers their titles and is cleaned up when files are gone
-- [x] Play/Pause, seekbar, playback speed (0.5× to 3×), volume, fullscreen
-- [x] Parental controls: a restricted mode that only reaches the videos, channels and playlists it allows. There is no search while it is on, and it can be protected with a password. Set it up from the home page, it is saved in `~/.config/lumpla/restricted/default.json`
-- [x] Playlist pages
-- [x] Collections, in the sidebar on the left under the subscriptions. The Save button of a video page (and of the downloaded videos page) moves the video out of the cache into a collection, `~/.local/share/lumpla/saved` by default; the arrow next to it picks the collection, and new ones can have any folder. A folder of videos you already have can be imported as a collection too, and its files are never touched. Each collection is a file with the paths and the metadata of its videos (`~/.config/lumpla/collections/<name>.json`), and the restricted mode can allow whole collections
-- [x] Local subscriptions, no account needed: a sidebar on the left lists the channels, and the home page shows their latest videos, checked on startup and every 30 minutes (`~/.config/lumpla/subscriptions.json`)
-- [x] Watch history, a page listing the videos by day that loads more as you scroll (`~/.config/lumpla/history.jsonl`, one entry per line, the latest first)
+
+## Search
+![Search results](assets/search.jpg)
+
+- Search YouTube, with thumbnails, and the matching channels shown above the videos
+- Sort by relevance or date, and filter the results
+- Paste a YouTube link to open the video directly
+
+## Video pages
+![A video page](assets/video.jpg)
+
+- Description, upload date and chapters, with chapters you can play one at a time
+- Play, queue, see related videos, save to a collection, or allow in restricted mode
+- Choose the video quality
+
+## Queue and player
+![The queue and the player](assets/player.jpg)
+
+- A queue next to the player on every page, with downloads in progress shown in it
+- Playback moves on to the next video by itself
+- Drag videos to reorder the queue
+- Picks up where you left off when you reopen the app
+- Seekbar, playback speed, volume and fullscreen
+
+## Channels
+![A channel page](assets/channel.jpg)
+
+- Browse a channel's videos and search inside it
+- Playlist pages too
+
+## Subscriptions and collections
+![The library sidebar](assets/library.jpg)
+
+- Subscribe to channels without an account, and see their latest videos on the home page
+- Keep videos you like in collections, or import a folder of videos you already have
+
+## Downloads
+![The downloaded videos page](assets/cached.jpg)
+
+- Watched videos are downloaded and cleaned up after 48 hours unless you save them
+- A page to queue, save or delete downloaded videos, one by one or in bulk
+
+## Restricted mode
+![Restricted mode settings](assets/restricted-settings.jpg)
+
+- Parental controls: only the videos, channels, playlists and collections you allow can be watched
+- Can be protected with a password
+
+![Restricted mode on](assets/restricted.jpg)
+
+## And also
+- Back and forward navigation, with Alt+Left/Right and the mouse buttons
+- Watch history
+- Settings for download quality, sponsor segment removal, speed limit, proxy and browser cookies for age-restricted videos
 
 # Installation
-## Dependencies
+## Releases
+Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` for Windows and a `.zip` with `lumpla.app` for Apple Silicon macOS.
+
+## Building from source
+### Dependencies
 * rustc
-* GTK 4.10+ and libadwaita 1.5+ (and their development headers)
+* GTK 4.10+ and libadwaita 1.7+ (and their development headers)
 * libmpv (and its development headers)
 * Nothing else: on startup Lumpla downloads yt-dlp (kept up to date daily), and ffmpeg/ffprobe and deno if they aren't in your `PATH`, into the `tools` folder of the cache (`~/.cache/lumpla/tools` on Linux), verifying their checksums
 
-## Running
+### Running
 Open the search page:
 ```
 cargo run

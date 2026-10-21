@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.andunieee.Lumpla</id>
+  <name>Lumpla</name>
+  <summary>A YouTube client built on yt-dlp and mpv</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <developer id="io.github.andunieee">
+    <name>George V</name>
+  </developer>
+  <description>
+    <p>
+      Lumpla searches YouTube, downloads videos with yt-dlp and plays them in a
+      built-in mpv player, with a queue, channel pages, local subscriptions,
+      collections, watch history and parental controls.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.andunieee.Lumpla.desktop</launchable>
+  <url type="homepage">https://github.com/andunieee/lumpla</url>
+  <url type="bugtracker">https://github.com/andunieee/lumpla/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/andunieee/lumpla/master/assets/player.jpg</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-info">mild</content_attribute>
+  </content_rating>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointer</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-10-21"/>
+  </releases>
+</component>

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lumpla
+GenericName=YouTube Client
+Comment=Search, download and watch YouTube videos
+Exec=lumpla %f
+Icon=io.github.andunieee.Lumpla
+Terminal=false
+Categories=AudioVideo;Video;Player;GTK;
+Keywords=youtube;video;yt-dlp;mpv;
+StartupNotify=true

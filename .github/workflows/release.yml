@@ -1,7 +1,8 @@
 name: Release
 
 # Build portable release bundles when a "v" tag is pushed:
-#   linux   : x86_64 .tar.gz (plain binary) + portable .AppImage
+#   linux   : x86_64 .tar.gz (plain binary), portable .AppImage, .deb (Debian 13+),
+#             .rpm (Fedora, needs RPM Fusion's mpv-libs) and a .flatpak bundle
 #   windows : x86_64 .zip   (UCRT64 GTK4 + libmpv runtime, launch via lumpla.bat)
 #   macos   : arm64  .zip   (lumpla.app with bundled Homebrew libraries)
 #
@@ -23,22 +24,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # libadwaita >= 1.7 is required (adw::WrapBox), which Ubuntu 24.04 (1.5) doesn't have,
+  # so the Linux builds run in Debian 13 (libadwaita 1.7, glibc 2.41).
   linux:
     name: linux (x86_64)
     runs-on: ubuntu-24.04
+    container: debian:trixie
     env:
       APPIMAGE_EXTRACT_AND_RUN: "1" # let linuxdeploy run without FUSE
       DEPLOY_GTK_VERSION: "4" # gtk plugin: bundle GTK4, not GTK3
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git wget file xz-utils patchelf desktop-file-utils \
+            build-essential cmake pkg-config dpkg-dev \
             libgtk-4-dev libadwaita-1-dev libmpv-dev \
-            librsvg2-dev libssl-dev \
-            imagemagick
+            librsvg2-dev librsvg2-bin libssl-dev
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          [ "${GITHUB_REF_TYPE}" = tag ] || exit 0
+          crate="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -1)"
+          [ "v${crate}" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != Cargo.toml version ${crate}"; exit 1; }
 
       - name: Build
         run: cargo build --release --locked
@@ -46,29 +63,20 @@ jobs:
       - name: Package
         env:
           TAG: ${{ github.ref_name }}
-          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="${VERSION#v}"
-
           mkdir -p dist
           tar -czf "dist/lumpla-linux-x86_64-${TAG}.tar.gz" -C target/release lumpla
 
-          # Minimal desktop entry + icon; linuxdeploy requires both.
+          cargo deb --no-build --output "dist/lumpla-linux-amd64-${TAG}.deb"
+
           mkdir -p AppDir/usr/bin \
             AppDir/usr/share/applications \
             AppDir/usr/share/icons/hicolor/256x256/apps
           install -m0755 target/release/lumpla AppDir/usr/bin/lumpla
-          cat > AppDir/usr/share/applications/lumpla.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=Lumpla
-          Exec=lumpla
-          Icon=lumpla
-          Categories=AudioVideo;Video;Player;
-          EOF
-          convert assets/demo.jpg -resize 256x256 \
-            AppDir/usr/share/icons/hicolor/256x256/apps/lumpla.png
+          install -m0644 packaging/io.github.andunieee.Lumpla.desktop AppDir/usr/share/applications/
+          rsvg-convert -w 256 -h 256 assets/io.github.andunieee.Lumpla.svg \
+            -o AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Lumpla.png
 
           wget -qc https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -qc https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
@@ -80,8 +88,8 @@ jobs:
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             -e AppDir/usr/bin/lumpla \
-            -d AppDir/usr/share/applications/lumpla.desktop \
-            -i AppDir/usr/share/icons/hicolor/256x256/apps/lumpla.png \
+            -d AppDir/usr/share/applications/io.github.andunieee.Lumpla.desktop \
+            -i AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Lumpla.png \
             --plugin gtk \
             --output appimage \
             --exclude-library 'libEGL.so*' \
@@ -94,6 +102,83 @@ jobs:
           name: linux
           path: dist/
 
+  # RPM Fusion carries libmpv on Fedora (the official repositories have no mpv).
+  rpm:
+    name: rpm (x86_64)
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+          dnf install -y git tar gzip curl gcc gcc-c++ cmake pkgconf-pkg-config rpm-build \
+            gtk4-devel libadwaita-devel mpv-devel openssl-devel
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate-rpm
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          strip target/release/lumpla
+          mkdir -p dist
+          cargo generate-rpm --output "dist/lumpla-linux-x86_64-${TAG}.rpm"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/
+
+  flatpak-sources:
+    name: flatpak (cargo sources)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the offline cargo sources
+        run: |
+          pip install aiohttp tomlkit
+          curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+          python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-sources
+          path: packaging/flatpak/cargo-sources.json
+
+  flatpak:
+    name: flatpak (x86_64)
+    needs: flatpak-sources
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-sources
+          path: packaging/flatpak
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: lumpla-linux-x86_64-${{ github.ref_name }}.flatpak
+          manifest-path: packaging/flatpak/io.github.andunieee.Lumpla.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          arch: x86_64
+          upload-artifact: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: lumpla-linux-x86_64-${{ github.ref_name }}.flatpak
+
   macos:
     name: macos (arm64)
     # Apple Silicon only: Intel runners and Homebrew Intel bottles were
@@ -105,10 +190,13 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install gtk4 libadwaita mpv
+          brew install gtk4 libadwaita mpv librsvg
 
       - name: Build
-        run: cargo build --release --locked
+        run: |
+          # rustc doesn't search Homebrew's prefix, libmpv2-sys just asks for -lmpv.
+          export LIBRARY_PATH="$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          cargo build --release --locked
 
       - name: Package
         env:
@@ -121,7 +209,7 @@ jobs:
           MACOS_DIR="$APP/Contents/MacOS"
           RES_DIR="$APP/Contents/Resources"
           LIBDIR="$MACOS_DIR/lib"
-          mkdir -p "$MACOS_DIR/lib" "$RES_DIR/lib"
+          mkdir -p "$LIBDIR" "$RES_DIR/share" "$RES_DIR/lib/gdk-pixbuf-2.0/2.10.0/loaders"
 
           cp target/release/lumpla "$MACOS_DIR/lumpla-bin"
 
@@ -130,9 +218,11 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleIdentifier</key><string>cash.cassis.lumpla</string>
+            <key>CFBundleIdentifier</key><string>io.github.andunieee.Lumpla</string>
             <key>CFBundleName</key><string>Lumpla</string>
             <key>CFBundleExecutable</key><string>lumpla</string>
+            <key>CFBundleIconFile</key><string>Lumpla</string>
+            <key>LSMinimumSystemVersion</key><string>15.0</string>
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>
             <key>CFBundleVersion</key><string>${VERSION}</string>
             <key>CFBundlePackageType</key><string>APPL</string>
@@ -143,8 +233,6 @@ jobs:
 
           # Finder strips DYLD_* env vars, so all libraries are resolved with
           # @executable_path rpaths baked into the binary and every dylib.
-          # (GL proc lookup is Linux-only in src/player.rs — macOS video
-          # rendering needs a platform loader added there later.)
           BREW="$(brew --prefix)"
 
           # 1. copy every Homebrew dylib, recursively via otool.
@@ -167,6 +255,17 @@ jobs:
             collect "$dep"
           done
 
+          # gdk-pixbuf loaders (PNG/SVG icons...) are dlopen()ed, so they are not in otool's
+          # output: copy them with their dependencies and keep them next to the other libraries.
+          PIXBUF="$RES_DIR/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+          cp "$BREW"/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.so "$PIXBUF/"
+          chmod u+w "$PIXBUF"/*.so
+          for loader in "$PIXBUF"/*.so; do
+            while read -r dep; do
+              collect "$dep"
+            done < <(otool -L "$loader" | awk 'NR>1{print $1}' | sed "s|^@rpath|$BREW/lib|")
+          done
+
           # 2. rewrite every reference to point into the bundle.
           rewrite() {
             while read -r dep; do
@@ -177,19 +276,41 @@ jobs:
             done < <(otool -L "$1" | awk 'NR>1{print $1}')
           }
           rewrite "$MACOS_DIR/lumpla-bin"
-          for lib in "$LIBDIR"/*; do
+          for lib in "$LIBDIR"/* "$PIXBUF"/*.so; do
             install_name_tool -id "@executable_path/lib/$(basename "$lib")" "$lib" 2>/dev/null || true
             rewrite "$lib"
           done
 
-          # 3. GObject introspection typelibs (GTK-4, Adw-1, GLib, ...).
-          cp "$BREW"/lib/girepository-1.0/*.typelib "$RES_DIR/lib/girepository-1.0/"
+          # 3. Data GTK looks up at runtime: compiled glib schemas and the icon themes.
+          mkdir -p "$RES_DIR/share/glib-2.0/schemas" "$RES_DIR/share/icons"
+          cp "$BREW"/share/glib-2.0/schemas/*.xml "$RES_DIR/share/glib-2.0/schemas/"
+          glib-compile-schemas "$RES_DIR/share/glib-2.0/schemas"
+          for theme in Adwaita hicolor; do
+            [ -d "$BREW/share/icons/$theme" ] && cp -R "$BREW/share/icons/$theme" "$RES_DIR/share/icons/"
+          done
+
+          # The loaders cache lists absolute paths, so it is written on each launch.
+          GDK_PIXBUF_MODULEDIR="$PIXBUF" "$BREW/bin/gdk-pixbuf-query-loaders" "$PIXBUF"/*.so \
+            | sed "s|$PIXBUF|@RES@/lib/gdk-pixbuf-2.0/2.10.0/loaders|" > "$RES_DIR/loaders.cache.in"
+
+          # 4. App icon.
+          ICONSET="$(mktemp -d)/Lumpla.iconset"
+          mkdir -p "$ICONSET"
+          for size in 16 32 128 256 512; do
+            rsvg-convert -w "$size" -h "$size" assets/io.github.andunieee.Lumpla.svg -o "$ICONSET/icon_${size}x${size}.png"
+            rsvg-convert -w "$((size * 2))" -h "$((size * 2))" assets/io.github.andunieee.Lumpla.svg -o "$ICONSET/icon_${size}x${size}@2x.png"
+          done
+          iconutil -c icns "$ICONSET" -o "$RES_DIR/Lumpla.icns"
 
           cat > "$MACOS_DIR/lumpla" <<'EOF'
           #!/bin/bash
           HERE="$(cd "$(dirname "$0")" && pwd)"
           RES="$(cd "$HERE/../Resources" && pwd)"
-          export GI_TYPELIB_PATH="$RES/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+          CACHE="${TMPDIR:-/tmp}/lumpla-pixbuf-$(id -u).cache"
+          sed "s|@RES@|$RES|g" "$RES/loaders.cache.in" > "$CACHE"
+          export GDK_PIXBUF_MODULE_FILE="$CACHE"
+          export XDG_DATA_DIRS="$RES/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+          export GSETTINGS_SCHEMA_DIR="$RES/share/glib-2.0/schemas"
           exec "$HERE/lumpla-bin" "$@"
           EOF
           chmod +x "$MACOS_DIR/lumpla"
@@ -284,7 +405,7 @@ jobs:
           path: dist/
 
   release:
-    needs: [linux, macos, windows]
+    needs: [linux, rpm, flatpak, macos, windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -301,7 +422,7 @@ jobs:
           cat > "$NOTES" <<'EOF'
           Portable bundles — all runtime libraries included (GTK4 cannot be linked statically upstream).
 
-          - **linux**: `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise) or `.tar.gz` (requires system GTK4/libadwaita/libmpv).
+          - **linux**: `.flatpak` (`flatpak install lumpla-*.flatpak`), `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, needs [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise, and glibc 2.41+), or `.tar.gz` (requires system GTK4 4.10+/libadwaita 1.7+/libmpv).
           - **macos**: Apple Silicon (arm64) only, unsigned — first launch: right-click > Open, or `xattr -d com.apple.quarantine lumpla.app`.
           - **windows**: extract, run `lumpla.bat`.
           yt-dlp is managed by the app at runtime, not bundled.

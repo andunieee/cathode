@@ -1,2 +1,5 @@
 /target
-Cargo.lock
+/packaging/flatpak/cargo-sources.json
+/.flatpak-builder
+/build-dir
+/repo
