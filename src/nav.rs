@@ -1752,7 +1752,57 @@ fn refresh_queue() {
         });
         row.add_suffix(&remove);
 
+        // Dragging a row onto another one moves it to that place.
+        let source = gtk::DragSource::new();
+        source.set_actions(gdk::DragAction::MOVE);
+        source.connect_prepare({
+            let id = entry.id.clone();
+            move |_, _, _| Some(gdk::ContentProvider::for_value(&id.to_value()))
+        });
+        source.connect_drag_begin({
+            let row = row.clone();
+            move |source, _| {
+                let paintable = gtk::WidgetPaintable::new(Some(&row));
+                source.set_icon(Some(&paintable), 0, 0);
+            }
+        });
+        row.add_controller(source);
+
+        let target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+        target.connect_drop({
+            let id = entry.id.clone();
+            move |_, value, _, _| match value.get::<String>() {
+                Ok(dragged) => {
+                    // The list is rebuilt, not while the drag is still ending.
+                    let id = id.clone();
+                    glib::idle_add_local_once(move || queue_move(&dragged, &id));
+                    true
+                }
+                Err(_) => false,
+            }
+        });
+        row.add_controller(target);
+
         ui.queue_list.append(&row);
+    }
+}
+
+/// Moves a video of the queue to the place of another one.
+fn queue_move(id: &str, onto: &str) {
+    let moved = with(|state| {
+        let from = state.queue.iter().position(|item| item.entry.id == id)?;
+        let to = state.queue.iter().position(|item| item.entry.id == onto)?;
+        if from == to {
+            return None;
+        }
+        let item = state.queue.remove(from);
+        state.queue.insert(to, item);
+        Some(())
+    });
+
+    if moved.is_some() {
+        save_session();
+        refresh_queue();
     }
 }
 
