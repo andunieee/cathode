@@ -52,6 +52,9 @@ pub struct Ui {
     pub allow_channel: gtk::Button,
     pub subscribe_button: gtk::Button,
     pub results_status: gtk::Label,
+    /// The channels a search found, above its videos.
+    pub channel_results: gtk::Box,
+    pub channel_results_row: gtk::ScrolledWindow,
     pub store: gio::ListStore,
 
     pub video_picture: gtk::Picture,
@@ -416,8 +419,20 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         glib::Propagation::Stop
     });
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+    let channel_results = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    channel_results.set_margin_start(12);
+    channel_results.set_margin_end(12);
+    channel_results.set_margin_bottom(6);
+    let channel_results_row = gtk::ScrolledWindow::builder()
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .visible(false)
+        .child(&channel_results)
+        .build();
     let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
     results.append(&channel_header);
+    results.append(&channel_results_row);
     results.append(&results_status);
     results.append(
         &gtk::ScrolledWindow::builder()
@@ -919,6 +934,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         allow_channel,
         subscribe_button,
         results_status,
+        channel_results,
+        channel_results_row,
         store,
         video_picture,
         video_title,

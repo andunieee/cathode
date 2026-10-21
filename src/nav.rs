@@ -81,6 +81,8 @@ impl Page {
 /// A listing as far as it was received.
 struct Listing {
     entries: Vec<Entry>,
+    /// The channels of a search.
+    channels: Vec<ChannelRef>,
     done: bool,
 }
 
@@ -265,14 +267,49 @@ fn update_results_status(key: &str) {
     ui::get().results_status.set_text(&text);
 }
 
+/// Fills the row of channels above the results, which is hidden when there are none.
+fn show_channel_results(channels: &[ChannelRef]) {
+    let ui = ui::get();
+    while let Some(child) = ui.channel_results.first_child() {
+        ui.channel_results.remove(&child);
+    }
+    for channel in channels
+        .iter()
+        .filter(|c| !profile::restricted() || profile::allows_channel(&c.id))
+    {
+        let button = gtk::Button::builder()
+            .label(&channel.name)
+            .tooltip_text("Open the channel")
+            .build();
+        let (id, name) = (channel.id.clone(), channel.name.clone());
+        button.connect_clicked(move |_| {
+            navigate(Page::Channel {
+                id: id.clone(),
+                name: name.clone(),
+                query: String::new(),
+            })
+        });
+        ui.channel_results.append(&button);
+    }
+    ui.channel_results_row
+        .set_visible(ui.channel_results.first_child().is_some());
+}
+
 fn show_listing(key: String, source: Source) {
     let ui = ui::get();
     ui.stack.set_visible_child_name("results");
     ui.store.remove_all();
 
-    let cached = with(|state| state.listings.get(&key).map(|l| l.entries.clone()));
+    show_channel_results(&[]);
+    let cached = with(|state| {
+        state
+            .listings
+            .get(&key)
+            .map(|l| (l.entries.clone(), l.channels.clone()))
+    });
     match cached {
-        Some(entries) => {
+        Some((entries, channels)) => {
+            show_channel_results(&channels);
             note_listed(&key, &entries);
             append_entries(&ui, &entries);
         }
@@ -282,6 +319,7 @@ fn show_listing(key: String, source: Source) {
                     key.clone(),
                     Listing {
                         entries: Vec::new(),
+                        channels: Vec::new(),
                         done: false,
                     },
                 )
@@ -1818,6 +1856,7 @@ pub fn handle(response: Response) {
                     .entry(key.clone())
                     .or_insert_with(|| Listing {
                         entries: Vec::new(),
+                        channels: Vec::new(),
                         done: false,
                     });
                 listing.entries.extend(entries.iter().cloned());
@@ -1835,6 +1874,17 @@ pub fn handle(response: Response) {
             if current().key() == key {
                 append_entries(&ui, &entries);
                 update_results_status(&key);
+            }
+        }
+        Response::Channels { key, channels } => {
+            let all = with(|state| {
+                state.listings.get_mut(&key).map(|listing| {
+                    listing.channels.extend(channels);
+                    listing.channels.clone()
+                })
+            });
+            if let Some(all) = all.filter(|_| current().key() == key) {
+                show_channel_results(&all);
             }
         }
         Response::ListingDone { key, error } => {

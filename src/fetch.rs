@@ -156,6 +156,11 @@ pub enum Response {
         key: String,
         entries: Vec<Entry>,
     },
+    /// The channels a search turned up, they come before its videos.
+    Channels {
+        key: String,
+        channels: Vec<ChannelRef>,
+    },
     ListingDone {
         key: String,
         error: Option<String>,
@@ -374,17 +379,8 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
                 Err(error) => finish(Some(error)),
             };
         }
-        Source::Search {
-            query,
-            sort: SearchSort::Relevance,
-            filter: SearchFilter::None,
-        } => (
-            format!("ytsearch{SEARCH_MAX_RESULTS}:{query}"),
-            SEARCH_MAX_RESULTS,
-        ),
-        // The other sorts don't exist as yt-dlp search keys (`ytsearchdate` was dropped), so
-        // they go through YouTube's own results URL, where `sp` is a protobuf carrying the
-        // sort in the first field and the filter in a second one.
+        // Only YouTube's own results URL lists channels among the videos, and `sp` is a
+        // protobuf carrying the sort in the first field and the filter in a second one.
         Source::Search {
             query,
             sort,
@@ -694,10 +690,15 @@ async fn stream_listing(
         };
 
         let Ok(Some(line)) = line else { break };
-        if let Some(entry) = serde_json::from_str::<Value>(&line)
-            .ok()
-            .and_then(|value| parse_entry(&value))
-        {
+        let value = serde_json::from_str::<Value>(&line).ok();
+        if let Some(channel) = value.as_ref().and_then(parse_channel) {
+            if seen.insert(channel.id.clone()) {
+                on_response(Response::Channels {
+                    key: key.to_string(),
+                    channels: vec![channel],
+                });
+            }
+        } else if let Some(entry) = value.as_ref().and_then(parse_entry) {
             if seen.insert(entry.id.clone()) {
                 batch.push(entry);
             }
@@ -720,6 +721,18 @@ async fn stream_listing(
     } else {
         Ok(())
     }
+}
+
+/// Parses a channel row of a search, which has no duration and links to `/channel/`.
+fn parse_channel(entry: &Value) -> Option<ChannelRef> {
+    if !string(entry, "url")?.contains("youtube.com/channel/") || entry["duration"].is_number() {
+        return None;
+    }
+    let id = string(entry, "channel_id").or_else(|| string(entry, "id"))?;
+    let name = string(entry, "channel")
+        .or_else(|| string(entry, "title"))
+        .or_else(|| string(entry, "uploader"))?;
+    Some(ChannelRef { id, name })
 }
 
 /// Parses one line of `yt-dlp --flat-playlist -j` output.

@@ -8,7 +8,7 @@ Search for a video, open it and hit play, and Lumpla downloads it with yt-dlp in
 Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `GtkGLArea`, so the player controls are plain widgets overlaid on the video.
 
 # Features
-- [x] Search YouTube (up to 100 results, with thumbnails), sorted by relevance or date
+- [x] Search YouTube (up to 100 results, with thumbnails, and the channels that match above them), sorted by relevance or date
 - [x] Channel pages (up to 1000 videos), with search inside the channel
 - [x] Video pages with metadata and the upload date
 - [x] Back/forward history (also Alt+Left/Right and the mouse buttons)
