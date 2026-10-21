@@ -796,6 +796,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.001);
     seek.set_cursor(Some(&crate::ui::pointer()));
     seek.set_hexpand(true);
+    seek.add_css_class("seek-bar");
     seek.set_draw_value(false);
     seek.connect_change_value(|_, _, value| {
         nav::seek(value.clamp(0.0, 1.0));
