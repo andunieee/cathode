@@ -142,6 +142,10 @@ struct State {
     sidebar_widths: Option<(f64, f64)>,
     /// Where to pause, when the playback started from a chapter.
     chapter_stop: Option<f64>,
+    /// The sponsor segments of the videos looked up, `(start, end)` in seconds. Videos without
+    /// any are there too, with an empty list.
+    segments: HashMap<String, Vec<(f64, f64)>>,
+    segment_lookups: HashSet<String>,
 
     /// Ids of the videos of the feed on screen, so it is only rebuilt when it changed.
     feed_ids: Vec<String>,
@@ -161,6 +165,8 @@ thread_local! {
         pending_seek: None,
         positions: HashMap::new(),
         chapter_stop: None,
+        segments: HashMap::new(),
+        segment_lookups: HashSet::new(),
         sidebar_widths: None,
         infos: HashMap::new(),
         info_lookups: HashSet::new(),
@@ -479,6 +485,44 @@ fn show_player_chapters() {
                 .add_mark(chapter.start / total, gtk::PositionType::Bottom, None);
         }
     }
+}
+
+/// What the seek bar tells about the point `x` of its `width` pixels: the chapter and sponsor
+/// segment there.
+pub fn seek_tooltip(x: f64, width: f64) -> Option<String> {
+    let ui = ui::get();
+    let id = ui.player.id()?;
+    let duration = ui.player.duration();
+    if duration <= 0.0 || width <= 0.0 {
+        return None;
+    }
+    let time = (x / width).clamp(0.0, 1.0) * duration;
+
+    let mut lines = Vec::new();
+    if let Some(chapter) = chapters_of(&id)
+        .iter()
+        .find(|chapter| time >= chapter.start && time < chapter.end)
+    {
+        lines.push(chapter.title.clone());
+    }
+    if ui
+        .sponsor_spans
+        .borrow()
+        .1
+        .iter()
+        .any(|(start, end)| time >= *start && time < *end)
+    {
+        lines.push("Sponsor".to_string());
+    }
+    lines.push(format::duration(time));
+    Some(lines.join("\n"))
+}
+
+/// Paints the sponsor segments on the seek bar.
+fn show_sponsor_marks(segments: Vec<(f64, f64)>) {
+    let ui = ui::get();
+    ui.sponsor_spans.borrow_mut().1 = segments;
+    ui.seek_marks.queue_draw();
 }
 
 /// Plays a chapter of the video on the current page, and pauses when it ends.
@@ -1378,6 +1422,19 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
         }
     });
     show_player_chapters();
+    show_sponsor_marks(Vec::new());
+    if settings::get().skip_sponsors && !entry.url.is_empty() {
+        if let Some(segments) = with(|state| state.segments.get(&entry.id).cloned()) {
+            show_sponsor_marks(segments.clone());
+            ui.player.set_skips(segments);
+        }
+        let lookup = with(|state| state.segment_lookups.insert(entry.id.clone()));
+        if lookup {
+            send(Request::Segments {
+                id: entry.id.clone(),
+            });
+        }
+    }
     // Files from the command line aren't YouTube videos.
     if !entry.url.is_empty() {
         if let Err(error) = history::record(entry) {
@@ -1627,6 +1684,10 @@ pub fn tick() {
     if with(|state| state.chapter_stop.is_some_and(|stop| position >= stop - 0.05)) {
         with(|state| state.chapter_stop = None);
         ui.player.set_paused(true);
+    }
+    if ui.sponsor_spans.borrow().0 != duration {
+        ui.sponsor_spans.borrow_mut().0 = duration;
+        ui.seek_marks.queue_draw();
     }
     ui.time_label.set_text(&format!(
         "{} / {}",
@@ -2680,6 +2741,14 @@ pub fn handle(response: Response) {
                     }
                 }
             }
+        }
+        Response::Segments { id, segments } => {
+            let ui = ui::get();
+            if settings::get().skip_sponsors && ui.player.id().as_deref() == Some(&id) {
+                show_sponsor_marks(segments.clone());
+                ui.player.set_skips(segments.clone());
+            }
+            with(|state| state.segments.insert(id, segments));
         }
         Response::Thumbnail { id, large, image } => {
             let bytes = glib::Bytes::from_owned(image.rgba);

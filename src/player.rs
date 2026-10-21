@@ -113,6 +113,11 @@ pub struct Player {
     id: RefCell<Option<String>>,
     /// A file to load once the render context exists: without it mpv drops the video.
     waiting: RefCell<Option<String>>,
+    this: std::rc::Weak<Player>,
+    /// Parts of the video to jump over, `(start, end)` in seconds.
+    skips: RefCell<Vec<(f64, f64)>>,
+    /// Fires when the next of those parts is reached.
+    skip_timer: RefCell<Option<glib::SourceId>>,
 
     // NOTE: the render context has to be dropped before `mpv`.
     render: RefCell<Option<RenderContext<'static>>>,
@@ -137,7 +142,10 @@ impl Player {
         area.set_vexpand(true);
         area.set_has_depth_buffer(false);
 
-        let player = Rc::new(Self {
+        let player = Rc::new_cyclic(|this| Self {
+            this: this.clone(),
+            skips: RefCell::new(Vec::new()),
+            skip_timer: RefCell::new(None),
             area,
             ended: Cell::new(false),
             settling: Cell::new(0),
@@ -258,6 +266,8 @@ impl Player {
         *self.id.borrow_mut() = Some(id.to_string());
         self.ended.set(false);
         self.settling.set(10);
+        self.skips.borrow_mut().clear();
+        self.cancel_skip();
         if self.render.borrow().is_some() {
             *self.waiting.borrow_mut() = None;
             let _ = self.mpv.command("loadfile", &[file, "replace"]);
@@ -272,6 +282,8 @@ impl Player {
         *self.id.borrow_mut() = None;
         self.ended.set(false);
         *self.waiting.borrow_mut() = None;
+        self.skips.borrow_mut().clear();
+        self.cancel_skip();
         let _ = self.mpv.command("stop", &[]);
         self.area.queue_render();
     }
@@ -279,6 +291,7 @@ impl Player {
     pub fn set_paused(&self, paused: bool) {
         let _ = self.mpv.set_property("pause", paused);
         self.area.queue_render();
+        self.schedule_skip(self.position());
     }
 
     pub fn is_paused(&self) -> bool {
@@ -288,6 +301,7 @@ impl Player {
     /// Playback speed, 1.0 is the normal one.
     pub fn set_speed(&self, speed: f64) {
         let _ = self.mpv.set_property("speed", speed);
+        self.schedule_skip(self.position());
     }
 
     /// Volume from 0 to 100.
@@ -309,6 +323,7 @@ impl Player {
             .mpv
             .command(if forward { "frame-step" } else { "frame-back-step" }, &[]);
         self.area.queue_render();
+        self.cancel_skip();
     }
 
     pub fn position(&self) -> f64 {
@@ -324,6 +339,61 @@ impl Player {
             .mpv
             .command("seek", &[&seconds.to_string(), "absolute"]);
         self.area.queue_render();
+        // The position only catches up with a seek later, so go by where it is going.
+        self.schedule_skip(seconds);
+    }
+
+    /// Sets the parts to jump over in the video loaded. Starting inside one of them plays it.
+    pub fn set_skips(&self, mut skips: Vec<(f64, f64)>) {
+        skips.sort_by(|a, b| a.0.total_cmp(&b.0));
+        *self.skips.borrow_mut() = skips;
+        // Before the first position there is one, the start of the video counts as ahead.
+        let position = self.mpv.get_property::<f64>("time-pos").unwrap_or(-0.001);
+        self.schedule_skip(position);
+    }
+
+    fn cancel_skip(&self) {
+        if let Some(timer) = self.skip_timer.borrow_mut().take() {
+            timer.remove();
+        }
+    }
+
+    /// Arranges to jump over the next skip part that starts after `position`, when the playback
+    /// gets there. Nothing is scheduled while paused, resuming schedules again.
+    fn schedule_skip(&self, position: f64) {
+        self.cancel_skip();
+        if self.is_paused() {
+            return;
+        }
+        let next = self
+            .skips
+            .borrow()
+            .iter()
+            .find(|(start, _)| *start > position)
+            .copied();
+        let Some((start, end)) = next else {
+            return;
+        };
+
+        let speed = self.mpv.get_property::<f64>("speed").unwrap_or(1.0).max(0.01);
+        let delay = std::time::Duration::from_secs_f64(((start - position) / speed).max(0.0));
+        let this = self.this.clone();
+        let timer = glib::timeout_add_local_once(delay, move || {
+            let Some(player) = this.upgrade() else {
+                return;
+            };
+            // The source is gone once it has run.
+            player.skip_timer.borrow_mut().take();
+            let now = player.position();
+            if now >= start - 0.5 && now < end {
+                let duration = player.duration();
+                player.seek_to(if duration > 0.0 { end.min(duration) } else { end });
+            } else {
+                // Something moved the playback in the meantime.
+                player.schedule_skip(now);
+            }
+        });
+        *self.skip_timer.borrow_mut() = Some(timer);
     }
 
     /// True once, when the current file has played to its end.

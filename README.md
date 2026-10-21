@@ -59,7 +59,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ## And also
 - Back and forward navigation, with Alt+Left/Right and the mouse buttons
 - Watch history
-- Settings for download quality, sponsor segment removal, speed limit, proxy and browser cookies for age-restricted videos
+- Settings for download quality, sponsor segment skipping, speed limit, proxy and browser cookies for age-restricted videos
 
 # Installation
 ## Releases

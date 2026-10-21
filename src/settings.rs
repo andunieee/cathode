@@ -36,8 +36,9 @@ pub struct Settings {
     pub proxy: String,
     /// `--limit-rate` (like `2M`), empty for none.
     pub limit_rate: String,
-    /// Cuts the sponsor segments out of the downloaded videos (SponsorBlock).
-    pub remove_sponsors: bool,
+    /// Skips the sponsor segments (SponsorBlock) while playing.
+    #[serde(alias = "remove_sponsors")]
+    pub skip_sponsors: bool,
     /// Hides the seek bar of the player.
     pub hide_progress_bar: bool,
 }
@@ -49,7 +50,7 @@ impl Default for Settings {
             cookies_from_browser: None,
             proxy: String::new(),
             limit_rate: String::new(),
-            remove_sponsors: false,
+            skip_sponsors: false,
             hide_progress_bar: false,
         }
     }
@@ -148,9 +149,6 @@ pub fn download_args(height: Option<u32>) -> Vec<String> {
     let rate = settings.limit_rate.trim();
     if !rate.is_empty() {
         args.extend(["--limit-rate".to_string(), rate.to_string()]);
-    }
-    if settings.remove_sponsors {
-        args.extend(["--sponsorblock-remove".to_string(), "sponsor".to_string()]);
     }
     args
 }

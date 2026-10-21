@@ -196,6 +196,10 @@ pub enum Request {
     Latest {
         channel_id: String,
     },
+    /// The sponsor segments of a video, from SponsorBlock.
+    Segments {
+        id: String,
+    },
     /// Tries yt-dlp with the cookies of the browser, before the setting is accepted.
     CheckCookies {
         browser: String,
@@ -241,6 +245,11 @@ pub enum Response {
     },
     Resolved {
         result: Result<Item, String>,
+    },
+    /// The `(start, end)` of the parts to skip, in seconds.
+    Segments {
+        id: String,
+        segments: Vec<(f64, f64)>,
     },
     CookiesChecked {
         browser: String,
@@ -376,6 +385,13 @@ async fn run(
                         result: check_cookies(&browser).await,
                         browser,
                     });
+                });
+            }
+            Request::Segments { id } => {
+                tokio::spawn(async move {
+                    // Not worth bothering the user when SponsorBlock is out of reach.
+                    let segments = sponsor_segments(&id).await.unwrap_or_default();
+                    on_response(Response::Segments { id, segments });
                 });
             }
             Request::Thumbnail { id, large } => {
@@ -1021,6 +1037,50 @@ async fn download(
 
     path.or_else(|| crate::cache::find_size(&entry.id, height))
         .ok_or_else(|| "yt-dlp did not report the downloaded file".to_string())
+}
+
+/// The sponsor segments SponsorBlock knows for a video. Only the start of the hash of the id is
+/// sent, so that the service doesn't learn which video it is.
+async fn sponsor_segments(id: &str) -> Result<Vec<(f64, f64)>, String> {
+    use sha2::{Digest, Sha256};
+
+    let id = bare_id(id);
+    let hash = Sha256::digest(id.as_bytes());
+    let url = reqwest::Url::parse_with_params(
+        &format!(
+            "https://sponsor.ajay.app/api/skipSegments/{:02x}{:02x}",
+            hash[0], hash[1]
+        ),
+        [("category", "sponsor"), ("actionType", "skip")],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    // Nothing is known about the videos without segments.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Vec::new());
+    }
+    let bytes = response
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    let videos: Vec<Value> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+
+    let mut segments: Vec<(f64, f64)> = videos
+        .iter()
+        .filter(|video| video["videoID"] == id)
+        .filter_map(|video| video["segments"].as_array())
+        .flatten()
+        .filter_map(|segment| {
+            let range = segment["segment"].as_array()?;
+            Some((range.first()?.as_f64()?, range.get(1)?.as_f64()?))
+        })
+        .filter(|(start, end)| end > start)
+        .collect();
+    segments.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Ok(segments)
 }
 
 async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {

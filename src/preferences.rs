@@ -107,13 +107,13 @@ fn general() -> adw::PreferencesPage {
     });
 
     let sponsors = adw::SwitchRow::builder()
-        .title("Remove sponsor segments")
-        .subtitle("Cuts the sponsored parts out of downloaded videos (SponsorBlock)")
-        .active(current.remove_sponsors)
+        .title("Skip sponsor segments")
+        .subtitle("Jumps over the sponsored parts while playing (SponsorBlock)")
+        .active(current.skip_sponsors)
         .build();
     sponsors.connect_active_notify(|row| {
         let active = row.is_active();
-        save(|s| s.remove_sponsors = active);
+        save(|s| s.skip_sponsors = active);
     });
 
     let rate = entry_row(

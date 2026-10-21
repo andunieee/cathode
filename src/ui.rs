@@ -103,6 +103,10 @@ pub struct Ui {
     pub player_status: gtk::Label,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
+    /// Paints the sponsor segments over the seek bar.
+    pub seek_marks: gtk::DrawingArea,
+    /// Duration of the video, and the `(start, end)` of its sponsor segments in seconds.
+    pub sponsor_spans: Rc<RefCell<(f64, Vec<(f64, f64)>)>>,
     pub time_label: gtk::Label,
     /// The sizes the video in the player can be downloaded at, in the order of `QUALITIES`.
     pub size_buttons: Vec<gtk::CheckButton>,
@@ -781,6 +785,40 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         nav::seek(value.clamp(0.0, 1.0));
         glib::Propagation::Proceed
     });
+    seek.set_has_tooltip(true);
+    seek.connect_query_tooltip(|seek, x, _y, _keyboard, tooltip| {
+        match nav::seek_tooltip(x as f64, seek.width() as f64) {
+            Some(text) => {
+                tooltip.set_text(Some(&text));
+                true
+            }
+            None => false,
+        }
+    });
+    let sponsor_spans: Rc<RefCell<(f64, Vec<(f64, f64)>)>> = Default::default();
+    let seek_marks = gtk::DrawingArea::new();
+    seek_marks.set_can_target(false);
+    seek_marks.set_draw_func({
+        let spans = sponsor_spans.clone();
+        move |_, context, width, height| {
+            let (duration, segments) = &*spans.borrow();
+            if *duration <= 0.0 {
+                return;
+            }
+            // The colour SponsorBlock uses for sponsors.
+            context.set_source_rgba(0.0, 0.83, 0.0, 0.75);
+            let (width, bar) = (width as f64, 6.0);
+            for (start, end) in segments {
+                let (from, to) = (start / duration, (end / duration).min(1.0));
+                context.rectangle(from * width, (height as f64 - bar) / 2.0, (to - from) * width, bar);
+            }
+            let _ = context.fill();
+        }
+    });
+    let seek_overlay = gtk::Overlay::new();
+    seek_overlay.set_hexpand(true);
+    seek_overlay.set_child(Some(&seek));
+    seek_overlay.add_overlay(&seek_marks);
     let time_label = gtk::Label::new(Some("0:00 / 0:00"));
     time_label.add_css_class("numeric");
     let speed = gtk::DropDown::from_strings(
@@ -893,7 +931,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Two rows, the sidebar is narrow.
     let seek_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    seek_row.append(&seek);
+    seek_row.append(&seek_overlay);
     seek_row.append(&time_label);
     let skip_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     skip_row.set_halign(gtk::Align::Center);
@@ -1233,6 +1271,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         player_status,
         play_button,
         seek,
+        seek_marks,
+        sponsor_spans,
         time_label,
         size_buttons,
         size_status,
