@@ -295,6 +295,22 @@ impl Player {
         let _ = self.mpv.set_property("volume", volume);
     }
 
+    pub fn is_muted(&self) -> bool {
+        self.mpv.get_property::<bool>("mute").unwrap_or(false)
+    }
+
+    pub fn set_muted(&self, muted: bool) {
+        let _ = self.mpv.set_property("mute", muted);
+    }
+
+    /// Moves one frame, which leaves the video paused.
+    pub fn step_frame(&self, forward: bool) {
+        let _ = self
+            .mpv
+            .command(if forward { "frame-step" } else { "frame-back-step" }, &[]);
+        self.area.queue_render();
+    }
+
     pub fn position(&self) -> f64 {
         self.mpv.get_property::<f64>("time-pos").unwrap_or(0.0)
     }

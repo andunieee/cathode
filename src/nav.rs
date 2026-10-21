@@ -1440,6 +1440,98 @@ pub fn set_volume(volume: f64) {
     ui::get().player.set_volume(volume * 100.0);
 }
 
+pub fn volume_icon(volume: f64, muted: bool) -> &'static str {
+    match volume {
+        _ if muted || volume <= 0.0 => "audio-volume-muted-symbolic",
+        v if v < 0.34 => "audio-volume-low-symbolic",
+        v if v < 0.67 => "audio-volume-medium-symbolic",
+        _ => "audio-volume-high-symbolic",
+    }
+}
+
+pub fn toggle_mute() {
+    let ui = ui::get();
+    let muted = !ui.player.is_muted();
+    ui.player.set_muted(muted);
+    ui.volume
+        .set_icon_name(volume_icon(ui.volume_scale.value(), muted));
+}
+
+/// Moves the volume by `delta`, on the scale of 0 to 1.
+pub fn change_volume(delta: f64) {
+    let ui = ui::get();
+    if ui.player.is_muted() {
+        toggle_mute();
+    }
+    ui.volume_scale
+        .set_value((ui.volume_scale.value() + delta).clamp(0.0, 1.0));
+    toast(&format!("Volume: {}%", (ui.volume_scale.value() * 100.0).round()));
+}
+
+/// Picks the next or the previous of the playback speeds on offer.
+pub fn step_speed(direction: i32) {
+    let ui = ui::get();
+    let last = ui.speed.model().map_or(0, |model| model.n_items()).saturating_sub(1);
+    let selected = (ui.speed.selected() as i64 + direction as i64).clamp(0, last as i64);
+    ui.speed.set_selected(selected as u32);
+}
+
+pub fn reset_speed() {
+    ui::get().speed.set_selected(ui::NORMAL_SPEED);
+}
+
+pub fn step_frame(forward: bool) {
+    let ui = ui::get();
+    ui.player.step_frame(forward);
+}
+
+/// Jumps to the start of the next chapter, or of the current one if it was left a while ago.
+pub fn step_chapter(direction: i32) {
+    let ui = ui::get();
+    let Some(id) = ui.player.id() else {
+        return;
+    };
+    let chapters = chapters_of(&id);
+    let position = ui.player.position();
+    let current = chapters.iter().rposition(|chapter| chapter.start <= position);
+    let target = match (current, direction) {
+        (None, d) if d > 0 => Some(0),
+        (None, _) => None,
+        (Some(i), d) if d > 0 => Some(i + 1),
+        (Some(i), _) if position - chapters[i].start > 3.0 => Some(i),
+        (Some(i), _) => i.checked_sub(1),
+    };
+    match target {
+        Some(i) if i < chapters.len() => ui.player.seek_to(chapters[i].start),
+        _ if direction < 0 => ui.player.seek_to(0.0),
+        _ => {}
+    }
+}
+
+/// Plays the next or the previous video of the queue that is ready.
+pub fn queue_step(direction: i32) {
+    let ui = ui::get();
+    let Some(id) = ui.player.id() else {
+        return;
+    };
+    let target = with(|state| {
+        let position = state.queue.iter().position(|item| item.entry.id == id)?;
+        let ready = |item: &&QueueItem| {
+            matches!(item.state, QueueState::Ready) && video_allowed(&item.entry)
+        };
+        if direction > 0 {
+            state.queue[position + 1..].iter().find(ready)
+        } else {
+            state.queue[..position].iter().rev().find(ready)
+        }
+        .map(|item| item.entry.clone())
+    });
+    match target {
+        Some(entry) => play(entry),
+        None => toast(if direction > 0 { "No next video in the queue" } else { "No previous video in the queue" }),
+    }
+}
+
 pub fn seek(fraction: f64) {
     let ui = ui::get();
     let duration = ui.player.duration();

@@ -16,6 +16,8 @@ use crate::profile;
 
 /// Playback speeds on offer, 1.0 being the first selected.
 const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+/// The index of the normal speed in `SPEEDS`.
+pub const NORMAL_SPEED: u32 = 2;
 
 pub struct CacheRow {
     pub entry: Entry,
@@ -106,6 +108,9 @@ pub struct Ui {
     pub size_buttons: Vec<gtk::CheckButton>,
     pub size_status: gtk::Label,
     pub seek_row: gtk::Box,
+    pub speed: gtk::DropDown,
+    pub volume: gtk::MenuButton,
+    pub volume_scale: gtk::Scale,
     /// Skip buttons, which show when the progress bar is hidden, and whether each one is only
     /// for fullscreen.
     pub skip_buttons: Vec<(gtk::Button, bool)>,
@@ -118,6 +123,59 @@ pub struct Ui {
 
 thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
+}
+
+/// Handles the keys of the player, which follow the ones of mpv. Returns whether it was one.
+fn player_key(key: gdk::Key, shift: bool) -> bool {
+    let ui = get();
+    if ui.player.id().is_none() {
+        return false;
+    }
+
+    let focus = GtkWindowExt::focus(&ui.window);
+    let inside = |check: &dyn Fn(&gtk::Widget) -> bool| {
+        std::iter::successors(focus.clone(), |widget| widget.parent()).any(|widget| check(&widget))
+    };
+    // Typing, and the widgets that use the arrows themselves.
+    if focus.as_ref().is_some_and(|widget| widget.is::<gtk::Editable>()) {
+        return false;
+    }
+    let arrows_taken = inside(&|widget| {
+        widget.is::<gtk::Scale>()
+            || widget.is::<gtk::ListBox>()
+            || widget.is::<gtk::DropDown>()
+            || widget.is::<gtk::Popover>()
+    });
+    let activates = focus.as_ref().is_some_and(|widget| {
+        widget.is::<gtk::Button>() || widget.is::<gtk::Scale>() || widget.is::<gtk::DropDown>()
+    });
+
+    match key {
+        gdk::Key::space if activates => return false,
+        gdk::Key::space | gdk::Key::p | gdk::Key::P => nav::toggle_pause(),
+        gdk::Key::f | gdk::Key::F => nav::toggle_fullscreen(),
+        gdk::Key::m | gdk::Key::M => nav::toggle_mute(),
+        gdk::Key::_0 | gdk::Key::asterisk | gdk::Key::KP_Multiply => nav::change_volume(0.02),
+        gdk::Key::_9 | gdk::Key::slash | gdk::Key::KP_Divide => nav::change_volume(-0.02),
+        gdk::Key::bracketright => nav::step_speed(1),
+        gdk::Key::bracketleft => nav::step_speed(-1),
+        gdk::Key::BackSpace => nav::reset_speed(),
+        gdk::Key::greater => nav::queue_step(1),
+        gdk::Key::period => nav::step_frame(true),
+        gdk::Key::less => nav::queue_step(-1),
+        gdk::Key::comma => nav::step_frame(false),
+        gdk::Key::Page_Up => nav::step_chapter(1),
+        gdk::Key::Page_Down => nav::step_chapter(-1),
+        gdk::Key::Left | gdk::Key::Right | gdk::Key::Up | gdk::Key::Down if arrows_taken => {
+            return false;
+        }
+        gdk::Key::Left => nav::skip(if shift { -1.0 } else { -5.0 }),
+        gdk::Key::Right => nav::skip(if shift { 1.0 } else { 5.0 }),
+        gdk::Key::Down => nav::skip(-60.0),
+        gdk::Key::Up => nav::skip(60.0),
+        _ => return false,
+    }
+    true
 }
 
 pub fn get() -> Rc<Ui> {
@@ -756,12 +814,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         let volume = volume.clone();
         move |scale| {
             let value = scale.value();
-            volume.set_icon_name(match value {
-                v if v <= 0.0 => "audio-volume-muted-symbolic",
-                v if v < 0.34 => "audio-volume-low-symbolic",
-                v if v < 0.67 => "audio-volume-medium-symbolic",
-                _ => "audio-volume-high-symbolic",
-            });
+            volume.set_icon_name(nav::volume_icon(value, get().player.is_muted()));
             nav::set_volume(value);
         }
     });
@@ -1103,23 +1156,18 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(|_, key, _, modifiers| {
         let alt = modifiers.contains(gdk::ModifierType::ALT_MASK);
+        let shift = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
+        let ctrl = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         match key {
             gdk::Key::Left if alt => nav::back(),
             gdk::Key::Right if alt => nav::forward(),
             gdk::Key::Escape if get().window.is_fullscreen() => nav::toggle_fullscreen(),
-            gdk::Key::space => {
-                let ui = get();
-                let busy = GtkWindowExt::focus(&ui.window).is_some_and(|widget| {
-                    widget.is::<gtk::Editable>()
-                        || widget.is::<gtk::Button>()
-                        || widget.is::<gtk::Scale>()
-                });
-                if busy || ui.player.id().is_none() {
+            _ if alt || ctrl => return glib::Propagation::Proceed,
+            _ => {
+                if !player_key(key, shift) {
                     return glib::Propagation::Proceed;
                 }
-                nav::toggle_pause();
             }
-            _ => return glib::Propagation::Proceed,
         }
         glib::Propagation::Stop
     });
@@ -1189,6 +1237,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         size_buttons,
         size_status,
         seek_row,
+        speed,
+        volume,
+        volume_scale,
         skip_buttons,
         queue_list,
         syncing: Cell::new(false),
