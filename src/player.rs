@@ -108,7 +108,11 @@ pub struct Player {
     pub area: gtk::GLArea,
     /// Whether the end of the current file was already reported.
     ended: Cell<bool>,
+    /// Renders still wanted after a load, so that a paused video shows its first frame.
+    settling: Cell<u32>,
     id: RefCell<Option<String>>,
+    /// A file to load once the render context exists: without it mpv drops the video.
+    waiting: RefCell<Option<String>>,
 
     // NOTE: the render context has to be dropped before `mpv`.
     render: RefCell<Option<RenderContext<'static>>>,
@@ -136,7 +140,9 @@ impl Player {
         let player = Rc::new(Self {
             area,
             ended: Cell::new(false),
+            settling: Cell::new(0),
             id: RefCell::new(None),
+            waiting: RefCell::new(None),
             render: RefCell::new(None),
             mpv,
         });
@@ -167,7 +173,11 @@ impl Player {
                     Ok(render) => {
                         *player.render.borrow_mut() = Some(unsafe {
                             transmute::<RenderContext<'_>, RenderContext<'static>>(render)
-                        })
+                        });
+                        if let Some(file) = player.waiting.borrow_mut().take() {
+                            let _ = player.mpv.command("loadfile", &[&file, "replace"]);
+                            area.queue_render();
+                        }
                     }
                     Err(error) => eprintln!("Failed creating the mpv render context: {error}"),
                 }
@@ -211,6 +221,11 @@ impl Player {
                         area.height() * scale,
                         true,
                     );
+                    // The first frame of a file comes after the loading, and nothing redraws
+                    // while paused: keep drawing until the video has a position for a while.
+                    if player.mpv.get_property::<f64>("time-pos").is_ok() {
+                        player.settling.set(player.settling.get().saturating_sub(1));
+                    }
                 }
 
                 glib::Propagation::Stop
@@ -222,7 +237,7 @@ impl Player {
             let player = Rc::downgrade(&player);
             move |area, _clock| {
                 if let Some(player) = player.upgrade() {
-                    if area.is_mapped() && !player.is_paused() {
+                    if area.is_mapped() && (!player.is_paused() || player.settling.get() > 0) {
                         area.queue_render();
                     }
                 }
@@ -242,7 +257,13 @@ impl Player {
     pub fn load(&self, id: &str, file: &str) {
         *self.id.borrow_mut() = Some(id.to_string());
         self.ended.set(false);
-        let _ = self.mpv.command("loadfile", &[file, "replace"]);
+        self.settling.set(10);
+        if self.render.borrow().is_some() {
+            *self.waiting.borrow_mut() = None;
+            let _ = self.mpv.command("loadfile", &[file, "replace"]);
+        } else {
+            *self.waiting.borrow_mut() = Some(file.to_string());
+        }
         self.set_paused(false);
     }
 
@@ -250,6 +271,7 @@ impl Player {
     pub fn stop(&self) {
         *self.id.borrow_mut() = None;
         self.ended.set(false);
+        *self.waiting.borrow_mut() = None;
         let _ = self.mpv.command("stop", &[]);
         self.area.queue_render();
     }
