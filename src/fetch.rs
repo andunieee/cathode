@@ -50,6 +50,15 @@ pub struct VideoInfo {
     pub upload_date: Option<String>,
     pub views: Option<u64>,
     pub likes: Option<u64>,
+    pub chapters: Vec<Chapter>,
+}
+
+/// A titled stretch of a video, as its uploader marked it.
+#[derive(Debug, Clone)]
+pub struct Chapter {
+    pub title: String,
+    pub start: f64,
+    pub end: f64,
 }
 
 /// How a search orders its results.
@@ -841,6 +850,21 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
         upload_date: string(&video, "upload_date"),
         views: video["view_count"].as_u64(),
         likes: video["like_count"].as_u64(),
+        chapters: video["chapters"]
+            .as_array()
+            .map(|chapters| {
+                chapters
+                    .iter()
+                    .filter_map(|chapter| {
+                        Some(Chapter {
+                            title: string(chapter, "title").unwrap_or_default(),
+                            start: chapter["start_time"].as_f64()?,
+                            end: chapter["end_time"].as_f64()?,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 

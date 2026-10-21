@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::cache;
 use crate::collections;
 use crate::controls;
-use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo};
+use crate::fetch::{Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo};
 use crate::format;
 use crate::history;
 use crate::library;
@@ -127,6 +127,10 @@ struct State {
     pending_saves: HashMap<String, String>,
     /// Files opened from the command line.
     local_files: HashMap<String, PathBuf>,
+    /// Chapter picked for a video that is still loading: where to seek to once it plays.
+    pending_seek: Option<(String, f64)>,
+    /// Where to pause, when the playback started from a chapter.
+    chapter_stop: Option<f64>,
 
     /// Ids of the videos of the feed on screen, so it is only rebuilt when it changed.
     feed_ids: Vec<String>,
@@ -143,6 +147,8 @@ thread_local! {
         history: vec![Page::Home],
         index: 0,
         listings: HashMap::new(),
+        pending_seek: None,
+        chapter_stop: None,
         infos: HashMap::new(),
         info_lookups: HashSet::new(),
         thumbnails: [HashMap::new(), HashMap::new()],
@@ -381,9 +387,100 @@ fn show_video(entry: &Entry) {
         None => "Loading details…".to_string(),
     });
 
+    let chapters = chapters_of(&entry.id);
+    clear_rows(&ui.video_chapters);
+    ui.video_chapters.set_visible(!chapters.is_empty());
+    for chapter in &chapters {
+        let row = adw::ActionRow::builder()
+            .title(&chapter.title)
+            .subtitle(format::duration(chapter.start))
+            .use_markup(false)
+            .activatable(true)
+            .build();
+        row.add_prefix(&gtk::Image::from_icon_name("media-playback-start-symbolic"));
+        ui.video_chapters.append(&row);
+    }
+
     let large = thumbnail(&entry.id, true, None);
     let small = with(|state| state.thumbnails[0].get(&entry.id).cloned());
     ui.video_picture.set_paintable(large.or(small).as_ref());
+}
+
+fn clear_rows(list: &gtk::ListBox) {
+    while let Some(row) = list.row_at_index(0) {
+        list.remove(&row);
+    }
+}
+
+/// The chapters of a video, once its details are known. Details are stored under the key of its video page.
+fn chapters_of(id: &str) -> Vec<Chapter> {
+    with(|state| {
+        state
+            .infos
+            .get(&format!("v:{id}"))
+            .map(|info| info.chapters.clone())
+            .unwrap_or_default()
+    })
+}
+
+/// Fills the chapters of the player controls, and marks them on the seek bar.
+fn show_player_chapters() {
+    let ui = ui::get();
+    let chapters = ui
+        .player
+        .id()
+        .map(|id| chapters_of(&id))
+        .unwrap_or_default();
+
+    clear_rows(&ui.chapters_list);
+    ui.seek.clear_marks();
+    ui.chapters_button.set_visible(!chapters.is_empty());
+
+    for chapter in &chapters {
+        let label = gtk::Label::builder()
+            .label(format!(
+                "{}  {}",
+                format::duration(chapter.start),
+                chapter.title
+            ))
+            .xalign(0.0)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        ui.chapters_list.append(&label);
+    }
+
+    if let Some(total) = chapters.last().map(|chapter| chapter.end) {
+        for chapter in chapters.iter().skip(1) {
+            ui.seek
+                .add_mark(chapter.start / total, gtk::PositionType::Bottom, None);
+        }
+    }
+}
+
+/// Plays a chapter of the video on the current page, and pauses when it ends.
+pub fn play_chapter(index: usize) {
+    let (Page::Video(entry) | Page::Player(entry)) = current() else {
+        return;
+    };
+    let Some(chapter) = chapters_of(&entry.id).get(index).cloned() else {
+        return;
+    };
+
+    let ui = ui::get();
+    with(|state| state.chapter_stop = Some(chapter.end));
+    if ui.player.id().as_deref() == Some(&entry.id) {
+        ui.player.seek_to(chapter.start);
+        ui.player.set_paused(false);
+    } else {
+        // The video isn't loaded yet, tick() seeks once it is.
+        with(|state| state.pending_seek = Some((entry.id.clone(), chapter.start)));
+    }
+    if !matches!(current(), Page::Player(_)) {
+        navigate(Page::Player(entry));
+    }
 }
 
 /// The file of a video that is on disk: opened from the command line, cached or in a collection.
@@ -665,7 +762,18 @@ fn show() {
             ui.stack.set_visible_child_name("collection");
             library::show_collection(&name);
         }
-        Page::Player(entry) => show_player(&entry),
+        Page::Player(entry) => {
+            show_player(&entry);
+
+            // The chapters come with the details.
+            let key = Page::Video(entry.clone()).key();
+            if !entry.url.is_empty() && !with(|state| state.infos.contains_key(&key)) {
+                send(Request::Info {
+                    key,
+                    url: entry.url,
+                });
+            }
+        }
     }
 
     update_allow_buttons();
@@ -964,6 +1072,7 @@ fn show_player(entry: &Entry) {
 
     if ui.player.id().as_deref() == Some(&entry.id) {
         ui.player_status.set_visible(false);
+        show_player_chapters();
         return;
     }
 
@@ -981,6 +1090,12 @@ fn show_player(entry: &Entry) {
 fn start_playback(entry: &Entry, path: &std::path::Path) {
     let ui = ui::get();
     ui.player.load(&entry.id, &path.to_string_lossy());
+    with(|state| {
+        if state.pending_seek.as_ref().map(|(id, _)| id) != Some(&entry.id) {
+            state.chapter_stop = None;
+        }
+    });
+    show_player_chapters();
     // Files from the command line aren't YouTube videos.
     if !entry.url.is_empty() {
         if let Err(error) = history::record(entry) {
@@ -1015,6 +1130,7 @@ pub fn seek(fraction: f64) {
     let ui = ui::get();
     let duration = ui.player.duration();
     if duration > 0.0 {
+        with(|state| state.chapter_stop = None);
         ui.player.seek_to(fraction * duration);
     }
 }
@@ -1042,6 +1158,21 @@ pub fn tick() {
     }
 
     let (position, duration) = (ui.player.position(), ui.player.duration());
+    if duration > 0.0 {
+        let id = ui.player.id();
+        let start = with(|state| {
+            state
+                .pending_seek
+                .take_if(|(pending, _)| Some(&*pending) == id.as_ref())
+        });
+        if let Some((_, start)) = start {
+            ui.player.seek_to(start);
+        }
+    }
+    if with(|state| state.chapter_stop.is_some_and(|stop| position >= stop - 0.05)) {
+        with(|state| state.chapter_stop = None);
+        ui.player.set_paused(true);
+    }
     ui.time_label.set_text(&format!(
         "{} / {}",
         format::duration(position),
@@ -1927,11 +2058,15 @@ pub fn handle(response: Response) {
                         cache::record(&info.entry);
                     }
 
+                    let playing = ui.player.id().is_some_and(|id| format!("v:{id}") == key);
                     with(|state| state.infos.insert(key, info));
                     if on_page {
                         if let Page::Video(entry) = current() {
                             show_video(&entry);
                         }
+                    }
+                    if playing {
+                        show_player_chapters();
                     }
                     if unknown && matches!(current(), Page::Cache) {
                         show_cache();

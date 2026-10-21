@@ -62,6 +62,10 @@ pub struct Ui {
     pub video_channel: gtk::LinkButton,
     pub video_meta: gtk::Label,
     pub video_description: gtk::Label,
+    pub video_chapters: gtk::ListBox,
+    /// The chapters of the video playing, in the player controls.
+    pub chapters_button: gtk::MenuButton,
+    pub chapters_list: gtk::ListBox,
     pub allow_video: gtk::Button,
 
     pub cache_list: gtk::ListBox,
@@ -520,12 +524,19 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .selectable(true)
         .focusable(false)
         .build();
+    let video_chapters = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .visible(false)
+        .build();
+    video_chapters.connect_row_activated(|_, row| nav::play_chapter(row.index() as usize));
     let video_page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     video_page.set_margin_top(18);
     video_page.set_margin_bottom(18);
     video_page.set_margin_start(18);
     video_page.set_margin_end(18);
     video_page.append(&video_top);
+    video_page.append(&video_chapters);
     video_page.append(&video_description);
     let video_scroll = gtk::ScrolledWindow::builder().child(&video_page).build();
 
@@ -720,6 +731,28 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             nav::set_volume(value);
         }
     });
+    let chapters_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    chapters_list.connect_row_activated(|_, row| nav::play_chapter(row.index() as usize));
+    let chapters_button = gtk::MenuButton::builder()
+        .icon_name("view-list-symbolic")
+        .tooltip_text("Chapters")
+        .direction(gtk::ArrowType::Up)
+        .visible(false)
+        .popover(
+            &gtk::Popover::builder()
+                .child(
+                    &gtk::ScrolledWindow::builder()
+                        .child(&chapters_list)
+                        .propagate_natural_width(true)
+                        .max_content_height(360)
+                        .propagate_natural_height(true)
+                        .build(),
+                )
+                .build(),
+        )
+        .build();
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
@@ -735,6 +768,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     player_controls.append(&time_label);
     player_controls.append(&speed);
     player_controls.append(&volume);
+    player_controls.append(&chapters_button);
     player_controls.append(&fullscreen);
 
     let click = gtk::GestureClick::new();
@@ -942,6 +976,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         video_channel,
         video_meta,
         video_description,
+        video_chapters,
+        chapters_button,
+        chapters_list,
         allow_video,
         cache_list,
         cache_select_all,
