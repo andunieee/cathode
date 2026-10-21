@@ -98,7 +98,6 @@ pub struct Ui {
     /// Keeps the player in proportion, in the queue sidebar.
     pub player_frame: gtk::AspectFrame,
     pub player: Rc<Player>,
-    pub player_title: gtk::Label,
     pub player_status: gtk::Label,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
@@ -708,15 +707,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Player, which lives in the queue sidebar
     let player = Player::new();
-    let player_title = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .valign(gtk::Align::Start)
-        .margin_top(12)
-        .margin_start(12)
-        .margin_end(12)
-        .ellipsize(pango::EllipsizeMode::End)
-        .css_classes(["osd", "heading"])
-        .build();
     let player_status = gtk::Label::builder()
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
@@ -906,7 +896,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&player.area));
-    overlay.add_overlay(&player_title);
     overlay.add_overlay(&player_status);
     overlay.add_overlay(&player_controls);
     let player_frame = gtk::AspectFrame::new(0.5, 0.5, 16.0 / 9.0, false);
@@ -1193,7 +1182,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         queue_scroll,
         player_frame,
         player,
-        player_title,
         player_status,
         play_button,
         seek,

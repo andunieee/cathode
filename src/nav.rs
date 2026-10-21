@@ -1232,7 +1232,6 @@ pub fn play(entry: Entry) {
 fn show_player(entry: &Entry) {
     let ui = ui::get();
     ui.player_frame.set_visible(true);
-    ui.player_title.set_text(&entry.title);
     sync_size_buttons(&entry.id);
     if with(|state| state.switching.as_deref() != Some(&entry.id)) {
         ui.size_status.set_visible(false);
@@ -1293,7 +1292,6 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
             eprintln!("Cannot write the history: {error}");
         }
     }
-    ui.player_title.set_text(&entry.title);
     ui.player_status.set_visible(false);
     ui.play_button
         .set_icon_name("media-playback-pause-symbolic");
@@ -1517,6 +1515,9 @@ fn enqueue(entry: Entry) -> bool {
 }
 
 fn queue_remove(id: &str) {
+    if ui::get().player.id().as_deref() == Some(id) {
+        return;
+    }
     let cancel = with(|state| {
         state.queue.retain(|item| item.entry.id != id);
         let downloading = state.queue_downloading.as_deref() == Some(id);
@@ -1630,10 +1631,15 @@ fn refresh_queue() {
         });
         row.add_prefix(&play);
 
+        if is_playing {
+            row.add_css_class("queue-playing");
+        }
+
         let remove = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
             .tooltip_text("Remove from the queue")
             .valign(gtk::Align::Center)
+            .sensitive(!is_playing)
             .css_classes(["flat", "circular"])
             .build();
         remove.connect_clicked({
