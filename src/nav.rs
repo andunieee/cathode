@@ -10,10 +10,12 @@ use gtk::{gdk, gio, glib};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache;
+use crate::collections;
 use crate::controls;
 use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo};
 use crate::format;
 use crate::history;
+use crate::library;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::state;
 use crate::subscriptions::{self, Subscription};
@@ -47,6 +49,7 @@ enum Page {
     Related(Entry),
     Cache,
     History,
+    Collection(String),
     Player(Entry),
 }
 
@@ -69,6 +72,7 @@ impl Page {
             Page::Related(entry) => format!("r:{}", entry.id),
             Page::Cache => "cache".to_string(),
             Page::History => "history".to_string(),
+            Page::Collection(name) => format!("collection:{name}"),
             Page::Player(entry) => format!("p:{}", entry.id),
         }
     }
@@ -117,6 +121,8 @@ struct State {
     progress: HashMap<String, f64>,
     /// Video the player page is waiting for to be downloaded.
     awaiting_play: Option<String>,
+    /// Videos to save to a collection (the name) once they are downloaded.
+    pending_saves: HashMap<String, String>,
     /// Files opened from the command line.
     local_files: HashMap<String, PathBuf>,
 
@@ -145,6 +151,7 @@ thread_local! {
         inflight: HashMap::new(),
         progress: HashMap::new(),
         awaiting_play: None,
+        pending_saves: HashMap::new(),
         local_files: HashMap::new(),
         feed_ids: Vec::new(),
         history_offset: 0,
@@ -194,6 +201,11 @@ pub fn details(entry: &Entry) -> String {
 /// The thumbnail of a video if we have it. Otherwise it is requested, and `picture` is given
 /// the texture when it arrives.
 pub fn thumbnail(id: &str, large: bool, picture: Option<&gtk::Picture>) -> Option<gdk::Texture> {
+    // Files have no thumbnail to be had.
+    if id.starts_with(collections::LOCAL_PREFIX) {
+        return None;
+    }
+
     let (texture, request) = with(|state| {
         if let Some(texture) = state.thumbnails[large as usize].get(id) {
             return (Some(texture.clone()), false);
@@ -311,19 +323,36 @@ fn show_video(entry: &Entry) {
     if let Some(duration) = entry.duration {
         meta.push(format::duration(duration));
     }
-    if cache::find(&entry.id).is_some() {
-        meta.push("Downloaded".to_string());
+    if local_path(&entry.id).is_some() {
+        meta.push(
+            if entry.url.is_empty() {
+                "On disk"
+            } else {
+                "Downloaded"
+            }
+            .to_string(),
+        );
     }
     ui.video_meta.set_text(&meta.join("  ·  "));
 
     ui.video_description.set_text(&match &info {
         Some(info) => info.description.clone(),
+        None if entry.url.is_empty() => local_path(&entry.id)
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         None => "Loading details…".to_string(),
     });
 
     let large = thumbnail(&entry.id, true, None);
     let small = with(|state| state.thumbnails[0].get(&entry.id).cloned());
     ui.video_picture.set_paintable(large.or(small).as_ref());
+}
+
+/// The file of a video that is on disk: opened from the command line, cached or in a collection.
+fn local_path(id: &str) -> Option<PathBuf> {
+    with(|state| state.local_files.get(id).cloned())
+        .or_else(|| cache::find(id))
+        .or_else(|| collections::find(id))
 }
 
 // The restricted profile
@@ -346,6 +375,7 @@ fn page_allowed(page: &Page) -> bool {
         }
         Page::Channel { id, .. } => profile::allows_channel(id),
         Page::Playlist { id, .. } => profile::allows_playlist(id),
+        Page::Collection(name) => profile::allows_collection(name),
         Page::Video(entry) | Page::Player(entry) => profile::allows_video(entry),
     }
 }
@@ -420,6 +450,10 @@ fn update_allow_buttons() {
         Page::Video(entry) => (None, Some(label(profile::lists_video(&entry.id)))),
         _ => (None, None),
     };
+    let collection = match current() {
+        Page::Collection(name) => Some(label(profile::allows_collection(&name))),
+        _ => None,
+    };
 
     // Only the one in charge of the profile gets to change it.
     let editable = !profile::restricted();
@@ -427,6 +461,17 @@ fn update_allow_buttons() {
     ui.allow_channel.set_label(channel.unwrap_or_default());
     ui.allow_video.set_visible(editable && video.is_some());
     ui.allow_video.set_label(video.unwrap_or_default());
+    library::set_allow_button(
+        editable && collection.is_some(),
+        collection.unwrap_or_default(),
+    );
+
+    // Videos opened from files can't be saved, they are already where they are.
+    let savable = match current() {
+        Page::Video(entry) => editable && !entry.url.is_empty(),
+        _ => false,
+    };
+    library::show_save_button(savable);
 }
 
 /// Adds the page on screen to the restricted profile, or takes it out of it.
@@ -464,6 +509,11 @@ pub fn toggle_allowed() {
                 Box::new(move |p| p.videos.retain(|v| v.id != id)),
             )
         }
+        Page::Collection(name) => toggle(
+            profile::allows_collection(&name),
+            Item::Collection(name.clone()),
+            Box::new(move |p| p.collections.retain(|c| c != &name)),
+        ),
         _ => return,
     };
 
@@ -555,7 +605,8 @@ fn show() {
             ui.stack.set_visible_child_name("video");
             show_video(&entry);
 
-            if !with(|state| state.infos.contains_key(&key)) {
+            // A file has nothing to look up.
+            if !entry.url.is_empty() && !with(|state| state.infos.contains_key(&key)) {
                 send(Request::Info {
                     key,
                     url: entry.url,
@@ -572,6 +623,10 @@ fn show() {
         }
         Page::Cache => show_cache(),
         Page::History => show_history(),
+        Page::Collection(name) => {
+            ui.stack.set_visible_child_name("collection");
+            library::show_collection(&name);
+        }
         Page::Player(entry) => show_player(&entry),
     }
 
@@ -611,9 +666,16 @@ pub fn init(requests: UnboundedSender<Request>) {
     with(|state| state.requests = Some(requests));
     profile::init();
     subscriptions::init();
+    collections::init();
     state::init();
     restore_sidebars();
+    library::refresh();
     apply_mode();
+    // Videos that were not saved don't stay for long.
+    let expired = cache::expire();
+    if expired > 0 {
+        eprintln!("Deleted {expired} downloaded videos older than 48 hours");
+    }
     // Forgets what's left of videos that are gone.
     cache::scan();
     refresh_subscriptions();
@@ -696,6 +758,17 @@ pub fn open_history() {
     navigate(Page::History);
 }
 
+pub fn open_collection(name: &str) {
+    navigate(Page::Collection(name.to_string()));
+}
+
+/// Leaves the page of a collection that is gone.
+pub fn collection_forgotten(name: &str) {
+    if matches!(current(), Page::Collection(shown) if shown == name) {
+        open_home();
+    }
+}
+
 pub fn back() {
     if with(|state| {
         let can = state.index > 0;
@@ -758,6 +831,86 @@ fn start_download(entry: Entry) {
     }
 }
 
+// Saving
+
+/// Saves the video on screen to the collection, or to the one picked last.
+pub fn save_current(collection: Option<String>) {
+    let Page::Video(entry) = current() else {
+        return;
+    };
+    match collection {
+        Some(collection) => save_video(entry, collection),
+        None => toast("There is no collection to save to"),
+    }
+}
+
+/// Moves the video out of the cache into the collection. A video that isn't downloaded yet is
+/// saved as soon as it is.
+fn save_video(entry: Entry, collection: String) {
+    if profile::restricted() || entry.url.is_empty() {
+        return;
+    }
+    if collections::contains(&collection, &entry.id) {
+        toast(&format!("Already saved to “{collection}”"));
+        return;
+    }
+
+    let source = cache::find(&entry.id)
+        .map(|path| (path, false))
+        .or_else(|| {
+            // Saved in another collection, which keeps its copy.
+            collections::find(&entry.id).map(|path| (path, true))
+        });
+    match source {
+        Some((path, copy)) => {
+            if finish_save(&entry, &collection, &path, copy).is_some() {
+                refresh_after_save(&entry);
+            }
+        }
+        None => {
+            with(|state| {
+                state
+                    .pending_saves
+                    .insert(entry.id.clone(), collection.clone())
+            });
+            toast(&format!("Downloading, then saving to “{collection}”"));
+            start_download(entry);
+        }
+    }
+}
+
+/// Where the video is after being saved, if that worked.
+fn finish_save(
+    entry: &Entry,
+    collection: &str,
+    source: &std::path::Path,
+    copy: bool,
+) -> Option<PathBuf> {
+    match collections::save(collection, entry, source, copy) {
+        Ok(path) => {
+            if !copy {
+                // The file is gone from the cache, this forgets what the index knew about it.
+                cache::delete(std::slice::from_ref(&entry.id));
+            }
+            toast(&format!("Saved to “{collection}”"));
+            Some(path)
+        }
+        Err(error) => {
+            toast(&format!("Could not save the video: {error}"));
+            None
+        }
+    }
+}
+
+fn refresh_after_save(entry: &Entry) {
+    library::saved();
+    match current() {
+        Page::Cache => show_cache(),
+        Page::Video(shown) if shown.id == entry.id => show_video(&shown),
+        _ => {}
+    }
+}
+
 // Player
 
 pub fn play_current() {
@@ -776,8 +929,7 @@ fn show_player(entry: &Entry) {
         return;
     }
 
-    let local = with(|state| state.local_files.get(&entry.id).cloned());
-    match local.or_else(|| cache::find(&entry.id)) {
+    match local_path(&entry.id) {
         Some(path) => start_playback(entry, &path),
         None => {
             with(|state| state.awaiting_play = Some(entry.id.clone()));
@@ -958,7 +1110,7 @@ fn pump_queue() {
         };
 
         let entry = with(|state| state.queue[index].entry.clone());
-        if cache::find(&entry.id).is_some() {
+        if local_path(&entry.id).is_some() {
             with(|state| state.queue[index].state = QueueState::Ready);
             continue;
         }
@@ -1474,6 +1626,21 @@ fn show_cache() {
         });
         row.add_suffix(&queue);
 
+        let save = gtk::Button::builder()
+            .icon_name("document-save-symbolic")
+            .tooltip_text("Save to a collection")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        save.connect_clicked({
+            let entry = entry.clone();
+            move |_| match library::default_target() {
+                Some(collection) => save_video(entry.clone(), collection),
+                None => toast("There is no collection to save to"),
+            }
+        });
+        row.add_suffix(&save);
+
         let delete = gtk::Button::builder()
             .icon_name("user-trash-symbolic")
             .tooltip_text("Delete from the cache")
@@ -1525,7 +1692,13 @@ fn update_cache_selection() {
     ui.syncing.set(false);
 
     ui.cache_queue.set_sensitive(selected > 0);
+    ui.cache_save.set_sensitive(selected > 0);
     ui.cache_delete.set_sensitive(selected > 0);
+    ui.cache_save.set_label(&if selected > 0 {
+        format!("Save {selected}")
+    } else {
+        "Save".to_string()
+    });
     ui.cache_queue.set_label(&if selected > 0 {
         format!("Add {selected} to queue")
     } else {
@@ -1551,6 +1724,16 @@ pub fn cache_select_all(selected: bool) {
 pub fn cache_queue_selected() {
     for entry in selected_cache_entries() {
         queue_add(entry);
+    }
+}
+
+pub fn cache_save_selected() {
+    let Some(collection) = library::default_target() else {
+        toast("There is no collection to save to");
+        return;
+    };
+    for entry in selected_cache_entries() {
+        save_video(entry, collection.clone());
     }
 }
 
@@ -1804,8 +1987,24 @@ pub fn handle(response: Response) {
             });
 
             if let (Ok(_), Some(entry)) = (&result, &entry) {
+                cache::touch(&entry.id);
                 cache::record(entry);
             }
+
+            // Saving moves the file, so whoever else is waiting for it has to be told where it is.
+            let wanted = with(|state| state.pending_saves.remove(&id));
+            let result = match (&result, &entry, wanted) {
+                (Ok(path), Some(entry), Some(collection)) => {
+                    match finish_save(entry, &collection, path, false) {
+                        Some(saved) => {
+                            library::saved();
+                            Ok(saved)
+                        }
+                        None => result,
+                    }
+                }
+                _ => result,
+            };
 
             // The queue and the player may both have wanted this video.
             let queued = with(|state| {

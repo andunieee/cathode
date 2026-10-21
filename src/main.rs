@@ -1,8 +1,10 @@
 mod cache;
+mod collections;
 mod controls;
 mod fetch;
 mod format;
 mod history;
+mod library;
 mod nav;
 mod player;
 mod preferences;

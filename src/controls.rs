@@ -4,6 +4,7 @@
 use adw::prelude::*;
 use gtk::gio;
 
+use crate::collections;
 use crate::fetch::{Entry, Request};
 use crate::format;
 use crate::nav;
@@ -60,6 +61,7 @@ pub struct Widgets {
     home_channels: Section,
     home_playlists: Section,
     home_videos: Section,
+    home_collections: Section,
     home_empty: gtk::Label,
 
     settings_entry: gtk::Entry,
@@ -67,6 +69,7 @@ pub struct Widgets {
     settings_channels: Section,
     settings_playlists: Section,
     settings_videos: Section,
+    settings_collections: Section,
     password_row: adw::ActionRow,
     password_set: gtk::Button,
     password_remove: gtk::Button,
@@ -87,13 +90,18 @@ impl Widgets {
             .css_classes(["dim-label"])
             .margin_top(24)
             .build();
-        let (home_channels, home_playlists, home_videos) =
-            (section("Channels"), section("Playlists"), section("Videos"));
+        let (home_channels, home_playlists, home_videos, home_collections) = (
+            section("Channels"),
+            section("Playlists"),
+            section("Videos"),
+            section("Collections"),
+        );
 
         let restricted = page_box();
         restricted.append(&home_empty);
         restricted.append(&home_channels.root);
         restricted.append(&home_playlists.root);
+        restricted.append(&home_collections.root);
         restricted.append(&home_videos.root);
 
         let home = gtk::Stack::new();
@@ -112,7 +120,7 @@ impl Widgets {
             .css_classes(["title-2"])
             .build();
         let explanation = gtk::Label::builder()
-            .label("While the profile is on, there is no search and only what is listed here can be watched: the videos, the videos of the channels and of the playlists.")
+            .label("While the profile is on, there is no search and only what is listed here can be watched: the videos, the collections, and the videos of the channels and of the playlists.")
             .xalign(0.0)
             .wrap(true)
             .css_classes(["dim-label"])
@@ -138,8 +146,12 @@ impl Widgets {
             .css_classes(["dim-label"])
             .build();
 
-        let (settings_channels, settings_playlists, settings_videos) =
-            (section("Channels"), section("Playlists"), section("Videos"));
+        let (settings_channels, settings_playlists, settings_videos, settings_collections) = (
+            section("Channels"),
+            section("Playlists"),
+            section("Videos"),
+            section("Collections"),
+        );
 
         let password_row = adw::ActionRow::builder().title("Password").build();
         let password_set = gtk::Button::builder().valign(gtk::Align::Center).build();
@@ -165,6 +177,7 @@ impl Widgets {
         settings_page.append(&settings_status);
         settings_page.append(&settings_channels.root);
         settings_page.append(&settings_playlists.root);
+        settings_page.append(&settings_collections.root);
         settings_page.append(&settings_videos.root);
         settings_page.append(&password);
 
@@ -176,12 +189,14 @@ impl Widgets {
             home_channels,
             home_playlists,
             home_videos,
+            home_collections,
             home_empty,
             settings_entry,
             settings_status,
             settings_channels,
             settings_playlists,
             settings_videos,
+            settings_collections,
             password_row,
             password_set,
             password_remove,
@@ -243,6 +258,26 @@ fn playlist_row(playlist: &PlaylistRef, removable: bool) -> adw::ActionRow {
     row
 }
 
+fn collection_row(name: &str, removable: bool) -> adw::ActionRow {
+    let count = collections::get(name).map_or(0, |collection| collection.videos.len());
+    let row = row(
+        name,
+        &format!("Collection · {count} videos"),
+        "folder-symbolic",
+    );
+    row.connect_activated({
+        let name = name.to_string();
+        move |_| nav::open_collection(&name)
+    });
+    if removable {
+        let name = name.to_string();
+        row.add_suffix(&remove_button(move || {
+            remove(|p| p.collections.retain(|c| c != &name))
+        }));
+    }
+    row
+}
+
 fn video_row(entry: &Entry, removable: bool) -> adw::ActionRow {
     let mut subtitle = Vec::new();
     if !entry.channel.is_empty() {
@@ -293,7 +328,13 @@ fn remove(change: impl FnOnce(&mut profile::Profile)) {
     show_settings();
 }
 
-fn fill(channels: &Section, playlists: &Section, videos: &Section, removable: bool) -> bool {
+fn fill(
+    channels: &Section,
+    playlists: &Section,
+    collections: &Section,
+    videos: &Section,
+    removable: bool,
+) -> bool {
     let profile = profile::read(|profile| profile.clone());
 
     clear(&channels.list);
@@ -304,6 +345,16 @@ fn fill(channels: &Section, playlists: &Section, videos: &Section, removable: bo
     for playlist in &profile.playlists {
         playlists.list.append(&playlist_row(playlist, removable));
     }
+    clear(&collections.list);
+    // Collections that are gone are not worth showing.
+    let names: Vec<&String> = profile
+        .collections
+        .iter()
+        .filter(|name| collections::exists(name))
+        .collect();
+    for name in &names {
+        collections.list.append(&collection_row(name, removable));
+    }
     clear(&videos.list);
     for video in &profile.videos {
         videos.list.append(&video_row(video, removable));
@@ -311,9 +362,13 @@ fn fill(channels: &Section, playlists: &Section, videos: &Section, removable: bo
 
     channels.root.set_visible(!profile.channels.is_empty());
     playlists.root.set_visible(!profile.playlists.is_empty());
+    collections.root.set_visible(!names.is_empty());
     videos.root.set_visible(!profile.videos.is_empty());
 
-    profile.channels.is_empty() && profile.playlists.is_empty() && profile.videos.is_empty()
+    profile.channels.is_empty()
+        && profile.playlists.is_empty()
+        && names.is_empty()
+        && profile.videos.is_empty()
 }
 
 // Pages
@@ -327,6 +382,7 @@ pub fn show_home() {
         let empty = fill(
             &widgets.home_channels,
             &widgets.home_playlists,
+            &widgets.home_collections,
             &widgets.home_videos,
             false,
         );
@@ -343,6 +399,7 @@ pub fn show_settings() {
     fill(
         &widgets.settings_channels,
         &widgets.settings_playlists,
+        &widgets.settings_collections,
         &widgets.settings_videos,
         true,
     );
@@ -386,6 +443,7 @@ pub fn resolved(result: Result<Item, String>) {
                 Item::Video(entry) => entry.title.clone(),
                 Item::Channel(channel) => channel.name.clone(),
                 Item::Playlist(playlist) => playlist.title.clone(),
+                Item::Collection(name) => name.clone(),
             };
 
             match profile::add(item) {

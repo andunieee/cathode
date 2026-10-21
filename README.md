@@ -13,14 +13,14 @@ Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `
 - [x] Video pages with metadata and the upload date
 - [x] Back/forward history (also Alt+Left/Right and the mouse buttons)
 - [x] Video queue in a side panel: downloads happen one after the other, and playback moves on to the next downloaded video
-- [x] Download through yt-dlp, with progress, into a cache (`~/.cache/lumpla`)
+- [x] Download through yt-dlp, with progress, into a cache (`~/.cache/lumpla`). Videos that were not saved are deleted 48 hours after the download, checked on startup
 - [x] A page listing the cached videos, to queue or delete them one by one or in bulk. The files are the source of truth, `index.json` only remembers their titles and is cleaned up when files are gone
 - [x] Play/Pause, seekbar, playback speed (0.5× to 3×), volume, fullscreen
 - [x] Parental controls: a restricted profile that only reaches the videos, channels and playlists it allows. There is no search while it is on, and it can be protected with a password. Set it up from the home page, it is saved in `~/.config/lumpla/profiles/default.json`
 - [x] Playlist pages
+- [x] Collections, in the sidebar on the left under the subscriptions. The Save button of a video page (and of the downloaded videos page) moves the video out of the cache into a collection, `~/.local/share/lumpla/saved` by default; the arrow next to it picks the collection, and new ones can have any folder. A folder of videos you already have can be imported as a collection too, and its files are never touched. Each collection is a file with the paths and the metadata of its videos (`~/.config/lumpla/collections/<name>.json`), and the restricted profile can allow whole collections
 - [x] Local subscriptions, no account needed: a sidebar on the left lists the channels, and the home page shows their latest videos, checked on startup and every 30 minutes (`~/.config/lumpla/subscriptions.json`)
 - [x] Watch history, a page listing the videos by day that loads more as you scroll (`~/.config/lumpla/history.jsonl`, one entry per line, the latest first)
-- [ ] Everything else
 
 # Installation
 ## Dependencies
@@ -33,9 +33,4 @@ Under the hood, MPV doesn't get its own window. Lumpla gets MPV to draw into a `
 Open the search page:
 ```
 cargo run
-```
-
-Or play a local file directly:
-```
-cargo run -- path/to/file.mp4
 ```

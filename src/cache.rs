@@ -3,11 +3,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::fetch::{cache_dir, Entry};
 
 const INDEX_FILE: &str = "index.json";
+/// Downloaded videos that are not saved anywhere are deleted once they are this old.
+const MAX_AGE: Duration = Duration::from_secs(48 * 60 * 60);
 const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mkv", "webm", "mov", "m4v"];
 
 pub struct CachedVideo {
@@ -106,6 +108,39 @@ pub fn scan() -> Vec<CachedVideo> {
     videos
 }
 
+/// Deletes the videos older than 48 hours, and forgets about them. Returns how many there were.
+pub fn expire() -> usize {
+    let now = SystemTime::now();
+    let old: Vec<String> = video_files(&cache_dir())
+        .into_iter()
+        .filter(|(_, path)| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age > MAX_AGE)
+        })
+        .map(|(id, _)| id)
+        .collect();
+
+    delete(&old);
+    old.len()
+}
+
+/// Makes a video that was just downloaded count as new: its age is counted from now, whatever
+/// date the file came with.
+pub fn touch(id: &str) {
+    if let Some(path) = find(id) {
+        let touched = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(SystemTime::now()));
+        if let Err(error) = touched {
+            eprintln!("Cannot touch {id}: {error}");
+        }
+    }
+}
+
 /// Remembers what we know about a video that was just downloaded.
 pub fn record(entry: &Entry) {
     let dir = cache_dir();
@@ -129,5 +164,35 @@ pub fn delete(ids: &[String]) {
     index.retain(|id, _| !ids.contains(id));
     if index.len() != before {
         write_index(&dir, &index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_videos_expire() {
+        let root = std::env::temp_dir().join(format!("lumpla-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("XDG_CACHE_HOME", &root);
+        let dir = cache_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let age = |name: &str, hours: u64| {
+            let file = std::fs::File::create(dir.join(name)).unwrap();
+            file.set_modified(SystemTime::now() - Duration::from_secs(hours * 3600))
+                .unwrap();
+        };
+        age("old.mp4", 49);
+        age("recent.mp4", 47);
+        age("old.txt", 100);
+        write_index(&dir, &Index::new());
+
+        assert_eq!(expire(), 1);
+        assert!(!dir.join("old.mp4").exists());
+        assert!(dir.join("recent.mp4").exists() && dir.join("old.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

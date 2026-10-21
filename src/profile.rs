@@ -1,5 +1,5 @@
-//! The restricted profile: the only videos, channels and playlists that can be reached while it
-//! is on, and the optional password protecting it. It lives in `profiles/default.json` in the
+//! The restricted profile: the only videos, channels, playlists and collections that can be
+//! reached while it is on, and the optional password protecting it. It lives in `profiles/default.json` in the
 //! config directory of the app.
 
 use std::cell::RefCell;
@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::collections;
 use crate::fetch::Entry;
 
 const HASH_ROUNDS: u32 = 100_000;
@@ -34,6 +35,8 @@ pub struct Profile {
     pub channels: Vec<ChannelRef>,
     pub playlists: Vec<PlaylistRef>,
     pub videos: Vec<Entry>,
+    /// Names of collections.
+    pub collections: Vec<String>,
 }
 
 /// Something that can be allowed in the profile.
@@ -42,6 +45,7 @@ pub enum Item {
     Video(Entry),
     Channel(ChannelRef),
     Playlist(PlaylistRef),
+    Collection(String),
 }
 
 fn path() -> PathBuf {
@@ -117,15 +121,25 @@ pub fn allows_playlist(id: &str) -> bool {
     read(|profile| profile.playlists.iter().any(|p| p.id == id))
 }
 
+pub fn allows_collection(name: &str) -> bool {
+    read(|profile| profile.collections.iter().any(|c| c == name))
+}
+
 pub fn lists_video(id: &str) -> bool {
     read(|profile| profile.videos.iter().any(|v| v.id == id))
 }
 
-/// Whether a video can be watched: it is allowed itself, or it comes from an allowed channel
-/// or playlist.
+/// Whether a video can be watched: it is allowed itself, or it comes from an allowed channel,
+/// playlist or collection.
 pub fn allows_video(entry: &Entry) -> bool {
     lists_video(&entry.id)
         || allows_channel(&entry.channel_id)
+        || read(|profile| {
+            profile
+                .collections
+                .iter()
+                .any(|name| collections::contains(name, &entry.id))
+        })
         || LISTED.with(|listed| listed.borrow().contains(&entry.id))
 }
 
@@ -155,6 +169,8 @@ pub fn add(item: Item) -> Result<bool, String> {
             added = false
         }
         Item::Playlist(playlist) => profile.playlists.push(playlist),
+        Item::Collection(name) if profile.collections.contains(&name) => added = false,
+        Item::Collection(name) => profile.collections.push(name),
     })?;
     Ok(added)
 }

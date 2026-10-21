@@ -8,6 +8,7 @@ use gtk::{gdk, gio, glib, pango};
 
 use crate::controls;
 use crate::fetch::{Entry, SearchFilter, SearchSort};
+use crate::library;
 use crate::nav;
 use crate::player::Player;
 use crate::preferences;
@@ -64,6 +65,7 @@ pub struct Ui {
     pub cache_select_all: gtk::CheckButton,
     pub cache_summary: gtk::Label,
     pub cache_queue: gtk::Button,
+    pub cache_save: gtk::Button,
     pub cache_delete: gtk::Button,
     pub cache_rows: RefCell<Vec<CacheRow>>,
 
@@ -78,6 +80,7 @@ pub struct Ui {
     pub history_empty: gtk::Label,
 
     pub controls: controls::Widgets,
+    pub library: library::Widgets,
 
     pub player: Rc<Player>,
     pub player_title: gtk::Label,
@@ -283,7 +286,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     let subs_toggle = gtk::ToggleButton::builder()
         .icon_name("starred-symbolic")
-        .tooltip_text("Subscriptions")
+        .tooltip_text("Subscriptions and collections")
         .build();
     header.pack_start(&subs_toggle);
 
@@ -474,6 +477,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     related.connect_clicked(|_| nav::open_related());
     buttons.append(&related);
+    let library = library::Widgets::new();
+    buttons.append(&library.save);
     let allow_video = gtk::Button::builder()
         .css_classes(["pill"])
         .visible(false)
@@ -520,6 +525,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .label("Add to queue")
         .sensitive(false)
         .build();
+    let cache_save = gtk::Button::builder()
+        .label("Save")
+        .sensitive(false)
+        .build();
     let cache_delete = gtk::Button::builder()
         .label("Delete")
         .sensitive(false)
@@ -531,6 +540,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         }
     });
     cache_queue.connect_clicked(|_| nav::cache_queue_selected());
+    cache_save.connect_clicked(|_| nav::cache_save_selected());
     cache_delete.connect_clicked(|_| nav::cache_delete_selected());
 
     let cache_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -541,6 +551,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     cache_bar.append(&cache_select_all);
     cache_bar.append(&cache_summary);
     cache_bar.append(&cache_queue);
+    cache_bar.append(&cache_save);
     cache_bar.append(&cache_delete);
 
     let cache_list = gtk::ListBox::builder()
@@ -735,6 +746,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     stack.add_named(&video_scroll, Some("video"));
     stack.add_named(&cache_page, Some("cache"));
     stack.add_named(&history_scroll, Some("history"));
+    stack.add_named(&library.page, Some("collection"));
     stack.add_named(&overlay, Some("player"));
 
     let toolbar = adw::ToolbarView::new();
@@ -787,7 +799,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     subs_header.set_show_end_title_buttons(false);
     subs_header.set_title_widget(Some(
         &gtk::Label::builder()
-            .label("Subscriptions")
+            .label("Library")
             .css_classes(["heading"])
             .build(),
     ));
@@ -795,11 +807,22 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["navigation-sidebar"])
         .build();
+    let subs_heading = gtk::Label::builder()
+        .label("Subscriptions")
+        .xalign(0.0)
+        .margin_top(12)
+        .margin_start(12)
+        .css_classes(["heading"])
+        .build();
+    let sidebar_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    sidebar_content.append(&subs_heading);
+    sidebar_content.append(&subscriptions_list);
+    sidebar_content.append(&library.sidebar);
     let subs_bar = adw::ToolbarView::new();
     subs_bar.add_top_bar(&subs_header);
     subs_bar.set_content(Some(
         &gtk::ScrolledWindow::builder()
-            .child(&subscriptions_list)
+            .child(&sidebar_content)
             .build(),
     ));
 
@@ -907,6 +930,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         cache_select_all,
         cache_summary,
         cache_queue,
+        cache_save,
         cache_delete,
         cache_rows: RefCell::new(Vec::new()),
         feed_store,
@@ -916,6 +940,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         history_current: RefCell::new(None),
         history_empty,
         controls,
+        library,
         player,
         player_title,
         player_status,
