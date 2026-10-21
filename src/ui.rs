@@ -264,6 +264,18 @@ fn results_view(store: &gio::ListStore) -> gtk::ListView {
     view
 }
 
+fn point_window_controls(widget: &gtk::Widget) {
+    if widget.is::<gtk::WindowControls>() {
+        widget.set_cursor(Some(&pointer()));
+        return;
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        point_window_controls(&current);
+        child = current.next_sibling();
+    }
+}
+
 /// The hand cursor the web shows over clickable things; GTK widgets don't get it by default.
 pub fn pointer() -> gtk::gdk::Cursor {
     gtk::gdk::Cursor::from_name("pointer", None).expect("the default cursor theme has a pointer")
@@ -295,6 +307,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     header.pack_start(&back);
     header.pack_start(&forward);
     header.pack_start(&home);
+
+    // The window buttons are made by the header bar itself, so they are found once it has them.
+    header.connect_map(|header| point_window_controls(header.upcast_ref()));
 
     // Straight to the restricted profile, asking for the password if there is one.
     let controls_button = icon_button("system-users-symbolic", "Turn on the restricted profile");
@@ -831,6 +846,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Queue sidebar
     let queue_header = adw::HeaderBar::new();
+    queue_header.set_show_end_title_buttons(false);
     queue_header.set_title_widget(Some(
         &gtk::Label::builder()
             .label("Queue")
@@ -866,12 +882,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .bidirectional()
         .sync_create()
         .build();
-
-    // With the sidebar open, it is the one on the edge of the window.
-    split.connect_show_sidebar_notify({
-        let header = header.clone();
-        move |split| header.set_show_end_title_buttons(!split.shows_sidebar())
-    });
 
     // Subscriptions sidebar, on the other side
     let subs_header = adw::HeaderBar::new();
