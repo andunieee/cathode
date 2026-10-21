@@ -132,6 +132,11 @@ thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 
+/// The index of this playback speed in the list, if it is there.
+pub fn speed_index(speed: f64) -> Option<u32> {
+    SPEEDS.iter().position(|&s| s == speed).map(|i| i as u32)
+}
+
 /// The playback speed at this index of the speed list.
 pub fn speed_at(index: u32) -> Option<f64> {
     SPEEDS.get(index as usize).copied()

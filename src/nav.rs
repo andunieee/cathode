@@ -898,6 +898,7 @@ pub fn init(requests: UnboundedSender<Request>) {
     collections::init();
     state::init();
     restore_sidebars();
+    restore_playback();
     restore_session();
     library::refresh();
     apply_mode();
@@ -1511,11 +1512,39 @@ fn unload_player() {
 
 pub fn set_speed(speed: f64) {
     ui::get().player.set_speed(speed);
+    remember_playback(|state| state.speed = Some(speed));
 }
 
 /// `volume` goes from 0 to 1.
 pub fn set_volume(volume: f64) {
     ui::get().player.set_volume(volume * 100.0);
+    remember_playback(|state| state.volume = Some(volume));
+}
+
+/// Writes the volume or the speed to the state, unless nothing changed.
+fn remember_playback(change: impl Fn(&mut state::State)) {
+    let mut before = state::get();
+    change(&mut before);
+    let now = state::get();
+    if (before.volume, before.speed) == (now.volume, now.speed) {
+        return;
+    }
+    if let Err(error) = state::update(change) {
+        eprintln!("Cannot write the state: {error}");
+    }
+}
+
+/// Puts the volume and the speed back as they were left.
+fn restore_playback() {
+    let ui = ui::get();
+    let saved = state::get();
+    if let Some(volume) = saved.volume {
+        ui.volume_scale.set_value(volume.clamp(0.0, 1.0));
+    }
+    let index = saved.speed.and_then(|speed| ui::speed_index(speed));
+    if let Some(index) = index {
+        ui.speed.set_selected(index);
+    }
 }
 
 pub fn volume_icon(volume: f64, muted: bool) -> &'static str {

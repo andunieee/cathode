@@ -19,6 +19,10 @@ pub struct State {
     pub restricted: bool,
     /// The collection the Save button saves to.
     pub save_collection: Option<String>,
+    /// The volume from 0 to 1, none until it is changed.
+    pub volume: Option<f64>,
+    /// The playback speed, none until it is changed.
+    pub speed: Option<f64>,
     /// The queue and the player of the normal mode.
     pub session: Session,
     /// The same, for the restricted mode.
