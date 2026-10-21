@@ -514,12 +514,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let play = gtk::Button::builder().cursor(&crate::ui::pointer())
         .label("Play")
-        .css_classes(["suggested-action", "pill"])
+        .css_classes(["suggested-action"])
         .build();
     play.connect_clicked(|_| nav::play_current());
     let queue_video = gtk::Button::builder().cursor(&crate::ui::pointer())
-        .label("Add to queue")
-        .css_classes(["pill"])
+        .label("Queue")
         .build();
     queue_video.connect_clicked(|_| nav::queue_current());
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -527,15 +526,13 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons.append(&play);
     buttons.append(&queue_video);
     let related = gtk::Button::builder().cursor(&crate::ui::pointer())
-        .label("Suggestions")
-        .css_classes(["pill"])
+        .label("Related")
         .build();
     related.connect_clicked(|_| nav::open_related());
     buttons.append(&related);
     let library = library::Widgets::new();
     buttons.append(&library.save);
     let allow_video = gtk::Button::builder().cursor(&crate::ui::pointer())
-        .css_classes(["pill"])
         .visible(false)
         .build();
     allow_video.connect_clicked(|_| nav::toggle_allowed());
