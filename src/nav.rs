@@ -128,6 +128,8 @@ struct State {
     playing: Option<Entry>,
     /// Video the player is waiting for to be downloaded.
     awaiting_play: Option<String>,
+    /// The video to load paused, when restoring the last session.
+    start_paused: Option<String>,
     /// Videos to save to a collection (the name) once they are downloaded.
     pending_saves: HashMap<String, String>,
     /// Files opened from the command line.
@@ -173,6 +175,7 @@ thread_local! {
         progress: HashMap::new(),
         playing: None,
         awaiting_play: None,
+        start_paused: None,
         pending_saves: HashMap::new(),
         local_files: HashMap::new(),
         feed_ids: Vec::new(),
@@ -583,6 +586,17 @@ fn apply_mode() {
 
 /// Turns the restricted mode on or off, starting over from the home page.
 pub fn set_restricted(restricted: bool) {
+    // Each mode keeps its own queue and player.
+    save_session();
+    unload_player();
+    let cancel = with(|state| {
+        state.queue.clear();
+        state.queue_downloading.take()
+    });
+    if let Some(id) = cancel {
+        send(Request::Cancel { id });
+    }
+
     if let Err(error) = profile::set_restricted(restricted) {
         toast(&format!("Could not save the restricted mode: {error}"));
     }
@@ -593,6 +607,7 @@ pub fn set_restricted(restricted: bool) {
         state.index = 0;
     });
     apply_mode();
+    restore_session();
     show();
     if !restricted {
         refresh_feed();
@@ -823,6 +838,7 @@ pub fn init(requests: UnboundedSender<Request>) {
     collections::init();
     state::init();
     restore_sidebars();
+    restore_session();
     library::refresh();
     apply_mode();
     // Videos that were not saved don't stay for long.
@@ -834,6 +850,17 @@ pub fn init(requests: UnboundedSender<Request>) {
     cache::scan();
     refresh_subscriptions();
     show();
+
+    ui::get().window.connect_close_request(|_| {
+        save_session();
+        glib::Propagation::Proceed
+    });
+    glib::timeout_add_seconds_local(15, || {
+        if !ui::get().player.is_paused() {
+            save_session();
+        }
+        glib::ControlFlow::Continue
+    });
 
     refresh_feed();
     glib::timeout_add_seconds_local(FEED_REFRESH_SECONDS, || {
@@ -1254,6 +1281,55 @@ fn show_player(entry: &Entry) {
     }
 }
 
+/// Writes the queue, the video in the player and where the queued videos were left off.
+fn save_session() {
+    remember_position();
+    let (queue, playing, positions) = with(|state| {
+        let queue: Vec<Entry> = state.queue.iter().map(|item| item.entry.clone()).collect();
+        let positions = state
+            .positions
+            .iter()
+            .filter(|(id, _)| queue.iter().any(|entry| &entry.id == *id))
+            .map(|(id, position)| (id.clone(), *position))
+            .collect();
+        (queue, state.playing.clone(), positions)
+    });
+    let restricted = profile::restricted();
+    let result = state::update(|state| {
+        *state.session_mut(restricted) = state::Session {
+            queue,
+            playing,
+            positions,
+        };
+    });
+    if let Err(error) = result {
+        eprintln!("Cannot write the state: {error}");
+    }
+}
+
+/// Brings back the queue and the player as they were left, the video paused.
+fn restore_session() {
+    let saved = state::get().session_mut(profile::restricted()).clone();
+    with(|state| {
+        state.queue = saved
+            .queue
+            .into_iter()
+            .filter(|entry| video_allowed(entry))
+            .map(|entry| QueueItem {
+                entry,
+                state: QueueState::Waiting,
+            })
+            .collect();
+        state.positions = saved.positions;
+    });
+    pump_queue();
+
+    if let Some(entry) = saved.playing.filter(|entry| video_allowed(entry)) {
+        with(|state| state.start_paused = Some(entry.id.clone()));
+        play(entry);
+    }
+}
+
 /// Keeps where the video in the player is, to go back to it later.
 fn remember_position() {
     let ui = ui::get();
@@ -1276,6 +1352,10 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     let ui = ui::get();
     remember_position();
     ui.player.load(&entry.id, &path.to_string_lossy());
+    let paused = with(|state| state.start_paused.take()).as_deref() == Some(&entry.id);
+    if paused {
+        ui.player.set_paused(true);
+    }
     with(|state| {
         if state.pending_seek.as_ref().map(|(id, _)| id) != Some(&entry.id) {
             state.chapter_stop = None;
@@ -1293,9 +1373,13 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
         }
     }
     ui.player_status.set_visible(false);
-    ui.play_button
-        .set_icon_name("media-playback-pause-symbolic");
+    ui.play_button.set_icon_name(if paused {
+        "media-playback-start-symbolic"
+    } else {
+        "media-playback-pause-symbolic"
+    });
     refresh_queue();
+    save_session();
 }
 
 pub fn toggle_pause() {
@@ -1305,12 +1389,18 @@ pub fn toggle_pause() {
             remember_position();
         }
         ui.player.set_paused(!ui.player.is_paused());
+        save_session();
         tick();
     }
 }
 
 /// Closes the player entirely, unlike pausing.
 pub fn stop_player() {
+    unload_player();
+    save_session();
+}
+
+fn unload_player() {
     let ui = ui::get();
     if ui.window.is_fullscreen() {
         toggle_fullscreen();
@@ -1509,6 +1599,7 @@ fn enqueue(entry: Entry) -> bool {
     });
 
     if added {
+        save_session();
         pump_queue();
     }
     added
@@ -1528,6 +1619,7 @@ fn queue_remove(id: &str) {
         downloading && state.awaiting_play.as_deref() != Some(id)
     });
 
+    save_session();
     if cancel {
         send(Request::Cancel { id: id.to_string() });
     }

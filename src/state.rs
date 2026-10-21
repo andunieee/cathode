@@ -3,9 +3,12 @@
 //! lose and not worth carrying from one machine to another.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use crate::fetch::Entry;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -16,6 +19,32 @@ pub struct State {
     pub restricted: bool,
     /// The collection the Save button saves to.
     pub save_collection: Option<String>,
+    /// The queue and the player of the normal mode.
+    pub session: Session,
+    /// The same, for the restricted mode.
+    pub restricted_session: Session,
+}
+
+/// What the queue and the player were up to, each mode has its own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Session {
+    /// The videos in the queue, in order.
+    pub queue: Vec<Entry>,
+    /// The video in the player, which comes back paused.
+    pub playing: Option<Entry>,
+    /// Where the videos of the queue were left off.
+    pub positions: HashMap<String, f64>,
+}
+
+impl State {
+    pub fn session_mut(&mut self, restricted: bool) -> &mut Session {
+        if restricted {
+            &mut self.restricted_session
+        } else {
+            &mut self.session
+        }
+    }
 }
 
 thread_local! {
