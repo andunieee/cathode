@@ -871,7 +871,19 @@ pub fn init(requests: UnboundedSender<Request>) {
 
 pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
     let query = query.trim();
-    if !query.is_empty() {
+    if let Some(id) = crate::fetch::video_id_of_link(query) {
+        // The details fill in the rest once they arrive.
+        navigate(Page::Video(Entry {
+            id: crate::fetch::youtube_id(&id),
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            title: String::new(),
+            channel: String::new(),
+            channel_id: String::new(),
+            duration: None,
+            views: None,
+            published: None,
+        }));
+    } else if !query.is_empty() {
         navigate(Page::Search {
             query: query.to_string(),
             sort,
@@ -2456,10 +2468,21 @@ pub fn handle(response: Response) {
                     }
 
                     let playing = ui.player.id().is_some_and(|id| format!("v:{id}") == key);
+                    let entry = info.entry.clone();
                     with(|state| state.infos.insert(key, info));
                     if on_page {
-                        if let Page::Video(entry) = current() {
-                            show_video(&entry);
+                        if let Page::Video(shown) = current() {
+                            // A pasted link only knew the id, the details know the rest.
+                            let shown = if shown.title.is_empty() {
+                                with(|state| {
+                                    let index = state.index;
+                                    state.history[index] = Page::Video(entry.clone());
+                                });
+                                entry
+                            } else {
+                                shown
+                            };
+                            show_video(&shown);
                         }
                     }
                     if playing {

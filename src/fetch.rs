@@ -38,6 +38,30 @@ pub fn youtube_id(id: &str) -> String {
     format!("{YOUTUBE_PREFIX}{}", bare_id(id))
 }
 
+/// The id of the video a YouTube link points to, `None` for anything else.
+pub fn video_id_of_link(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.contains(char::is_whitespace) {
+        return None;
+    }
+    let url = reqwest::Url::parse(text)
+        .or_else(|_| reqwest::Url::parse(&format!("https://{text}")))
+        .ok()?;
+    let host = url.host_str()?.trim_start_matches("www.").trim_start_matches("m.");
+    let mut segments = url.path_segments()?;
+    let id = match host {
+        "youtu.be" => segments.next()?.to_string(),
+        "youtube.com" | "music.youtube.com" | "youtube-nocookie.com" => match segments.next()? {
+            "watch" => url.query_pairs().find(|(key, _)| key == "v")?.1.into_owned(),
+            "shorts" | "embed" | "live" | "v" => segments.next()?.to_string(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let valid = id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    valid.then_some(id)
+}
+
 /// The id YouTube knows the video by, without the prefix.
 pub fn bare_id(id: &str) -> &str {
     id.strip_prefix(YOUTUBE_PREFIX).unwrap_or(id)
@@ -1058,6 +1082,25 @@ async fn resolve(input: Input) -> Result<Item, String> {
                 id: youtube_id(&string(&playlist, "id").ok_or("This playlist could not be found")?),
                 title: string(&playlist, "title").unwrap_or_else(|| "Unnamed playlist".to_string()),
             }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::video_id_of_link;
+
+    #[test]
+    fn finds_the_video_of_a_link() {
+        for link in [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=3s",
+            "youtu.be/dQw4w9WgXcQ?si=x",
+            "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+        ] {
+            assert_eq!(video_id_of_link(link).as_deref(), Some("dQw4w9WgXcQ"), "{link}");
+        }
+        for text in ["cats", "rust video", "https://example.com/watch?v=dQw4w9WgXcQ", "https://youtube.com/results?search_query=a"] {
+            assert_eq!(video_id_of_link(text), None, "{text}");
         }
     }
 }
