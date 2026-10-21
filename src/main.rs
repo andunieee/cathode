@@ -52,8 +52,7 @@ fn load_css() {
         "button, checkbutton, switch, scale, link, row.activatable,
          listview.rich-list > row, tab, dropdown { cursor: pointer; }
          button:disabled, checkbutton:disabled, row:disabled { cursor: default; }
-         row.queue-playing { background-color: alpha(@accent_bg_color, 0.25);
-                             box-shadow: inset 4px 0 @accent_bg_color; }
+         row.queue-playing { background-color: alpha(@accent_bg_color, 0.25); }
          row.queue-playing .title { font-weight: bold; }",
     );
     if let Some(display) = gtk::gdk::Display::default() {
