@@ -1497,6 +1497,7 @@ fn unload_player() {
         toggle_fullscreen();
     }
     ui.player.stop();
+    refresh_subtitles();
     with(|state| {
         state.positions.clear();
         state.playing = None;
@@ -1526,7 +1527,7 @@ fn remember_playback(change: impl Fn(&mut state::State)) {
     let mut before = state::get();
     change(&mut before);
     let now = state::get();
-    if (before.volume, before.speed) == (now.volume, now.speed) {
+    if (before.volume, before.speed, before.subtitles) == (now.volume, now.speed, now.subtitles) {
         return;
     }
     if let Err(error) = state::update(change) {
@@ -1545,6 +1546,69 @@ fn restore_playback() {
     if let Some(index) = index {
         ui.speed.set_selected(index);
     }
+    ui.player
+        .set_subtitles(saved.subtitles, &settings::get().subtitle_languages);
+}
+
+/// Shows or hides the subtitles.
+pub fn toggle_subtitles() {
+    let ui = ui::get();
+    let wanted = !ui.player.subtitles_wanted();
+    ui.player
+        .set_subtitles(wanted, &settings::get().subtitle_languages);
+    remember_playback(|state| state.subtitles = wanted);
+    let (tracks, _) = ui.player.subtitle_tracks();
+    player_message(match (wanted, tracks.is_empty()) {
+        (true, true) => "No subtitles",
+        (true, false) => "Subtitles on",
+        (false, _) => "Subtitles off",
+    });
+}
+
+/// Picks a row of the subtitles list: the first one turns them off, the others are the tracks.
+pub fn pick_subtitle(row: usize) {
+    let ui = ui::get();
+    let track = row
+        .checked_sub(1)
+        .and_then(|index| ui.subtitle_tracks.borrow().0.get(index).map(|track| track.id));
+    match track {
+        Some(id) => ui.player.select_subtitle(id),
+        None => ui
+            .player
+            .set_subtitles(false, &settings::get().subtitle_languages),
+    }
+    remember_playback(|state| state.subtitles = track.is_some());
+    ui.subtitles_button.popdown();
+    refresh_subtitles();
+}
+
+/// Brings the list of subtitle tracks up to date with the file playing.
+fn refresh_subtitles() {
+    let ui = ui::get();
+    let now = ui.player.subtitle_tracks();
+    if *ui.subtitle_tracks.borrow() == now {
+        return;
+    }
+
+    clear_rows(&ui.subtitles_list);
+    ui.subtitles_button.set_visible(!now.0.is_empty());
+    let selected = now.1;
+    let rows = std::iter::once(("Off", selected.is_none()))
+        .chain(now.0.iter().map(|t| (t.label.as_str(), selected == Some(t.id))));
+    for (label, active) in rows {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.set_margin_top(6);
+        row.set_margin_bottom(6);
+        row.set_margin_start(12);
+        row.set_margin_end(12);
+        let name = gtk::Label::builder().label(label).xalign(0.0).hexpand(true).build();
+        row.append(&name);
+        let check = gtk::Image::from_icon_name("object-select-symbolic");
+        check.set_opacity(if active { 1.0 } else { 0.0 });
+        row.append(&check);
+        ui.subtitles_list.append(&row);
+    }
+    *ui.subtitle_tracks.borrow_mut() = now;
 }
 
 pub fn volume_icon(volume: f64, muted: bool) -> &'static str {
@@ -1770,6 +1834,9 @@ pub fn tick() {
     } else {
         "media-playback-pause-symbolic"
     });
+
+    ui.player.add_pending_subtitles();
+    refresh_subtitles();
 
     if ui.player.take_ended() {
         if let Some(id) = ui.player.id() {

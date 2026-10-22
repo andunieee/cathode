@@ -41,6 +41,11 @@ pub struct Settings {
     pub skip_sponsors: bool,
     /// Hides the seek bar of the player.
     pub hide_progress_bar: bool,
+    /// Languages of the subtitles to download with the videos (`--sub-langs`, like `en,fr`),
+    /// empty for none.
+    pub subtitle_languages: String,
+    /// Whether the automatic captions count as subtitles.
+    pub automatic_captions: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +57,8 @@ impl Default for Settings {
             limit_rate: String::new(),
             skip_sponsors: false,
             hide_progress_bar: false,
+            subtitle_languages: "en".to_string(),
+            automatic_captions: true,
         }
     }
 }
@@ -145,6 +152,21 @@ pub fn download_args(height: Option<u32>) -> Vec<String> {
         format!("bv*[height<={h}]+ba/b[height<={h}]/b")
     };
     args.extend(["-f".to_string(), format]);
+
+    // Written next to the video as `<name>.<language>.vtt`, see `cache::subtitle_files`.
+    let languages = settings.subtitle_languages.trim();
+    if !languages.is_empty() {
+        args.extend([
+            "--write-subs".to_string(),
+            "--sub-format".to_string(),
+            "vtt".to_string(),
+            "--sub-langs".to_string(),
+            languages.to_string(),
+        ]);
+        if settings.automatic_captions {
+            args.push("--write-auto-subs".to_string());
+        }
+    }
 
     let rate = settings.limit_rate.trim();
     if !rate.is_empty() {

@@ -29,6 +29,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Drag videos to reorder the queue
 - Picks up where you left off when you reopen the app
 - Seekbar, playback speed, volume and fullscreen
+- Subtitles in the languages you choose, automatic captions included, switched with the CC button or `C`
 
 ## Channels
 ![A channel page](assets/channel.jpg)

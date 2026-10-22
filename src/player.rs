@@ -104,6 +104,13 @@ fn mpv_get_proc_address(_ctx: &*mut c_void, name: &str) -> *mut c_void {
     gl_proc_address(name)
 }
 
+/// A subtitle track of the file loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtitleTrack {
+    pub id: i64,
+    pub label: String,
+}
+
 pub struct Player {
     pub area: gtk::GLArea,
     /// Whether the end of the current file was already reported.
@@ -114,6 +121,11 @@ pub struct Player {
     /// A file to load once the render context exists: without it mpv drops the video.
     waiting: RefCell<Option<String>>,
     this: std::rc::Weak<Player>,
+    /// Subtitle files of the file loaded, `(language, path)`, until mpv has loaded the file and
+    /// they can be added.
+    pending_subtitles: RefCell<Vec<(String, std::path::PathBuf)>>,
+    /// Whether subtitles are wanted, which holds from one file to the next.
+    subtitles: Cell<bool>,
     /// Parts of the video to jump over, `(start, end)` in seconds.
     skips: RefCell<Vec<(f64, f64)>>,
     /// Fires when the next of those parts is reached.
@@ -133,6 +145,8 @@ impl Player {
             init.set_property("vo", "libmpv")?;
             // Stay on the last frame at the end, `eof-reached` tells us when that happens.
             init.set_property("keep-open", "yes")?;
+            // Subtitles are switched on from the interface.
+            init.set_property("sid", "no")?;
             Ok(())
         })
         .expect("Error while creating MPV");
@@ -144,6 +158,8 @@ impl Player {
 
         let player = Rc::new_cyclic(|this| Self {
             this: this.clone(),
+            pending_subtitles: RefCell::new(Vec::new()),
+            subtitles: Cell::new(false),
             skips: RefCell::new(Vec::new()),
             skip_timer: RefCell::new(None),
             area,
@@ -268,6 +284,9 @@ impl Player {
         self.settling.set(10);
         self.skips.borrow_mut().clear();
         self.cancel_skip();
+        *self.pending_subtitles.borrow_mut() =
+            crate::cache::subtitle_files(std::path::Path::new(file));
+        self.apply_subtitles();
         if self.render.borrow().is_some() {
             *self.waiting.borrow_mut() = None;
             let _ = self.mpv.command("loadfile", &[file, "replace"]);
@@ -282,6 +301,7 @@ impl Player {
         *self.id.borrow_mut() = None;
         self.ended.set(false);
         *self.waiting.borrow_mut() = None;
+        self.pending_subtitles.borrow_mut().clear();
         self.skips.borrow_mut().clear();
         self.cancel_skip();
         let _ = self.mpv.command("stop", &[]);
@@ -315,6 +335,75 @@ impl Player {
 
     pub fn set_muted(&self, muted: bool) {
         let _ = self.mpv.set_property("mute", muted);
+    }
+
+    /// Hands the subtitle files to mpv once it has loaded the file, they can't be added before.
+    pub fn add_pending_subtitles(&self) {
+        if self.pending_subtitles.borrow().is_empty() || self.duration() <= 0.0 {
+            return;
+        }
+        let files = std::mem::take(&mut *self.pending_subtitles.borrow_mut());
+        for (language, path) in files {
+            // "cached" adds the track without selecting it.
+            let _ = self.mpv.command(
+                "sub-add",
+                &[&path.to_string_lossy(), "cached", &language, &language],
+            );
+        }
+        self.apply_subtitles();
+    }
+
+    pub fn subtitles_wanted(&self) -> bool {
+        self.subtitles.get()
+    }
+
+    /// Turns subtitles on or off for this file and the next ones. On picks the track of the
+    /// preferred languages, `languages` being a list like `en,fr`.
+    pub fn set_subtitles(&self, wanted: bool, languages: &str) {
+        self.subtitles.set(wanted);
+        let _ = self.mpv.set_property("slang", languages);
+        self.apply_subtitles();
+    }
+
+    fn apply_subtitles(&self) {
+        let _ = self
+            .mpv
+            .set_property("sid", if self.subtitles.get() { "auto" } else { "no" });
+    }
+
+    /// Shows this track, or the next file starts with the automatic choice again.
+    pub fn select_subtitle(&self, id: i64) {
+        self.subtitles.set(true);
+        let _ = self.mpv.set_property("sid", id);
+        self.area.queue_render();
+    }
+
+    /// The subtitle tracks of the file, and the id of the one shown.
+    pub fn subtitle_tracks(&self) -> (Vec<SubtitleTrack>, Option<i64>) {
+        let count = self.mpv.get_property::<i64>("track-list/count").unwrap_or(0);
+        let mut tracks = Vec::new();
+        let mut selected = None;
+        for index in 0..count {
+            let property = |name: &str| self.mpv.get_property::<String>(&format!("track-list/{index}/{name}")).ok();
+            if property("type").as_deref() != Some("sub") {
+                continue;
+            }
+            let Ok(id) = self.mpv.get_property::<i64>(&format!("track-list/{index}/id")) else {
+                continue;
+            };
+            let label = property("title")
+                .or_else(|| property("lang"))
+                .unwrap_or_else(|| format!("Track {id}"));
+            if self
+                .mpv
+                .get_property::<bool>(&format!("track-list/{index}/selected"))
+                .unwrap_or(false)
+            {
+                selected = Some(id);
+            }
+            tracks.push(SubtitleTrack { id, label });
+        }
+        (tracks, selected)
     }
 
     /// Moves one frame, which leaves the video paused.

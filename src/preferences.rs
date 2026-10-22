@@ -123,10 +123,28 @@ fn general() -> adw::PreferencesPage {
         |text| save(|s| s.limit_rate = text),
     );
 
+    let subtitles = entry_row(
+        "Subtitle languages",
+        "Downloaded with the videos, like en or en,fr. Empty for none",
+        &current.subtitle_languages,
+        |text| save(|s| s.subtitle_languages = text),
+    );
+    let captions = adw::SwitchRow::builder()
+        .title("Automatic captions")
+        .subtitle("Also download the captions YouTube generates, when there are no subtitles")
+        .active(current.automatic_captions)
+        .build();
+    captions.connect_active_notify(|row| {
+        let active = row.is_active();
+        save(|s| s.automatic_captions = active);
+    });
+
     let downloads = adw::PreferencesGroup::builder().title("Downloads").build();
     downloads.add(&quality);
     downloads.add(&sponsors);
     downloads.add(&rate);
+    downloads.add(&subtitles);
+    downloads.add(&captions);
 
     let mut browsers = vec!["None"];
     browsers.extend(BROWSERS);

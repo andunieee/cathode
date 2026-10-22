@@ -69,6 +69,10 @@ pub struct Ui {
     /// The chapters of the video playing, in the player controls.
     pub chapters_button: gtk::MenuButton,
     pub chapters_list: gtk::ListBox,
+    pub subtitles_button: gtk::MenuButton,
+    pub subtitles_list: gtk::ListBox,
+    /// The subtitle tracks the list shows, and the one selected.
+    pub subtitle_tracks: RefCell<(Vec<crate::player::SubtitleTrack>, Option<i64>)>,
     pub allow_video: gtk::Button,
     pub related: gtk::Button,
 
@@ -172,6 +176,7 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
         gdk::Key::space | gdk::Key::p | gdk::Key::P => nav::toggle_pause(),
         gdk::Key::f | gdk::Key::F => nav::toggle_fullscreen(),
         gdk::Key::m | gdk::Key::M => nav::toggle_mute(),
+        gdk::Key::c | gdk::Key::C => nav::toggle_subtitles(),
         gdk::Key::_0 | gdk::Key::asterisk | gdk::Key::KP_Multiply => nav::change_volume(0.02),
         gdk::Key::_9 | gdk::Key::slash | gdk::Key::KP_Divide => nav::change_volume(-0.02),
         gdk::Key::bracketright => nav::step_speed(1),
@@ -900,6 +905,29 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
                 .build(),
         )
         .build();
+    let subtitles_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    subtitles_list.connect_row_activated(|_, row| nav::pick_subtitle(row.index() as usize));
+    let subtitles_button = gtk::MenuButton::builder()
+        .cursor(&crate::ui::pointer())
+        .icon_name("media-view-subtitles-symbolic")
+        .tooltip_text("Subtitles")
+        .direction(gtk::ArrowType::Up)
+        .visible(false)
+        .popover(
+            &gtk::Popover::builder()
+                .child(
+                    &gtk::ScrolledWindow::builder()
+                        .child(&subtitles_list)
+                        .propagate_natural_width(true)
+                        .max_content_height(360)
+                        .propagate_natural_height(true)
+                        .build(),
+                )
+                .build(),
+        )
+        .build();
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
     stop_button.connect_clicked(|_| nav::stop_player());
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
@@ -986,6 +1014,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons_row.append(&speed);
     buttons_row.append(&skip_row);
     buttons_row.append(&volume);
+    buttons_row.append(&subtitles_button);
     buttons_row.append(&chapters_button);
     buttons_row.append(&player_settings);
     buttons_row.append(&fullscreen);
@@ -1269,6 +1298,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         video_chapters,
         chapters_button,
         chapters_list,
+        subtitles_button,
+        subtitles_list,
+        subtitle_tracks: RefCell::default(),
         allow_video,
         related,
         cache_list,

@@ -23,6 +23,8 @@ pub struct State {
     pub volume: Option<f64>,
     /// The playback speed, none until it is changed.
     pub speed: Option<f64>,
+    /// Whether subtitles are shown.
+    pub subtitles: bool,
     /// The queue and the player of the normal mode.
     pub session: Session,
     /// The same, for the restricted mode.
