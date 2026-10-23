@@ -330,6 +330,11 @@ pub fn parse_input(input: &str) -> Option<Input> {
     let mut segments = url.path_segments()?.filter(|s| !s.is_empty());
 
     match host {
+        "rumble.com" => match crate::fetch::rumble_video_of_link(input) {
+            Some((_, url)) => Some(Input::Video(url)),
+            None => crate::fetch::rumble_channel_of_link(input)
+                .map(|path| Input::Channel(format!("https://rumble.com/{path}"))),
+        },
         "youtu.be" => video(segments.next()?),
         "youtube.com" | "music.youtube.com" => match segments.next()? {
             "watch" => match (query("v"), query("list")) {
@@ -413,6 +418,24 @@ mod tests {
             kind("https://www.youtube.com/watch?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"),
             expected
         );
+    }
+
+    #[test]
+    fn rumble() {
+        assert_eq!(
+            kind("https://rumble.com/v5abcde-some-title.html?mref=x"),
+            Some("video https://rumble.com/v5abcde-some-title.html".to_string())
+        );
+        assert_eq!(
+            kind("rumble.com/c/SomeChannel/videos"),
+            Some("channel https://rumble.com/c/SomeChannel".to_string())
+        );
+        assert_eq!(
+            kind("https://www.rumble.com/user/Someone"),
+            Some("channel https://rumble.com/user/Someone".to_string())
+        );
+        assert_eq!(kind("https://rumble.com/videos?q=cats"), None);
+        assert_eq!(kind("https://rumble.com/c/"), None);
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::fetch::{
 use crate::format;
 use crate::history;
 use crate::library;
-use crate::profile::{self, ChannelRef, Item, PlaylistRef};
+use crate::profile::{self, ChannelRef, Input, Item, PlaylistRef};
 use crate::settings;
 use crate::state::{self, CaptionMode};
 use crate::subscriptions::{self, Subscription};
@@ -870,10 +870,7 @@ fn show() {
             ui.channel_title.set_text(&name);
             ui.channel_entry.set_text(&query);
             ui.channel_entry.set_visible(true);
-            ui.channel_link.set(Some(&format!(
-                "https://www.youtube.com/channel/{}",
-                crate::fetch::bare_id(&id)
-            )));
+            ui.channel_link.set(Some(&crate::fetch::channel_url(&id)));
 
             let language = subscriptions::language(&id);
             show_listing(
@@ -1002,6 +999,36 @@ pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
             views: None,
             published: None,
         }));
+    } else if let Some((id, url)) = crate::fetch::rumble_video_of_link(query) {
+        navigate(Page::Video(Entry {
+            id: crate::fetch::rumble_id(&id),
+            url,
+            title: String::new(),
+            channel: String::new(),
+            channel_id: String::new(),
+            duration: None,
+            views: None,
+            published: None,
+        }));
+    } else if let Some(path) = crate::fetch::rumble_channel_of_link(query) {
+        let name = path.split_once('/').map_or(path.as_str(), |(_, name)| name);
+        open_channel(&crate::fetch::rumble_id(&path), name);
+    } else if let Some(input) = youtube_link(query) {
+        match input {
+            Input::Playlist(url) => navigate(Page::Playlist {
+                id: crate::fetch::youtube_id(url.rsplit('=').next().unwrap_or_default()),
+                title: String::new(),
+            }),
+            Input::Channel(url) => match url.split_once("/channel/") {
+                Some((_, id)) => open_channel(&crate::fetch::youtube_id(id), ""),
+                // Handles have to be looked up to know the id of the channel.
+                None => send(Request::Resolve {
+                    input: Input::Channel(url),
+                    open: true,
+                }),
+            },
+            Input::Video(_) => {}
+        }
     } else if !query.is_empty() {
         navigate(Page::Search {
             query: query.to_string(),
@@ -1009,6 +1036,15 @@ pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
             filter,
         });
     }
+}
+
+/// The playlist or channel a pasted YouTube link points to. Bare ids and handles are left to
+/// the search, they are as likely to be words.
+fn youtube_link(query: &str) -> Option<Input> {
+    let lower = query.to_lowercase();
+    (lower.contains("youtube.com/") || lower.contains("youtu.be/"))
+        .then(|| crate::profile::parse_input(query))
+        .flatten()
 }
 
 pub fn search_channel(query: &str) {
@@ -1109,8 +1145,6 @@ pub fn forward() {
 /// wraps it, as in `cathode://play/?url=<percent-encoded link>`. Videos play
 /// straight away, playlists and channels are shown.
 pub fn open_link(link: &str) {
-    use crate::profile::Input;
-
     let link = link.trim();
     crate::log::info!("opening the link {link}");
     let link = if link.starts_with("cathode:") {
@@ -1128,9 +1162,12 @@ pub fn open_link(link: &str) {
 
     match crate::profile::parse_input(&link) {
         Some(Input::Video(url)) => {
-            let id = url.rsplit('=').next().unwrap_or_default();
+            let id = match crate::fetch::rumble_video_of_link(&url) {
+                Some((id, _)) => crate::fetch::rumble_id(&id),
+                None => crate::fetch::youtube_id(url.rsplit('=').next().unwrap_or_default()),
+            };
             play(Entry {
-                id: crate::fetch::youtube_id(id),
+                id,
                 url,
                 title: String::new(),
                 channel: String::new(),
@@ -1149,9 +1186,12 @@ pub fn open_link(link: &str) {
         }
         Some(Input::Channel(url)) => match url.split_once("/channel/") {
             Some((_, id)) => open_channel(&crate::fetch::youtube_id(id), ""),
-            None => toast("Only links to channels by id are supported"),
+            None => match crate::fetch::rumble_channel_of_link(&url) {
+                Some(path) => open_channel(&crate::fetch::rumble_id(&path), ""),
+                None => toast("Only links to channels by id are supported"),
+            },
         },
-        None => toast("This is not a YouTube link"),
+        None => toast("This is not a YouTube or Rumble link"),
     }
 }
 
@@ -3277,7 +3317,19 @@ pub fn handle(response: Response) {
                 feed_tab_changed();
             }
         }
-        Response::Resolved { result } => controls::resolved(result),
+        Response::Resolved {
+            result,
+            open: false,
+        } => controls::resolved(result),
+        Response::Resolved { result, open: true } => match result {
+            Ok(Item::Channel(channel)) => open_channel(&channel.id, &channel.name),
+            Ok(Item::Playlist(playlist)) => navigate(Page::Playlist {
+                id: playlist.id,
+                title: playlist.title,
+            }),
+            Ok(_) => {}
+            Err(error) => toast(&format!("Could not open it: {error}")),
+        },
         Response::CookiesChecked { browser, result } => {
             crate::preferences::cookies_checked(&browser, result)
         }

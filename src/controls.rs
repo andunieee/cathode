@@ -435,7 +435,7 @@ fn add_typed_item() {
     match profile::parse_input(&text) {
         Some(input) => {
             set_status("Looking it up…");
-            nav::send(Request::Resolve { input });
+            nav::send(Request::Resolve { input, open: false });
         }
         None => set_status("That is not a link to a video, channel or playlist"),
     }

@@ -41,6 +41,69 @@ pub fn youtube_id(id: &str) -> String {
     format!("{YOUTUBE_PREFIX}{}", bare_id(id))
 }
 
+/// What the id of a Rumble video or channel starts with.
+pub const RUMBLE_PREFIX: &str = "rumble:";
+
+/// The id of a Rumble video or channel, as an `Entry` or a `ChannelRef` has it.
+pub fn rumble_id(id: &str) -> String {
+    format!(
+        "{RUMBLE_PREFIX}{}",
+        id.strip_prefix(RUMBLE_PREFIX).unwrap_or(id)
+    )
+}
+
+fn rumble_url(text: &str) -> Option<reqwest::Url> {
+    let text = text.trim();
+    if text.contains(char::is_whitespace) {
+        return None;
+    }
+    let url = reqwest::Url::parse(text)
+        .or_else(|_| reqwest::Url::parse(&format!("https://{text}")))
+        .ok()?;
+    let host = url.host_str()?;
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    (host == "rumble.com").then_some(url)
+}
+
+/// The id and the address of the video a Rumble link points to, like `v5abcde` for
+/// `rumble.com/v5abcde-some-title.html`. `None` for anything else.
+pub fn rumble_video_of_link(text: &str) -> Option<(String, String)> {
+    let url = rumble_url(text)?;
+    let page = url.path_segments()?.next()?;
+    let slug = page.strip_suffix(".html")?;
+    let id = slug.split('-').next()?;
+    let valid =
+        id.len() > 1 && id.starts_with('v') && id.chars().all(|c| c.is_ascii_alphanumeric());
+    valid.then(|| (id.to_string(), format!("https://rumble.com/{page}")))
+}
+
+/// The path of the Rumble channel a link points to, `c/Name` or `user/Name`. `None` for
+/// anything else.
+pub fn rumble_channel_of_link(text: &str) -> Option<String> {
+    let url = rumble_url(text)?;
+    let mut segments = url.path_segments()?;
+    let kind = segments.next()?;
+    let name = segments.next().filter(|name| !name.is_empty())?;
+    matches!(kind, "c" | "user").then(|| format!("{kind}/{name}"))
+}
+
+/// The address of the channel, which is a Rumble one when its id says so.
+pub fn channel_url(id: &str) -> String {
+    match id.strip_prefix(RUMBLE_PREFIX) {
+        Some(path) => format!("https://rumble.com/{path}"),
+        None => format!("https://www.youtube.com/channel/{}", bare_id(id)),
+    }
+}
+
+/// The address listing the videos of the channel.
+fn channel_videos_url(id: &str) -> String {
+    if id.starts_with(RUMBLE_PREFIX) {
+        channel_url(id)
+    } else {
+        format!("{}/videos", channel_url(id))
+    }
+}
+
 /// The id of the video a YouTube link points to, `None` for anything else.
 pub fn video_id_of_link(text: &str) -> Option<String> {
     let text = text.trim();
@@ -216,6 +279,8 @@ pub enum Request {
     /// Looks up what a link typed in by the user points to.
     Resolve {
         input: Input,
+        /// Whether to open what is found instead of adding it to the restricted mode.
+        open: bool,
     },
     /// The newest videos of a channel, for the subscriptions.
     Latest {
@@ -344,6 +409,7 @@ pub enum Response {
     },
     Resolved {
         result: Result<Item, String>,
+        open: bool,
     },
     Suggested {
         index: usize,
@@ -507,9 +573,10 @@ async fn run(
                     on_response(Response::Suggested { index, id, result });
                 });
             }
-            Request::Resolve { input } => {
+            Request::Resolve { input, open } => {
                 tokio::spawn(async move {
                     on_response(Response::Resolved {
+                        open,
                         result: resolve(input).await,
                     });
                 });
@@ -628,17 +695,21 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             language: own,
         } if query.is_empty() => {
             language = own;
-            (
-                format!("https://www.youtube.com/channel/{}/videos", bare_id(&id)),
-                CHANNEL_MAX_RESULTS,
-            )
+            (channel_videos_url(&id), CHANNEL_MAX_RESULTS)
+        }
+        Source::Channel {
+            id, language: own, ..
+        } if id.starts_with(RUMBLE_PREFIX) => {
+            // Rumble channels can't be searched, what is typed is ignored.
+            language = own;
+            (channel_videos_url(&id), CHANNEL_MAX_RESULTS)
         }
         Source::Channel {
             id,
             query,
             language: own,
         } => match reqwest::Url::parse_with_params(
-            &format!("https://www.youtube.com/channel/{}/search", bare_id(&id)),
+            &format!("{}/search", channel_url(&id)),
             [("query", query.as_str())],
         ) {
             Ok(url) => {
@@ -680,10 +751,7 @@ async fn latest(
     channel_id: &str,
     known: Option<String>,
 ) -> (Result<Vec<Entry>, String>, Option<String>) {
-    let url = format!(
-        "https://www.youtube.com/channel/{}/videos",
-        bare_id(channel_id)
-    );
+    let url = channel_videos_url(channel_id);
     let list = |language: Option<String>| {
         let url = url.clone();
         async move {
@@ -738,6 +806,9 @@ const NO_SUGGESTIONS: &str = "YouTube returned no suggestions";
 /// Asks YouTube's `next` endpoint, the one the watch page uses, for the videos suggested next
 /// to this one. yt-dlp doesn't expose them.
 async fn related(id: &str) -> Result<Vec<Entry>, String> {
+    if id.starts_with(RUMBLE_PREFIX) {
+        return Ok(Vec::new());
+    }
     let body = serde_json::json!({
         "context": {
             "client": {
@@ -1086,9 +1157,34 @@ fn parse_channel(entry: &Value) -> Option<ChannelRef> {
     })
 }
 
+/// Parses a Rumble video of a listing, whose entries can lack a duration and the channel.
+fn parse_rumble_entry(entry: &Value, id: String, url: String) -> Option<Entry> {
+    Some(Entry {
+        id: rumble_id(&id),
+        url,
+        title: string(entry, "title")?,
+        channel: string(entry, "channel")
+            .or_else(|| string(entry, "uploader"))
+            .or_else(|| string(entry, "playlist_channel"))
+            .or_else(|| string(entry, "playlist_uploader"))
+            .unwrap_or_default(),
+        channel_id: string(entry, "channel_url")
+            .or_else(|| string(entry, "playlist_webpage_url"))
+            .and_then(|url| rumble_channel_of_link(&url))
+            .map(|path| rumble_id(&path))
+            .unwrap_or_default(),
+        duration: entry["duration"].as_f64(),
+        views: entry["view_count"].as_u64(),
+        published: entry["timestamp"].as_i64(),
+    })
+}
+
 /// Parses one line of `yt-dlp --flat-playlist -j` output.
 fn parse_entry(entry: &Value) -> Option<Entry> {
     let url = string(entry, "url")?;
+    if let Some((id, _)) = rumble_video_of_link(&url) {
+        return parse_rumble_entry(entry, id, url);
+    }
     // Playlists and channels show up in search results too.
     if !url.contains("/watch?v=") && !url.contains("/shorts/") {
         return None;
@@ -1247,7 +1343,13 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
         return Err(error_line(&output.stderr));
     };
 
-    let id = youtube_id(&string(&video, "id").ok_or("yt-dlp did not report the video id")?);
+    let raw_id = string(&video, "id").ok_or("yt-dlp did not report the video id")?;
+    let rumble = rumble_video_of_link(url).is_some();
+    let id = if rumble {
+        rumble_id(&raw_id)
+    } else {
+        youtube_id(&raw_id)
+    };
     CAPTION_SOURCES
         .lock()
         .unwrap()
@@ -1262,7 +1364,14 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
             channel: string(&video, "channel")
                 .or_else(|| string(&video, "uploader"))
                 .unwrap_or_default(),
-            channel_id: youtube_id(&string(&video, "channel_id").unwrap_or_default()),
+            channel_id: if rumble {
+                string(&video, "channel_url")
+                    .and_then(|url| rumble_channel_of_link(&url))
+                    .map(|path| rumble_id(&path))
+                    .unwrap_or_default()
+            } else {
+                youtube_id(&string(&video, "channel_id").unwrap_or_default())
+            },
             duration: video["duration"].as_f64(),
             views: video["view_count"].as_u64(),
             published: video["timestamp"].as_i64(),
@@ -1476,6 +1585,9 @@ async fn fetch_captions(
 async fn sponsor_segments(id: &str) -> Result<Vec<(f64, f64)>, String> {
     use sha2::{Digest, Sha256};
 
+    if id.starts_with(RUMBLE_PREFIX) {
+        return Ok(Vec::new());
+    }
     let id = bare_id(id);
     let hash = Sha256::digest(id.as_bytes());
     let url = reqwest::Url::parse_with_params(
@@ -1516,6 +1628,9 @@ async fn sponsor_segments(id: &str) -> Result<Vec<(f64, f64)>, String> {
 }
 
 async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
+    if id.starts_with(RUMBLE_PREFIX) {
+        return Err("Rumble videos have no thumbnail here".to_string());
+    }
     let bytes = reqwest::get(format!(
         "https://i.ytimg.com/vi/{}/mqdefault.jpg",
         bare_id(id)
@@ -1563,11 +1678,19 @@ async fn resolve(input: Input) -> Result<Item, String> {
     match input {
         Input::Video(url) => Ok(Item::Video(info(&url).await?.entry)),
         Input::Channel(url) => {
-            let channel = listing_head(&format!("{url}/videos")).await?;
+            let rumble = rumble_channel_of_link(&url);
+            let channel = listing_head(&match rumble {
+                Some(_) => url.clone(),
+                None => format!("{url}/videos"),
+            })
+            .await?;
             Ok(Item::Channel(ChannelRef {
-                id: youtube_id(
-                    &string(&channel, "channel_id").ok_or("This channel could not be found")?,
-                ),
+                id: match rumble {
+                    Some(path) => rumble_id(&path),
+                    None => youtube_id(
+                        &string(&channel, "channel_id").ok_or("This channel could not be found")?,
+                    ),
+                },
                 name: string(&channel, "channel")
                     .or_else(|| string(&channel, "uploader"))
                     .unwrap_or_else(|| "Unnamed channel".to_string()),
