@@ -188,7 +188,7 @@ thread_local! {
         pending_saves: HashMap::new(),
         local_files: HashMap::new(),
         feed_ids: Vec::new(),
-        history_offset: 0,
+        history_offset: u64::MAX,
         history_done: true,
         history_day: None,
     });
@@ -2174,6 +2174,37 @@ fn queue_remove(id: &str) {
     pump_queue();
 }
 
+pub const CLEAR_QUEUE_LABEL: &str = "Clear queue";
+const CONFIRM_CLEAR_QUEUE_LABEL: &str = "Confirm clearing the queue?";
+
+/// Needs two clicks: the first asks for confirmation, which lapses after a few seconds.
+/// The video playing stays in the queue.
+pub fn clear_queue() {
+    let button = &ui::get().clear_queue;
+    if button.label().as_deref() != Some(CONFIRM_CLEAR_QUEUE_LABEL) {
+        button.set_label(CONFIRM_CLEAR_QUEUE_LABEL);
+        glib::timeout_add_seconds_local_once(5, || {
+            ui::get().clear_queue.set_label(CLEAR_QUEUE_LABEL);
+        });
+        return;
+    }
+
+    button.set_label(CLEAR_QUEUE_LABEL);
+    let playing = ui::get().player.id();
+    let ids: Vec<String> = with(|state| {
+        state
+            .queue
+            .iter()
+            .map(|item| item.entry.id.clone())
+            .filter(|id| playing.as_deref() != Some(id))
+            .collect()
+    });
+    for id in ids {
+        queue_remove(&id);
+    }
+    refresh_queue();
+}
+
 /// Starts the next download of the queue, if none is going on.
 fn pump_queue() {
     loop {
@@ -2568,7 +2599,7 @@ fn show_history() {
     ui.history_scroll.vadjustment().set_value(0.0);
 
     with(|state| {
-        state.history_offset = 0;
+        state.history_offset = u64::MAX;
         state.history_done = false;
         state.history_day = None;
     });
