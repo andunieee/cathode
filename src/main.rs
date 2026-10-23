@@ -117,7 +117,7 @@ fn main() -> glib::ExitCode {
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_data(
-        "button, checkbutton, switch, scale, link, row.activatable,
+        "button, button.toggle, stackswitcher button, checkbutton, switch, scale, link, row.activatable,
          listview.rich-list > row, tab, dropdown { cursor: pointer; }
          button:disabled, checkbutton:disabled, row:disabled { cursor: default; }
          row.queue-playing { background-color: alpha(@accent_bg_color, 0.25); }

@@ -416,6 +416,7 @@ fn results_view(store: &gio::ListStore) -> gtk::ListView {
         Some(factory),
     );
     view.set_single_click_activate(true);
+    view.set_cursor(Some(&crate::ui::pointer()));
     view.add_css_class("rich-list");
     view.connect_activate({
         let store = store.clone();
@@ -830,7 +831,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             .child(&results_view(&feed_store))
             .build(),
         Some("latest"),
-        "Latest videos",
+        "Subscriptions Feed",
     );
     feed_tabs.add_titled(
         &gtk::ScrolledWindow::builder()
@@ -841,7 +842,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         "Suggestions",
     );
     feed_tabs.connect_visible_child_name_notify(|_| nav::feed_tab_changed());
-    let feed_switcher = gtk::StackSwitcher::builder().stack(&feed_tabs).build();
+    let feed_switcher = gtk::StackSwitcher::builder()
+        .cursor(&crate::ui::pointer())
+        .stack(&feed_tabs)
+        .build();
     let feed_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     feed_bar.set_margin_top(12);
     feed_bar.set_margin_bottom(6);
