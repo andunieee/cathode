@@ -1071,6 +1071,55 @@ pub fn forward() {
     }
 }
 
+/// Opens what a browser handed over: a YouTube link, or a `cathode://` one that
+/// wraps it, as in `cathode://play/?url=<percent-encoded link>`. Videos play
+/// straight away, playlists and channels are shown.
+pub fn open_link(link: &str) {
+    use crate::profile::Input;
+
+    let link = link.trim();
+    let link = if link.starts_with("cathode:") {
+        reqwest::Url::parse(link)
+            .ok()
+            .and_then(|url| {
+                url.query_pairs()
+                    .find(|(key, _)| key == "url")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .unwrap_or_default()
+    } else {
+        link.to_string()
+    };
+
+    match crate::profile::parse_input(&link) {
+        Some(Input::Video(url)) => {
+            let id = url.rsplit('=').next().unwrap_or_default();
+            play(Entry {
+                id: crate::fetch::youtube_id(id),
+                url,
+                title: String::new(),
+                channel: String::new(),
+                channel_id: String::new(),
+                duration: None,
+                views: None,
+                published: None,
+            });
+        }
+        Some(Input::Playlist(url)) => {
+            let id = url.rsplit('=').next().unwrap_or_default();
+            navigate(Page::Playlist {
+                id: crate::fetch::youtube_id(id),
+                title: String::new(),
+            });
+        }
+        Some(Input::Channel(url)) => match url.split_once("/channel/") {
+            Some((_, id)) => open_channel(&crate::fetch::youtube_id(id), ""),
+            None => toast("Only links to channels by id are supported"),
+        },
+        None => toast("This is not a YouTube link"),
+    }
+}
+
 /// Plays a file from the command line.
 pub fn open_file(path: PathBuf) {
     let name = path

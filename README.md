@@ -32,6 +32,11 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Seekbar, playback speed, volume and fullscreen
 - Subtitles in your default language and in the language of the video, automatic captions included, switched in the player settings, with the CC button or with `C`
 
+## Links from the browser
+- Cathode handles `cathode://play/?url=<YouTube link>` links, and opens a running window instead of a new one
+- `packaging/cathode.user.js` is a userscript (Tampermonkey, Violentmonkey) that sends the page you are on to Cathode with `Alt+C`
+- Or from a terminal: `cathode https://youtu.be/dQw4w9WgXcQ`
+
 ## Channels
 ![A channel page](assets/channel.jpg)
 

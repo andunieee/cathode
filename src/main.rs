@@ -19,7 +19,9 @@ mod tools;
 mod ui;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// Re-run ourselves in the background, in its own process group and with
 /// stdio silenced, so the launching terminal is free again. Returns false if
@@ -47,39 +49,63 @@ fn detach() -> bool {
     false
 }
 
+/// Builds the window the first time it is needed, whether the app was opened
+/// plainly or to open something.
+fn start(app: &adw::Application, started: &Cell<bool>) {
+    if started.replace(true) {
+        return;
+    }
+    let ui = ui::build(app);
+
+    let requests = fetch::spawn(|response| {
+        glib::MainContext::default().invoke(move || nav::handle(response));
+    });
+    nav::init(requests);
+
+    ui.window.present();
+}
+
 fn main() -> glib::ExitCode {
     // Cathode detaches from the terminal unless --foreground is given.
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = std::env::args().collect();
     let foreground = args.iter().any(|a| a == "--foreground");
-    let file = args.into_iter().find(|a| a != "--foreground");
     if !foreground && detach() {
         return glib::ExitCode::SUCCESS;
     }
 
+    // A second launch hands its files and links to the running one.
     let app = adw::Application::builder()
         .application_id("io.github.andunieee.Cathode")
+        .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
     app.connect_startup(|_| load_css());
 
-    app.connect_activate(move |app| {
-        let ui = ui::build(app);
+    let started = Rc::new(Cell::new(false));
 
-        let requests = fetch::spawn(|response| {
-            glib::MainContext::default().invoke(move || nav::handle(response));
-        });
-        nav::init(requests);
-
-        // Opening with a file argument plays it straight away.
-        if let Some(file) = &file {
-            nav::open_file(file.into());
+    app.connect_activate({
+        let started = started.clone();
+        move |app| {
+            start(app, &started);
+            ui::get().window.present();
         }
-
-        ui.window.present();
     });
 
-    // The arguments are ours, GTK doesn't get to see them.
-    app.run_with_args::<&str>(&[])
+    app.connect_open(move |app, files, _| {
+        start(app, &started);
+        for file in files {
+            // Links from the browser, `cathode://` or plain YouTube ones, or files to play.
+            match file.path() {
+                Some(path) if file.is_native() => nav::open_file(path),
+                _ => nav::open_link(&file.uri()),
+            }
+        }
+        ui::get().window.present();
+    });
+
+    // Only ours are passed on, GTK doesn't get to see the rest.
+    let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--foreground").collect();
+    app.run_with_args(&args)
 }
 
 /// Clickable widgets get a pointer cursor, the way they do on the web.
