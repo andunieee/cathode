@@ -207,6 +207,8 @@ pub enum Request {
     /// The newest videos of a channel, for the subscriptions.
     Latest {
         channel_id: String,
+        /// The language of the channel if it is known, otherwise it is looked for.
+        language: Option<String>,
     },
     /// The sponsor segments of a video, from SponsorBlock.
     Segments {
@@ -261,6 +263,8 @@ pub enum Response {
     Latest {
         channel_id: String,
         result: Result<Vec<Entry>, String>,
+        /// The language found for a channel that had none.
+        language: Option<String>,
     },
     Resolved {
         result: Result<Item, String>,
@@ -398,13 +402,15 @@ async fn run(
                     cancel.notify_one();
                 }
             }
-            Request::Latest { channel_id } => {
+            Request::Latest { channel_id, language } => {
                 let slots = latest_slots.clone();
                 tokio::spawn(async move {
                     let _slot = slots.acquire().await;
+                    let (result, language) = latest(&channel_id, language).await;
                     on_response(Response::Latest {
-                        result: latest(&channel_id).await,
+                        result,
                         channel_id,
+                        language,
                     });
                 });
             }
@@ -538,34 +544,72 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
     // channel. A short one comes first so there is something to look at in the meantime.
     let mut seen = HashSet::new();
     if limit > SEARCH_MAX_RESULTS {
-        if let Err(error) = stream_listing(&key, &url, FIRST_PAGE, &mut seen, on_response).await {
+        if let Err(error) = stream_listing(&key, &url, FIRST_PAGE, &mut seen, on_response, None).await {
             return finish(Some(error));
         }
     }
     finish(
-        stream_listing(&key, &url, limit, &mut seen, on_response)
+        stream_listing(&key, &url, limit, &mut seen, on_response, None)
             .await
             .err(),
     );
 }
 
-/// The newest videos of a channel.
-async fn latest(channel_id: &str) -> Result<Vec<Entry>, String> {
+/// The newest videos of a channel, in its language so that their titles are the original ones.
+/// YouTube has no language for channels, so one that isn't known yet is taken from its newest
+/// video, and returned to be kept.
+async fn latest(
+    channel_id: &str,
+    known: Option<String>,
+) -> (Result<Vec<Entry>, String>, Option<String>) {
     let url = format!("https://www.youtube.com/channel/{}/videos", bare_id(channel_id));
-    let entries = Mutex::new(Vec::new());
-    stream_listing(
-        "",
-        &url,
-        LATEST_PER_CHANNEL,
-        &mut HashSet::new(),
-        &|response| {
-            if let Response::Entries { entries: batch, .. } = response {
-                entries.lock().unwrap().extend(batch);
-            }
-        },
-    )
-    .await?;
-    Ok(entries.into_inner().unwrap())
+    let list = |language: Option<String>| {
+        let url = url.clone();
+        async move {
+            let entries = Mutex::new(Vec::new());
+            stream_listing(
+                "",
+                &url,
+                LATEST_PER_CHANNEL,
+                &mut HashSet::new(),
+                &|response| {
+                    if let Response::Entries { entries: batch, .. } = response {
+                        entries.lock().unwrap().extend(batch);
+                    }
+                },
+                language,
+            )
+            .await?;
+            Ok::<_, String>(entries.into_inner().unwrap())
+        }
+    };
+
+    if known.is_some() {
+        return (list(known).await, None);
+    }
+
+    let entries = match list(None).await {
+        Ok(entries) => entries,
+        Err(error) => return (Err(error), None),
+    };
+    let found = match entries.first() {
+        Some(entry) if !entry.url.is_empty() => info(&entry.url)
+            .await
+            .ok()
+            .and_then(|info| info.language)
+            .filter(|language| crate::settings::valid_language(language)),
+        _ => None,
+    };
+    let default = crate::settings::language();
+    match found {
+        // The titles asked for in the default language are already the right ones.
+        Some(language) if default.as_deref() != Some(language.as_str()) => {
+            // If this fails the titles we have are still good, and so is the language.
+            let entries = list(Some(language.clone())).await.unwrap_or(entries);
+            (Ok(entries), Some(language))
+        }
+        found => (Ok(entries), found),
+    }
 }
 
 /// Asks YouTube's `next` endpoint, the one the watch page uses, for the videos suggested next
@@ -763,6 +807,7 @@ async fn stream_listing(
     end: usize,
     seen: &mut HashSet<String>,
     on_response: &impl Fn(Response),
+    language: Option<String>,
 ) -> Result<(), String> {
     // The results and channel pages keep paging forever, so the limit is needed here.
     let mut child = crate::settings::yt_dlp()
@@ -776,7 +821,7 @@ async fn stream_listing(
             &format!("--playlist-end={end}"),
             "-j",
         ])
-        .args(crate::settings::language_args())
+        .args(crate::settings::language_args(language))
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

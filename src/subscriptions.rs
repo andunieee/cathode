@@ -14,6 +14,10 @@ use crate::fetch::{Entry, LATEST_PER_CHANNEL};
 pub struct Subscription {
     pub id: String,
     pub name: String,
+    /// The language of the channel, taken from its latest video, which its titles are asked for
+    /// in. YouTube has none for channels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -82,6 +86,22 @@ pub fn list() -> Vec<Subscription> {
 
 pub fn is_subscribed(id: &str) -> bool {
     with(|state| state.list.iter().any(|s| s.id == id))
+}
+
+/// Keeps the language found for a channel.
+pub fn set_language(id: &str, language: String) {
+    with(|state| {
+        if let Some(subscription) = state.list.iter_mut().find(|s| s.id == id) {
+            subscription.language = Some(language);
+            if let Err(error) = save(&state.list) {
+                eprintln!("Cannot save the subscriptions: {error}");
+            }
+        }
+    });
+}
+
+pub fn language(id: &str) -> Option<String> {
+    with(|state| state.list.iter().find(|s| s.id == id)?.language.clone())
 }
 
 /// Does nothing if the channel is already there.

@@ -2368,6 +2368,7 @@ pub fn toggle_subscription() {
     if let Err(error) = subscriptions::subscribe(Subscription {
         id: id.clone(),
         name,
+        language: None,
     }) {
         toast(&format!("Could not save the subscriptions: {error}"));
     }
@@ -2453,6 +2454,7 @@ fn request_latest(id: &str) {
     if subscriptions::mark_pending(id) {
         send(Request::Latest {
             channel_id: id.to_string(),
+            language: subscriptions::language(id),
         });
     }
     update_feed_status();
@@ -3058,7 +3060,10 @@ pub fn handle(response: Response) {
                 }
             }
         }
-        Response::Latest { channel_id, result } => {
+        Response::Latest { channel_id, result, language } => {
+            if let Some(language) = language {
+                subscriptions::set_language(&channel_id, language);
+            }
             match result {
                 Ok(entries) => subscriptions::set_latest(&channel_id, entries),
                 Err(error) => subscriptions::set_failed(&channel_id, error),

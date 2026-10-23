@@ -160,17 +160,21 @@ pub fn download_args(height: Option<u32>) -> Vec<String> {
 /// The default language, if it is a code YouTube can be asked for: letters, digits and dashes.
 pub fn language() -> Option<String> {
     let language = get().language.trim().to_string();
-    let valid = !language.is_empty()
+    valid_language(&language).then_some(language)
+}
+
+pub fn valid_language(language: &str) -> bool {
+    !language.is_empty()
         && language
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    valid.then_some(language)
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Makes yt-dlp ask for the titles of the listings in the default language. YouTube gives
 /// English ones otherwise, translated if the uploader has no English title.
-pub fn language_args() -> Vec<String> {
-    match language() {
+/// A `language` replaces the default one, for the channels that have their own.
+pub fn language_args(own: Option<String>) -> Vec<String> {
+    match own.or_else(language) {
         Some(language) => vec!["--extractor-args".to_string(), format!("youtube:lang={language}")],
         None => Vec::new(),
     }
