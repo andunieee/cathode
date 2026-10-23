@@ -2,8 +2,10 @@
 //! the app, the latest last. A new entry is appended to the file, and reading goes backwards from
 //! its end, which gives the most recent ones, as far back as one cares to go.
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +13,9 @@ use crate::fetch::Entry;
 
 /// How much of the file is read at a time when going backwards.
 const CHUNK: u64 = 8192;
+
+/// The ids of the videos watched, read from the file the first time they are asked for.
+static IDS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Watched {
@@ -41,12 +46,47 @@ pub fn record(entry: &Entry) -> Result<(), String> {
     let path = path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     // One write, so a line is either all there or not at all.
+    let mut ids = IDS.lock().unwrap();
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .and_then(|mut file| file.write_all(line.as_bytes()))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Not read yet means it will have this one when it is.
+    if let Some(ids) = ids.as_mut() {
+        ids.insert(entry.id.clone());
+    }
+    Ok(())
+}
+
+/// Whether the video is in the history.
+pub fn is_watched(id: &str) -> bool {
+    IDS.lock()
+        .unwrap()
+        .get_or_insert_with(read_ids)
+        .contains(id)
+}
+
+fn read_ids() -> HashSet<String> {
+    #[derive(Deserialize)]
+    struct Line {
+        entry: Id,
+    }
+    #[derive(Deserialize)]
+    struct Id {
+        id: String,
+    }
+
+    let Ok(file) = std::fs::File::open(path()) else {
+        return HashSet::new();
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Line>(&line).ok())
+        .map(|line| line.entry.id)
+        .collect()
 }
 
 /// Up to `count` entries going back from the byte `before` (`u64::MAX` for the end of the file),

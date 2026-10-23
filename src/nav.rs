@@ -405,6 +405,9 @@ fn show_video(entry: &Entry) {
         .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
 
     let mut meta = Vec::new();
+    if history::is_watched(&entry.id) {
+        meta.push("Watched".to_string());
+    }
     // The exact date comes with the details, a listing only knows roughly how long ago it was.
     if let Some(date) = info.as_ref().and_then(|info| info.upload_date.as_deref()) {
         meta.push(format::date(date));
@@ -464,6 +467,12 @@ fn show_video(entry: &Entry) {
     let large = thumbnail(&entry.id, true, None);
     let small = with(|state| state.thumbnails[0].get(&entry.id).cloned());
     ui.video_picture.set_paintable(large.or(small).as_ref());
+    ui.video_picture
+        .set_opacity(if history::is_watched(&entry.id) {
+            0.5
+        } else {
+            1.0
+        });
 }
 
 fn clear_rows(list: &gtk::ListBox) {

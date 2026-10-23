@@ -8,6 +8,7 @@ use gtk::{gdk, gio, glib, pango};
 
 use crate::controls;
 use crate::fetch::{Entry, SearchFilter, SearchSort};
+use crate::history;
 use crate::library;
 use crate::nav;
 use crate::player::Player;
@@ -363,7 +364,19 @@ impl Card {
         // In the restricted mode only the channels that are allowed can be visited.
         self.channel
             .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
-        self.details.set_text(&nav::details(entry));
+        let watched = history::is_watched(&entry.id);
+        let details = nav::details(entry);
+        self.details.set_text(&if watched {
+            format!("Watched  ·  {details}")
+        } else {
+            details
+        });
+        if watched {
+            self.title.add_css_class("dim-label");
+        } else {
+            self.title.remove_css_class("dim-label");
+        }
+        self.picture.set_opacity(if watched { 0.5 } else { 1.0 });
         *self.entry.borrow_mut() = Some(entry.clone());
 
         // The pictures are recycled, the name tells which video a late thumbnail is for.
