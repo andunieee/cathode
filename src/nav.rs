@@ -1583,6 +1583,8 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
         if let Err(error) = history::record(entry) {
             crate::log::warning!("Cannot write the history: {error}");
         }
+        suggestions::watched(&entry.id);
+        remove_suggestion(&entry.id);
         suggest_next();
     }
     ui.player_status.set_visible(false);
@@ -2620,6 +2622,25 @@ fn suggest_next() {
         });
     }
     update_feed_status();
+}
+
+/// Takes the video off the list of suggestions on screen.
+fn remove_suggestion(id: &str) {
+    let ui = ui::get();
+    let position = with(|state| {
+        let position = state.suggestion_ids.iter().position(|other| other == id)?;
+        state.suggestion_ids.remove(position);
+        Some(position)
+    });
+    if let Some(position) = position {
+        ui.suggestions_store.remove(position as u32);
+    }
+}
+
+/// The user doesn't want the video suggested.
+pub fn dismiss_suggestion(id: &str) {
+    suggestions::dismiss(id);
+    remove_suggestion(id);
 }
 
 /// The tab of the home page changed, or what it shows did.

@@ -4,10 +4,11 @@
 //! always counts the same relative to the ones before it however long the history gets. The ones
 //! suggested again add up. The sums are kept as base 2 logarithms, which can't overflow.
 //! It lives in `scores_v1.json` in the data directory of the app, with how far into the history
-//! the requests have got, so they go on from there on the next start.
+//! the requests have got, so they go on from there on the next start, and the ids of the videos
+//! dismissed, which are left out of everything suggested afterwards.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,8 @@ struct File {
     last_index: usize,
     last_id: String,
     videos: HashMap<String, Suggested>,
+    /// The videos the user dismissed.
+    dismissed: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -111,7 +114,7 @@ pub fn finish(index: usize, id: &str, result: Result<Vec<Entry>, String>) -> Res
     with(|state| {
         let score = index as f64 / HALF_LIFE;
         for entry in entries {
-            if history::is_watched(&entry.id) {
+            if history::is_watched(&entry.id) || state.file.dismissed.contains(&entry.id) {
                 continue;
             }
             match state.file.videos.get_mut(&entry.id) {
@@ -130,6 +133,28 @@ pub fn finish(index: usize, id: &str, result: Result<Vec<Entry>, String>) -> Res
         state.file.last_id = id.to_string();
         save(&state.file)
     })
+}
+
+/// Takes the video out of the suggestions, because it was watched.
+pub fn watched(id: &str) {
+    with(|state| {
+        if state.file.videos.remove(id).is_some() {
+            if let Err(error) = save(&state.file) {
+                crate::log::warning!("Cannot save the suggestions: {error}");
+            }
+        }
+    });
+}
+
+/// Takes the video out of the suggestions for good.
+pub fn dismiss(id: &str) {
+    with(|state| {
+        state.file.videos.remove(id);
+        state.file.dismissed.insert(id.to_string());
+        if let Err(error) = save(&state.file) {
+            crate::log::warning!("Cannot save the suggestions: {error}");
+        }
+    });
 }
 
 /// The wait is over.

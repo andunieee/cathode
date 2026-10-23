@@ -276,7 +276,8 @@ struct Card {
 }
 
 impl Card {
-    fn new() -> Self {
+    /// With `dismissable`, the card has a button to take the video out of the suggestions.
+    fn new(dismissable: bool) -> Self {
         let entry: Rc<RefCell<Option<Entry>>> = Rc::default();
 
         let picture = gtk::Picture::builder()
@@ -343,6 +344,23 @@ impl Card {
             }
         });
 
+        let dismiss = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .icon_name("window-close-symbolic")
+            .tooltip_text("Dismiss")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .visible(dismissable)
+            .build();
+        dismiss.connect_clicked({
+            let entry = entry.clone();
+            move |_| {
+                if let Some(entry) = entry.borrow().as_ref() {
+                    nav::dismiss_suggestion(&entry.id);
+                }
+            }
+        });
+
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         root.set_margin_top(6);
         root.set_margin_bottom(6);
@@ -351,6 +369,7 @@ impl Card {
         root.append(&picture);
         root.append(&text);
         root.append(&queue);
+        root.append(&dismiss);
 
         Self {
             root,
@@ -391,11 +410,11 @@ impl Card {
     }
 }
 
-fn results_view(store: &gio::ListStore) -> gtk::ListView {
+fn results_view(store: &gio::ListStore, dismissable: bool) -> gtk::ListView {
     let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
+    factory.connect_setup(move |_, item| {
         let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-        let card = Card::new();
+        let card = Card::new(dismissable);
         item.set_child(Some(&card.root));
         // SAFETY: only ever read back as a `Card` below.
         unsafe { item.set_data("card", card) };
@@ -645,7 +664,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     results.append(
         &gtk::ScrolledWindow::builder()
             .vexpand(true)
-            .child(&results_view(&store))
+            .child(&results_view(&store, false))
             .build(),
     );
 
@@ -828,7 +847,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     feed_tabs.add_titled(
         &gtk::ScrolledWindow::builder()
             .vexpand(true)
-            .child(&results_view(&feed_store))
+            .child(&results_view(&feed_store, false))
             .build(),
         Some("latest"),
         "Subscriptions Feed",
@@ -836,7 +855,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     feed_tabs.add_titled(
         &gtk::ScrolledWindow::builder()
             .vexpand(true)
-            .child(&results_view(&suggestions_store))
+            .child(&results_view(&suggestions_store, true))
             .build(),
         Some("suggestions"),
         "Suggestions",
@@ -1217,6 +1236,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let clear_queue = gtk::Button::builder()
         .label(nav::CLEAR_QUEUE_LABEL)
         .css_classes(["flat"])
+        .cursor(&crate::ui::pointer())
         .build();
     clear_queue.connect_clicked(|_| nav::clear_queue());
     queue_header.pack_end(&clear_queue);
