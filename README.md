@@ -69,6 +69,24 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Settings for download quality, sponsor segment skipping, speed limit, proxy and browser cookies for age-restricted videos
 
 # Installation
+## One-liners
+Each one downloads the latest release.
+
+**Linux** (Flatpak):
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.flatpak')" -o /tmp/cathode.flatpak && flatpak install --user -y /tmp/cathode.flatpak
+```
+
+**macOS** (Apple Silicon):
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*macos-arm64[^"]*\.zip')" -o /tmp/cathode.zip && ditto -x -k /tmp/cathode.zip /Applications
+```
+
+**Windows** (PowerShell), unzips to `%LOCALAPPDATA%\Cathode`, launch `cathode.bat`:
+```
+$u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64'; iwr $u -OutFile $env:TEMP\cathode.zip; Expand-Archive -Force $env:TEMP\cathode.zip $env:LOCALAPPDATA\Cathode
+```
+
 ## Releases
 Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
 
