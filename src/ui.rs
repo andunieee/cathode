@@ -134,6 +134,7 @@ pub struct Ui {
     pub skip_buttons: Vec<(gtk::Button, bool)>,
 
     pub queue_list: gtk::ListBox,
+    pub clear_queue: gtk::Button,
 
     /// Set while the widgets are being updated by code, so their signals can be ignored.
     pub syncing: Cell<bool>,
@@ -1181,6 +1182,13 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             .build(),
     ));
 
+    let clear_queue = gtk::Button::builder()
+        .label(nav::CLEAR_QUEUE_LABEL)
+        .css_classes(["flat"])
+        .build();
+    clear_queue.connect_clicked(|_| nav::clear_queue());
+    queue_header.pack_end(&clear_queue);
+
     let queue_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["navigation-sidebar"])
@@ -1448,6 +1456,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         volume_scale,
         skip_buttons,
         queue_list,
+        clear_queue,
         syncing: Cell::new(false),
     });
     UI.with(|slot| *slot.borrow_mut() = Some(ui.clone()));
