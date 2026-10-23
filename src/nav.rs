@@ -2221,7 +2221,12 @@ fn refresh_queue() {
             })
             .title_lines(2)
             .use_markup(false)
+            .activatable(true)
             .build();
+        row.connect_activated({
+            let entry = entry.clone();
+            move |_| open_video(entry.clone())
+        });
 
         let play = gtk::Button::builder().cursor(&crate::ui::pointer())
             .icon_name("media-playback-start-symbolic")
