@@ -21,14 +21,48 @@ mod ui;
 use adw::prelude::*;
 use gtk::glib;
 
+/// Re-run ourselves in the background, in its own process group and with
+/// stdio silenced, so the launching terminal is free again. Returns false if
+/// that failed, in which case we just keep running in the foreground.
+#[cfg(unix)]
+fn detach() -> bool {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    Command::new(exe)
+        .args(std::env::args().skip(1))
+        .arg("--foreground")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .is_ok()
+}
+
+#[cfg(not(unix))]
+fn detach() -> bool {
+    false
+}
+
 fn main() -> glib::ExitCode {
+    // Cathode detaches from the terminal unless --foreground is given.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let foreground = args.iter().any(|a| a == "--foreground");
+    let file = args.into_iter().find(|a| a != "--foreground");
+    if !foreground && detach() {
+        return glib::ExitCode::SUCCESS;
+    }
+
     let app = adw::Application::builder()
         .application_id("io.github.andunieee.Cathode")
         .build();
 
     app.connect_startup(|_| load_css());
 
-    app.connect_activate(|app| {
+    app.connect_activate(move |app| {
         let ui = ui::build(app);
 
         let requests = fetch::spawn(|response| {
@@ -37,7 +71,7 @@ fn main() -> glib::ExitCode {
         nav::init(requests);
 
         // Opening with a file argument plays it straight away.
-        if let Some(file) = std::env::args().nth(1) {
+        if let Some(file) = &file {
             nav::open_file(file.into());
         }
 
