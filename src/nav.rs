@@ -2065,8 +2065,9 @@ fn play_next_in_queue() {
             .map(|item| item.entry.clone())
     });
 
-    if let Some(next) = next {
-        play(next);
+    match next {
+        Some(next) => play(next),
+        None => stop_player(),
     }
 }
 
