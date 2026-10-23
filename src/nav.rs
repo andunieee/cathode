@@ -22,12 +22,15 @@ use crate::profile::{self, ChannelRef, Item, PlaylistRef};
 use crate::settings;
 use crate::state::{self, CaptionMode};
 use crate::subscriptions::{self, Subscription};
+use crate::suggestions;
 use crate::ui::{self, CacheRow, Ui};
 
 /// The videos shown at first on the history page, and each time it is scrolled to the end.
 const HISTORY_PAGE: usize = 10;
 /// How often the subscriptions are checked for new videos.
 const FEED_REFRESH_SECONDS: u32 = 30 * 60;
+/// How long to wait between asking for the suggestions of two videos of the history.
+const SUGGESTION_WAIT_SECONDS: u32 = 30;
 
 #[derive(Clone)]
 enum Page {
@@ -152,6 +155,8 @@ struct State {
 
     /// Ids of the videos of the feed on screen, so it is only rebuilt when it changed.
     feed_ids: Vec<String>,
+    /// The same for the suggestions.
+    suggestion_ids: Vec<String>,
 
     /// Where to read the next entries of the history file from, and the day of the last one shown.
     history_offset: u64,
@@ -188,6 +193,7 @@ thread_local! {
         pending_saves: HashMap::new(),
         local_files: HashMap::new(),
         feed_ids: Vec::new(),
+        suggestion_ids: Vec::new(),
         history_offset: u64::MAX,
         history_done: true,
         history_day: None,
@@ -700,6 +706,7 @@ pub fn set_restricted(restricted: bool) {
     show();
     if !restricted {
         refresh_feed();
+        suggest_next();
     }
 }
 
@@ -942,6 +949,7 @@ pub fn init(requests: UnboundedSender<Request>) {
     with(|state| state.requests = Some(requests));
     profile::init();
     subscriptions::init();
+    suggestions::init();
     collections::init();
     state::init();
     restore_sidebars();
@@ -970,6 +978,7 @@ pub fn init(requests: UnboundedSender<Request>) {
         glib::ControlFlow::Continue
     });
 
+    suggest_next();
     refresh_feed();
     glib::timeout_add_seconds_local(FEED_REFRESH_SECONDS, || {
         refresh_feed();
@@ -1565,6 +1574,7 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
         if let Err(error) = history::record(entry) {
             eprintln!("Cannot write the history: {error}");
         }
+        suggest_next();
     }
     ui.player_status.set_visible(false);
     ui.play_button.set_icon_name(if paused {
@@ -2577,11 +2587,54 @@ fn show_feed() {
         ui.feed_store.remove_all();
         append_to(&ui.feed_store, &feed);
     }
+    feed_tab_changed();
+}
+
+/// Asks for the suggestions of the next video of the history, if it's time. The answer
+/// schedules the next one, so this only has to be called to start or restart the chain.
+fn suggest_next() {
+    if profile::restricted() {
+        return;
+    }
+    if let Some((index, entry)) = suggestions::begin() {
+        send(Request::Suggest {
+            index,
+            id: entry.id,
+        });
+    }
+    update_feed_status();
+}
+
+/// The tab of the home page changed, or what it shows did.
+pub fn feed_tab_changed() {
+    let ui = ui::get();
+    if ui.feed_tabs.visible_child_name().as_deref() == Some("suggestions") {
+        let ranked = suggestions::ranked();
+        let ids: Vec<String> = ranked.iter().map(|entry| entry.id.clone()).collect();
+        if with(|state| std::mem::replace(&mut state.suggestion_ids, ids.clone())) != ids {
+            ui.suggestions_store.remove_all();
+            append_to(&ui.suggestions_store, &ranked);
+        }
+    }
     update_feed_status();
 }
 
 fn update_feed_status() {
     let ui = ui::get();
+    if ui.feed_tabs.visible_child_name().as_deref() == Some("suggestions") {
+        let (done, total) = suggestions::progress();
+        let text = if done < total {
+            format!("Looking at the suggestions of your history… {done} of {total}")
+        } else {
+            String::new()
+        };
+        ui.feed_refresh.set_visible(false);
+        ui.feed_status.set_text(&text);
+        ui.feed_status.set_tooltip_text(Some(&text));
+        return;
+    }
+    ui.feed_refresh.set_visible(true);
+
     let pending = subscriptions::pending_count();
     let (failed, error) = subscriptions::failures();
 
@@ -3168,6 +3221,18 @@ pub fn handle(response: Response) {
             }
             if matches!(current(), Page::Home) && !profile::restricted() {
                 show_feed();
+            }
+        }
+        Response::Suggested { index, id, result } => {
+            if let Err(error) = suggestions::finish(index, &id, result) {
+                eprintln!("Cannot get the suggestions of {id}: {error}");
+            }
+            glib::timeout_add_seconds_local_once(SUGGESTION_WAIT_SECONDS, || {
+                suggestions::cooled_down();
+                suggest_next();
+            });
+            if matches!(current(), Page::Home) && !profile::restricted() {
+                feed_tab_changed();
             }
         }
         Response::Resolved { result } => controls::resolved(result),

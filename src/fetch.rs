@@ -223,6 +223,12 @@ pub enum Request {
         /// The language of the channel if it is known, otherwise it is looked for.
         language: Option<String>,
     },
+    /// What YouTube suggests to watch after a video of the history, for the suggestions of the
+    /// home page. `index` is echoed back.
+    Suggest {
+        index: usize,
+        id: String,
+    },
     /// The sponsor segments of a video, from SponsorBlock.
     Segments {
         id: String,
@@ -281,6 +287,11 @@ pub enum Response {
     },
     Resolved {
         result: Result<Item, String>,
+    },
+    Suggested {
+        index: usize,
+        id: String,
+        result: Result<Vec<Entry>, String>,
     },
     /// The `(start, end)` of the parts to skip, in seconds.
     Segments {
@@ -425,6 +436,16 @@ async fn run(
                         channel_id,
                         language,
                     });
+                });
+            }
+            Request::Suggest { index, id } => {
+                tokio::spawn(async move {
+                    let result = match related(&id).await {
+                        // A video can have none, which isn't worth asking about again.
+                        Err(error) if error == NO_SUGGESTIONS => Ok(Vec::new()),
+                        result => result,
+                    };
+                    on_response(Response::Suggested { index, id, result });
                 });
             }
             Request::Resolve { input } => {
@@ -652,6 +673,8 @@ async fn latest(
     }
 }
 
+const NO_SUGGESTIONS: &str = "YouTube returned no suggestions";
+
 /// Asks YouTube's `next` endpoint, the one the watch page uses, for the videos suggested next
 /// to this one. yt-dlp doesn't expose them.
 async fn related(id: &str) -> Result<Vec<Entry>, String> {
@@ -685,7 +708,7 @@ async fn related(id: &str) -> Result<Vec<Entry>, String> {
     let mut entries = Vec::new();
     collect_lockups(&response, id, &mut entries);
     if entries.is_empty() {
-        Err("YouTube returned no suggestions".to_string())
+        Err(NO_SUGGESTIONS.to_string())
     } else {
         Ok(entries)
     }

@@ -15,6 +15,7 @@ mod profile;
 mod settings;
 mod state;
 mod subscriptions;
+mod suggestions;
 mod tools;
 mod ui;
 

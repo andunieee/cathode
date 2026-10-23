@@ -95,6 +95,11 @@ pub struct Ui {
     /// The latest videos of the subscriptions, on the home page.
     pub feed_store: gio::ListStore,
     pub feed_status: gtk::Label,
+    pub feed_refresh: gtk::Button,
+    /// The tabs of the home page: "latest" and "suggestions".
+    pub feed_tabs: gtk::Stack,
+    /// The videos suggested next to the ones in the history, on the home page.
+    pub suggestions_store: gio::ListStore,
 
     pub history_scroll: gtk::ScrolledWindow,
     /// The history page is one list per day, the one most recently added to is kept here.
@@ -817,27 +822,37 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let feed_refresh = icon_button("view-refresh-symbolic", "Check for new videos");
     feed_refresh.add_css_class("flat");
     feed_refresh.connect_clicked(|_| nav::refresh_feed());
-    let feed_heading = gtk::Label::builder()
-        .label("Latest videos")
-        .xalign(0.0)
-        .css_classes(["title-2"])
-        .build();
+    let suggestions_store = gio::ListStore::new::<glib::BoxedAnyObject>();
+    let feed_tabs = gtk::Stack::new();
+    feed_tabs.add_titled(
+        &gtk::ScrolledWindow::builder()
+            .vexpand(true)
+            .child(&results_view(&feed_store))
+            .build(),
+        Some("latest"),
+        "Latest videos",
+    );
+    feed_tabs.add_titled(
+        &gtk::ScrolledWindow::builder()
+            .vexpand(true)
+            .child(&results_view(&suggestions_store))
+            .build(),
+        Some("suggestions"),
+        "Suggestions",
+    );
+    feed_tabs.connect_visible_child_name_notify(|_| nav::feed_tab_changed());
+    let feed_switcher = gtk::StackSwitcher::builder().stack(&feed_tabs).build();
     let feed_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     feed_bar.set_margin_top(12);
     feed_bar.set_margin_bottom(6);
     feed_bar.set_margin_start(12);
     feed_bar.set_margin_end(12);
-    feed_bar.append(&feed_heading);
+    feed_bar.append(&feed_switcher);
     feed_bar.append(&feed_status);
     feed_bar.append(&feed_refresh);
     let feed = gtk::Box::new(gtk::Orientation::Vertical, 0);
     feed.append(&feed_bar);
-    feed.append(
-        &gtk::ScrolledWindow::builder()
-            .vexpand(true)
-            .child(&results_view(&feed_store))
-            .build(),
-    );
+    feed.append(&feed_tabs);
 
     // History page
     let history_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -1442,6 +1457,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         cache_rows: RefCell::new(Vec::new()),
         feed_store,
         feed_status,
+        feed_refresh,
+        feed_tabs,
+        suggestions_store,
         history_scroll,
         history_box,
         history_current: RefCell::new(None),
