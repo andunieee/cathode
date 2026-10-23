@@ -239,6 +239,61 @@ pub enum Request {
     },
 }
 
+impl Request {
+    fn summary(&self) -> String {
+        match self {
+            Request::Listing { key, .. } => format!("listing {key}"),
+            Request::Info { key, url } => format!("info {key} ({url})"),
+            Request::Download { entry, height } => {
+                format!("download {} at height {height:?}", entry.id)
+            }
+            Request::Captions { entry, mode, .. } => {
+                format!("captions of {} for {mode:?}", entry.id)
+            }
+            Request::Cancel { id } => format!("cancel the download of {id}"),
+            Request::Thumbnail { id, large } => format!("thumbnail of {id}, large: {large}"),
+            Request::Resolve { .. } => "resolve a link".to_string(),
+            Request::Latest { channel_id, .. } => format!("latest videos of {channel_id}"),
+            Request::Suggest { id, .. } => format!("suggestions after {id}"),
+            Request::Segments { id } => format!("sponsor segments of {id}"),
+            Request::CheckCookies { browser } => format!("check the cookies of {browser}"),
+        }
+    }
+}
+
+impl Response {
+    /// A line for the log, none for the responses too frequent to be worth one.
+    pub fn summary(&self) -> Option<String> {
+        Some(match self {
+            Response::Entries { key, entries } => format!("{} entries for {key}", entries.len()),
+            Response::Channels { key, channels } => {
+                format!("{} channels for {key}", channels.len())
+            }
+            Response::ListingDone { key, error } => format!("listing {key} done, error: {error:?}"),
+            Response::Info { key, result } => match result {
+                Ok(_) => format!("info {key} arrived"),
+                Err(error) => format!("info {key} failed: {error}"),
+            },
+            Response::Downloaded { id, height, result } => match result {
+                Ok(path) => format!("downloaded {id} at {height:?} to {}", path.display()),
+                Err(error) => format!("download of {id} failed: {error}"),
+            },
+            Response::Captions {
+                id,
+                mode,
+                found,
+                failed,
+            } => {
+                format!(
+                    "captions of {id} for {mode:?}: {:?}, failed: {failed}",
+                    found.as_ref().map(|f| &f.0)
+                )
+            }
+            _ => return None,
+        })
+    }
+}
+
 pub enum Response {
     /// A batch of a listing's entries; a listing arrives in several of these.
     Entries {
@@ -273,6 +328,8 @@ pub enum Response {
         id: String,
         mode: CaptionMode,
         found: Option<(String, PathBuf)>,
+        /// The video has captions for the mode, but they could not be downloaded.
+        failed: bool,
     },
     Thumbnail {
         id: String,
@@ -358,6 +415,7 @@ async fn run(
     }
 
     while let Some(request) = rx.recv().await {
+        crate::log::info!("request: {}", request.summary());
         let on_response = on_response.clone();
 
         match request {
@@ -410,11 +468,12 @@ async fn run(
             }
             Request::Captions { entry, video, mode } => {
                 tokio::spawn(async move {
-                    let found = fetch_captions(&entry, &video, mode).await;
+                    let (found, failed) = fetch_captions(&entry, &video, mode).await;
                     on_response(Response::Captions {
                         id: entry.id,
                         mode,
                         found,
+                        failed,
                     });
                 });
             }
@@ -496,6 +555,7 @@ fn error_line(stderr: &[u8]) -> String {
         .or_else(|| stderr.lines().last())
         .unwrap_or("yt-dlp failed")
         .trim();
+    crate::log::warning!("yt-dlp failed: {line}");
 
     // A broken cookie database comes out as a bare SQLite error ("no such table: meta").
     let lower = line.to_lowercase();
@@ -1326,9 +1386,9 @@ async fn fetch_captions(
     entry: &Entry,
     video: &std::path::Path,
     mode: CaptionMode,
-) -> Option<(String, PathBuf)> {
+) -> (Option<(String, PathBuf)>, bool) {
     if mode == CaptionMode::Off || entry.url.is_empty() {
-        return None;
+        return (None, false);
     }
 
     let id = bare_id(&entry.id).to_string();
@@ -1342,19 +1402,33 @@ async fn fetch_captions(
     let source = match known(&id) {
         Some(source) => source,
         None => {
-            info(&entry.url).await.ok()?;
-            known(&id)?
+            if info(&entry.url).await.is_err() {
+                return (None, true);
+            }
+            match known(&id) {
+                Some(source) => source,
+                None => return (None, true),
+            }
         }
     };
 
-    let track = source.track_for(mode, crate::settings::language().as_deref())?;
+    let track = source.track_for(mode, crate::settings::language().as_deref());
+    crate::log::info!(
+        "captions of {id}: mode {mode:?}, default language {:?}, language of the video {:?}, track {track:?}",
+        crate::settings::language(),
+        source.language
+    );
+    let Some(track) = track else {
+        return (None, false);
+    };
     let base = video.with_extension("");
     let file = PathBuf::from(format!("{}.{track}.vtt", base.display()));
     if file.exists() {
-        return Some((track, file));
+        crate::log::info!("captions of {id}: {} is there already", file.display());
+        return (Some((track, file)), false);
     }
 
-    let status = crate::settings::yt_dlp()
+    let output = crate::settings::yt_dlp()
         .args([
             "--no-warnings",
             "--no-playlist",
@@ -1370,12 +1444,31 @@ async fn fetch_captions(
         .arg(format!("{}.%(ext)s", base.display()))
         .arg(&entry.url)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
         .kill_on_drop(true)
-        .status()
+        .output()
         .await;
-    (status.is_ok() && file.exists()).then_some((track, file))
+    match &output {
+        Ok(output) if !output.status.success() => {
+            crate::log::warning!(
+                "captions of {id}: yt-dlp for {track} failed with {}: {}",
+                output.status,
+                error_line(&output.stderr)
+            );
+        }
+        Err(error) => crate::log::warning!("captions of {id}: cannot run yt-dlp: {error}"),
+        Ok(_) => {}
+    }
+    crate::log::info!(
+        "captions of {id}: {} exists: {}",
+        file.display(),
+        file.exists()
+    );
+    if file.exists() {
+        (Some((track, file)), false)
+    } else {
+        // The video has the captions, they could not be had.
+        (None, true)
+    }
 }
 
 /// The sponsor segments SponsorBlock knows for a video. Only the start of the hash of the id is

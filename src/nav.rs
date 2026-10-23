@@ -681,6 +681,7 @@ fn apply_mode() {
 
 /// Turns the restricted mode on or off, starting over from the home page.
 pub fn set_restricted(restricted: bool) {
+    crate::log::info!("restricted mode: {restricted}");
     // Each mode keeps its own queue and player.
     save_session();
     unload_player();
@@ -918,6 +919,7 @@ fn show() {
 }
 
 fn navigate(page: Page) {
+    crate::log::info!("navigating to {}", page.key());
     if !page_allowed(&page) {
         toast("This is not available in the restricted mode");
         return;
@@ -960,7 +962,7 @@ pub fn init(requests: UnboundedSender<Request>) {
     // Videos that were not saved don't stay for long.
     let expired = cache::expire();
     if expired > 0 {
-        eprintln!("Deleted {expired} downloaded videos older than 48 hours");
+        crate::log::info!("Deleted {expired} downloaded videos older than 48 hours");
     }
     // Forgets what's left of videos that are gone.
     cache::scan();
@@ -1110,6 +1112,7 @@ pub fn open_link(link: &str) {
     use crate::profile::Input;
 
     let link = link.trim();
+    crate::log::info!("opening the link {link}");
     let link = if link.starts_with("cathode:") {
         reqwest::Url::parse(link)
             .ok()
@@ -1154,6 +1157,7 @@ pub fn open_link(link: &str) {
 
 /// Plays a file from the command line.
 pub fn open_file(path: PathBuf) {
+    crate::log::info!("opening the file {}", path.display());
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -1191,6 +1195,7 @@ fn size_name(height: u32) -> String {
 
 fn start_download(entry: Entry) {
     let height = wanted_size(&entry.id);
+    crate::log::info!("starting the download of {} at {height:?}", entry.id);
     let start = with(|state| {
         if state.inflight.contains_key(&entry.id) {
             false
@@ -1233,6 +1238,7 @@ fn swap_playback(entry: &Entry, path: &std::path::Path) {
 /// Picks the size of the video in the player. If it is not on disk it is downloaded, which
 /// stops the download going on for the video, and the player moves on to it once it is there.
 pub fn set_size(height: u32) {
+    crate::log::info!("download size: {height}");
     let ui = ui::get();
     let Some(entry) = with(|state| state.playing.clone()).filter(|entry| !entry.url.is_empty())
     else {
@@ -1343,6 +1349,7 @@ pub fn save_current(collection: Option<String>) {
 /// Moves the video out of the cache into the collection. A video that isn't downloaded yet is
 /// saved as soon as it is.
 fn save_video(entry: Entry, collection: String) {
+    crate::log::info!("saving {} to the collection {collection}", entry.id);
     if profile::restricted() || entry.url.is_empty() {
         return;
     }
@@ -1425,6 +1432,7 @@ pub fn play(entry: Entry) {
         return;
     }
 
+    crate::log::info!("playing {} ({})", entry.id, entry.title);
     let ui = ui::get();
     set_sidebar_toggle(&ui.queue_toggle, true);
     with(|state| state.playing = Some(entry.clone()));
@@ -1487,7 +1495,7 @@ fn save_session() {
         };
     });
     if let Err(error) = result {
-        eprintln!("Cannot write the state: {error}");
+        crate::log::warning!("Cannot write the state: {error}");
     }
 }
 
@@ -1537,6 +1545,7 @@ fn remember_position() {
 }
 
 fn start_playback(entry: &Entry, path: &std::path::Path) {
+    crate::log::info!("loading {} in the player", path.display());
     let ui = ui::get();
     remember_position();
     apply_caption_mode(Some(&entry.id));
@@ -1572,7 +1581,7 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     // Files from the command line aren't YouTube videos.
     if !entry.url.is_empty() {
         if let Err(error) = history::record(entry) {
-            eprintln!("Cannot write the history: {error}");
+            crate::log::warning!("Cannot write the history: {error}");
         }
         suggest_next();
     }
@@ -1593,6 +1602,7 @@ pub fn toggle_pause() {
             remember_position();
         }
         ui.player.set_paused(!ui.player.is_paused());
+        crate::log::info!("paused: {}", ui.player.is_paused());
         save_session();
         tick();
     }
@@ -1600,6 +1610,7 @@ pub fn toggle_pause() {
 
 /// Closes the player entirely, unlike pausing.
 pub fn stop_player() {
+    crate::log::info!("stopping the player");
     unload_player();
     save_session();
 }
@@ -1646,7 +1657,7 @@ fn remember_playback(change: impl Fn(&mut state::State)) {
         return;
     }
     if let Err(error) = state::update(change) {
-        eprintln!("Cannot write the state: {error}");
+        crate::log::warning!("Cannot write the state: {error}");
     }
 }
 
@@ -1730,6 +1741,7 @@ fn apply_caption_mode(id: Option<&str>) {
 
 /// Picks which captions to download and show.
 pub fn set_caption_mode(mode: CaptionMode) {
+    crate::log::info!("caption mode: {mode:?}");
     remember_playback(|state| state.caption_mode = mode);
     apply_caption_mode(None);
     refresh_captions();
@@ -1767,6 +1779,7 @@ pub fn toggle_captions() {
 /// Picks a row of the subtitles list: the first one turns them off, the others are the tracks
 /// of the video, which only change what is shown for it.
 pub fn pick_caption(row: usize) {
+    crate::log::info!("caption row picked: {row}");
     let ui = ui::get();
     let track = row.checked_sub(1).and_then(|index| {
         ui.caption_tracks
@@ -2119,6 +2132,7 @@ pub fn queue_add(entry: Entry) {
 
 /// Puts the video at the end of the queue, unless it is there already.
 fn enqueue(entry: Entry) -> bool {
+    crate::log::info!("adding {} to the queue", entry.id);
     let added = with(|state| {
         if state.queue.iter().any(|item| item.entry.id == entry.id) {
             return false;
@@ -2181,6 +2195,7 @@ fn retitle(original: &Entry) -> bool {
 }
 
 fn queue_remove(id: &str) {
+    crate::log::info!("removing {id} from the queue");
     if ui::get().player.id().as_deref() == Some(id) {
         return;
     }
@@ -2428,7 +2443,7 @@ fn restore_sidebars() {
         toggle.connect_toggled(move |toggle| {
             if !ui::get().syncing.get() {
                 if let Err(error) = state::update(|state| change(state, toggle.is_active())) {
-                    eprintln!("Cannot write the state: {error}");
+                    crate::log::warning!("Cannot write the state: {error}");
                 }
             }
         });
@@ -2444,6 +2459,7 @@ fn restore_sidebars() {
 // Subscriptions
 
 fn unsubscribe(id: &str) {
+    crate::log::info!("unsubscribing from {id}");
     if let Err(error) = subscriptions::unsubscribe(id) {
         toast(&format!("Could not save the subscriptions: {error}"));
     }
@@ -2465,6 +2481,7 @@ pub fn toggle_subscription() {
         return;
     }
 
+    crate::log::info!("subscribing to {id}");
     if let Err(error) = subscriptions::subscribe(Subscription {
         id: id.clone(),
         name,
@@ -3087,6 +3104,9 @@ fn delete_from_cache(entries: &[(Entry, String)]) {
 
 pub fn handle(response: Response) {
     let ui = ui::get();
+    if let Some(summary) = response.summary() {
+        crate::log::info!("response: {summary}");
+    }
 
     match response {
         Response::Entries { key, entries } => {
@@ -3225,7 +3245,7 @@ pub fn handle(response: Response) {
         }
         Response::Suggested { index, id, result } => {
             if let Err(error) = suggestions::finish(index, &id, result) {
-                eprintln!("Cannot get the suggestions of {id}: {error}");
+                crate::log::warning!("Cannot get the suggestions of {id}: {error}");
             }
             glib::timeout_add_seconds_local_once(SUGGESTION_WAIT_SECONDS, || {
                 suggestions::cooled_down();
@@ -3266,16 +3286,23 @@ pub fn handle(response: Response) {
                 }
             }
         }
-        Response::Captions { id, mode, found } => {
+        Response::Captions {
+            id,
+            mode,
+            found,
+            failed,
+        } => {
             // The video or the choice may have changed while they were being fetched.
             if ui.player.id().as_deref() != Some(&id) {
                 return;
             }
             match found {
                 Some((track, file)) => ui.player.queue_caption(track, file),
-                None if state::get().caption_mode == mode => {
-                    player_message("No subtitles for this video")
-                }
+                None if state::get().caption_mode == mode => player_message(if failed {
+                    "Could not download the subtitles"
+                } else {
+                    "No subtitles for this video"
+                }),
                 None => {}
             }
         }

@@ -353,7 +353,7 @@ pub async fn update(report: impl Fn(Status)) {
                     write_state(&state);
                 }
             }
-            Err(e) if usable => eprintln!("Failed to update {name}: {e}"),
+            Err(e) if usable => crate::log::warning!("Failed to update {name}: {e}"),
             Err(e) => errors.push(format!("Failed to install {name}: {e}")),
         }
     }

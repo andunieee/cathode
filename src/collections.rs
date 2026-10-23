@@ -133,7 +133,7 @@ pub fn init() {
                     Some(collection)
                 }
                 Err(error) => {
-                    eprintln!("Cannot read {}: {error}", path.display());
+                    crate::log::warning!("Cannot read {}: {error}", path.display());
                     None
                 }
             }
@@ -144,7 +144,7 @@ pub fn init() {
 
     if first_run {
         if let Err(error) = create(DEFAULT_NAME, Some(default_directory(DEFAULT_NAME))) {
-            eprintln!("Cannot create the default collection: {error}");
+            crate::log::warning!("Cannot create the default collection: {error}");
         }
     }
 }

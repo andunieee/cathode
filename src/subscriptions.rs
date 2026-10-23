@@ -72,7 +72,7 @@ pub fn init() {
         Ok(bytes) => serde_json::from_slice::<File>(&bytes)
             .map(|file| file.subscriptions)
             .unwrap_or_else(|error| {
-                eprintln!("Cannot read {}: {error}", path.display());
+                crate::log::warning!("Cannot read {}: {error}", path.display());
                 Vec::new()
             }),
         Err(_) => Vec::new(),
@@ -94,7 +94,7 @@ pub fn set_language(id: &str, language: String) {
         if let Some(subscription) = state.list.iter_mut().find(|s| s.id == id) {
             subscription.language = Some(language);
             if let Err(error) = save(&state.list) {
-                eprintln!("Cannot save the subscriptions: {error}");
+                crate::log::warning!("Cannot save the subscriptions: {error}");
             }
         }
     });

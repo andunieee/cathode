@@ -8,6 +8,7 @@ mod fetch;
 mod format;
 mod history;
 mod library;
+mod log;
 mod nav;
 mod player;
 mod preferences;
@@ -73,6 +74,8 @@ fn main() -> glib::ExitCode {
     if !foreground && detach() {
         return glib::ExitCode::SUCCESS;
     }
+    log::init();
+    log::info!("arguments: {:?}", &args[1..]);
 
     // A second launch hands its files and links to the running one.
     let app = adw::Application::builder()
@@ -95,6 +98,7 @@ fn main() -> glib::ExitCode {
     app.connect_open(move |app, files, _| {
         start(app, &started);
         for file in files {
+            log::info!("asked to open {}", file.uri());
             // Links from the browser, `cathode://` or plain YouTube ones, or files to play.
             match file.path() {
                 Some(path) if file.is_native() => nav::open_file(path),

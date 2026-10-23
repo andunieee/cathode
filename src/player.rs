@@ -209,7 +209,7 @@ impl Player {
                             area.queue_render();
                         }
                     }
-                    Err(error) => eprintln!("Failed creating the mpv render context: {error}"),
+                    Err(error) => crate::log::error!("Failed creating the mpv render context: {error}"),
                 }
             }
         });
@@ -381,6 +381,15 @@ impl Player {
             );
         }
         self.apply_captions();
+        let (tracks, selected) = self.caption_tracks();
+        crate::log::info!(
+            "captions: preferred {:?}, tracks {:?}, shown {selected:?}",
+            self.preferred_languages.borrow(),
+            tracks
+                .iter()
+                .map(|t| (t.id, t.label.as_str()))
+                .collect::<Vec<_>>()
+        );
         // With no language to go by, any track is better than none.
         if self.captions.get() && self.preferred_languages.borrow().is_empty() {
             if let (tracks, None) = self.caption_tracks() {

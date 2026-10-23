@@ -64,7 +64,7 @@ impl Profile {
 
         serde_json::from_slice(&bytes).unwrap_or_else(|error| {
             // Better to lock everything than to let a broken file switch the lock off.
-            eprintln!("Cannot read {}: {error}", path.display());
+            crate::log::warning!("Cannot read {}: {error}", path.display());
             BROKEN.with(|broken| broken.set(true));
             Self::default()
         })

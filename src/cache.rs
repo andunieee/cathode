@@ -221,7 +221,7 @@ pub fn touch(id: &str, height: Option<u32>) {
             .open(path)
             .and_then(|file| file.set_modified(SystemTime::now()));
         if let Err(error) = touched {
-            eprintln!("Cannot touch {id}: {error}");
+            crate::log::warning!("Cannot touch {id}: {error}");
         }
     }
 }

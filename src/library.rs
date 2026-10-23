@@ -268,7 +268,7 @@ pub fn refresh() {
                 ui.library.save_popover.popdown();
                 let remember = state::update(|state| state.save_collection = Some(name.clone()));
                 if let Err(error) = remember {
-                    eprintln!("Cannot write the state: {error}");
+                    crate::log::warning!("Cannot write the state: {error}");
                 }
                 update_save_button();
                 nav::save_current(Some(name.clone()));

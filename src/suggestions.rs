@@ -68,7 +68,7 @@ pub fn init() {
     let path = path();
     let file = match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice::<File>(&bytes).unwrap_or_else(|error| {
-            eprintln!("Cannot read {}: {error}", path.display());
+            crate::log::warning!("Cannot read {}: {error}", path.display());
             File::default()
         }),
         Err(_) => File::default(),
