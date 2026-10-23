@@ -6,6 +6,9 @@
 //! It lives in `scores_v1.json` in the data directory of the app, with how far into the history
 //! the requests have got, so they go on from there on the next start, and the ids of the videos
 //! dismissed, which are left out of everything suggested afterwards.
+//! Once the whole history is done, a copy of the scores is combined with what is suggested next to
+//! the newest unwatched videos of the subscriptions feed, each worth as much as the last line of
+//! the history. That copy is what is shown, and it is never saved.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -44,9 +47,19 @@ struct File {
     dismissed: HashSet<String>,
 }
 
+/// The scores with the videos of the feed counted in, and the ones of the feed still to ask about.
+struct Projection {
+    videos: HashMap<String, Suggested>,
+    queue: Vec<Entry>,
+}
+
+/// How many videos of the feed are counted in.
+const FEED_VIDEOS: usize = 5;
+
 #[derive(Default)]
 struct State {
     file: File,
+    projection: Option<Projection>,
     /// A request is out.
     asking: bool,
     /// The wait after the last one isn't over.
@@ -93,11 +106,47 @@ pub fn init() {
 
 /// The next video of the history to ask about, with its line number, unless a request is out or
 /// the last one was too recent. The answer goes to `finish`.
-pub fn begin() -> Option<(usize, Entry)> {
+/// Once the history is done, it is a video of the feed instead, with the line 0.
+pub fn begin(feed: &[Entry]) -> Option<(usize, Entry)> {
     if with(|state| state.asking || state.cooling_down) {
         return None;
     }
-    let next = history::after(with(|state| state.file.last_index))?;
+    let last = with(|state| state.file.last_index);
+    let next = match history::after(last) {
+        Some(next) => {
+            with(|state| state.projection = None);
+            next
+        }
+        // Without a last line there is nothing to weigh the feed by.
+        None if last == 0 => return None,
+        None => with(|state| {
+            if state.projection.is_none() {
+                let mut queue: Vec<Entry> = feed
+                    .iter()
+                    .filter(|entry| {
+                        !history::is_watched(&entry.id) && !state.file.dismissed.contains(&entry.id)
+                    })
+                    .take(FEED_VIDEOS)
+                    .cloned()
+                    .collect();
+                // Popped from the end, the newest first.
+                queue.reverse();
+                // The feed may not be loaded yet.
+                if queue.is_empty() {
+                    return None;
+                }
+                state.projection = Some(Projection {
+                    videos: state.file.videos.clone(),
+                    queue,
+                });
+            }
+            state
+                .projection
+                .as_mut()
+                .and_then(|projection| projection.queue.pop())
+                .map(|entry| (0, entry))
+        })?,
+    };
     with(|state| state.asking = true);
     Some(next)
 }
@@ -110,6 +159,29 @@ pub fn finish(index: usize, id: &str, result: Result<Vec<Entry>, String>) -> Res
         state.cooling_down = true;
     });
     let entries = result?;
+
+    if index == 0 {
+        with(|state| {
+            let score = state.file.last_index as f64 / HALF_LIFE;
+            let File { dismissed, .. } = &state.file;
+            if let Some(projection) = &mut state.projection {
+                for entry in entries {
+                    if history::is_watched(&entry.id) || dismissed.contains(&entry.id) {
+                        continue;
+                    }
+                    match projection.videos.get_mut(&entry.id) {
+                        Some(video) => video.score = log_add(video.score, score),
+                        None => {
+                            projection
+                                .videos
+                                .insert(entry.id.clone(), Suggested { entry, score });
+                        }
+                    }
+                }
+            }
+        });
+        return Ok(());
+    }
 
     with(|state| {
         let score = index as f64 / HALF_LIFE;
@@ -138,6 +210,9 @@ pub fn finish(index: usize, id: &str, result: Result<Vec<Entry>, String>) -> Res
 /// Takes the video out of the suggestions, because it was watched.
 pub fn watched(id: &str) {
     with(|state| {
+        if let Some(projection) = &mut state.projection {
+            projection.videos.remove(id);
+        }
         if state.file.videos.remove(id).is_some() {
             if let Err(error) = save(&state.file) {
                 crate::log::warning!("Cannot save the suggestions: {error}");
@@ -149,6 +224,9 @@ pub fn watched(id: &str) {
 /// Takes the video out of the suggestions for good.
 pub fn dismiss(id: &str) {
     with(|state| {
+        if let Some(projection) = &mut state.projection {
+            projection.videos.remove(id);
+        }
         state.file.videos.remove(id);
         state.file.dismissed.insert(id.to_string());
         if let Err(error) = save(&state.file) {
@@ -162,12 +240,14 @@ pub fn cooled_down() {
     with(|state| state.cooling_down = false);
 }
 
-/// The unwatched videos suggested, the ones with the most points first.
+/// The unwatched videos suggested, with the feed counted in once the history is done, the ones with the most points first.
 pub fn ranked() -> Vec<Entry> {
     with(|state| {
-        let mut videos: Vec<&Suggested> = state
-            .file
-            .videos
+        let videos = match &state.projection {
+            Some(projection) => &projection.videos,
+            None => &state.file.videos,
+        };
+        let mut videos: Vec<&Suggested> = videos
             .values()
             .filter(|video| !history::is_watched(&video.entry.id))
             .collect();

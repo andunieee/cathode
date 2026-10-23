@@ -2615,7 +2615,7 @@ fn suggest_next() {
     if profile::restricted() {
         return;
     }
-    if let Some((index, entry)) = suggestions::begin() {
+    if let Some((index, entry)) = suggestions::begin(&subscriptions::feed()) {
         send(Request::Suggest {
             index,
             id: entry.id,
@@ -3263,6 +3263,7 @@ pub fn handle(response: Response) {
             if matches!(current(), Page::Home) && !profile::restricted() {
                 show_feed();
             }
+            suggest_next();
         }
         Response::Suggested { index, id, result } => {
             if let Err(error) = suggestions::finish(index, &id, result) {
