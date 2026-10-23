@@ -168,6 +168,9 @@ pub enum Source {
     Channel {
         id: String,
         query: String,
+        /// The language of the channel if it is a subscription that has one, its titles are
+        /// asked for in it.
+        language: Option<String>,
     },
     Playlist {
         id: String,
@@ -503,6 +506,7 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
         })
     };
 
+    let mut language = None;
     let (url, limit) = match source {
         Source::Related { id } => {
             let result = related(&id).await;
@@ -537,15 +541,29 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             format!("https://www.youtube.com/playlist?list={}", bare_id(&id)),
             CHANNEL_MAX_RESULTS,
         ),
-        Source::Channel { id, query } if query.is_empty() => (
-            format!("https://www.youtube.com/channel/{}/videos", bare_id(&id)),
-            CHANNEL_MAX_RESULTS,
-        ),
-        Source::Channel { id, query } => match reqwest::Url::parse_with_params(
+        Source::Channel {
+            id,
+            query,
+            language: own,
+        } if query.is_empty() => {
+            language = own;
+            (
+                format!("https://www.youtube.com/channel/{}/videos", bare_id(&id)),
+                CHANNEL_MAX_RESULTS,
+            )
+        }
+        Source::Channel {
+            id,
+            query,
+            language: own,
+        } => match reqwest::Url::parse_with_params(
             &format!("https://www.youtube.com/channel/{}/search", bare_id(&id)),
             [("query", query.as_str())],
         ) {
-            Ok(url) => (url.to_string(), CHANNEL_MAX_RESULTS),
+            Ok(url) => {
+                language = own;
+                (url.to_string(), CHANNEL_MAX_RESULTS)
+            }
             Err(e) => return finish(Some(e.to_string())),
         },
     };
@@ -554,14 +572,21 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
     // channel. A short one comes first so there is something to look at in the meantime.
     let mut seen = HashSet::new();
     if limit > SEARCH_MAX_RESULTS {
-        if let Err(error) =
-            stream_listing(&key, &url, FIRST_PAGE, &mut seen, on_response, None).await
+        if let Err(error) = stream_listing(
+            &key,
+            &url,
+            FIRST_PAGE,
+            &mut seen,
+            on_response,
+            language.clone(),
+        )
+        .await
         {
             return finish(Some(error));
         }
     }
     finish(
-        stream_listing(&key, &url, limit, &mut seen, on_response, None)
+        stream_listing(&key, &url, limit, &mut seen, on_response, language)
             .await
             .err(),
     );
@@ -816,16 +841,11 @@ fn search_sp(sort: SearchSort, filter: SearchFilter) -> String {
 
 /// Streams what yt-dlp lists at `url`, up to `end` entries, skipping the ones in `seen`.
 /// Fails if nothing at all could be listed.
-async fn stream_listing(
-    key: &str,
-    url: &str,
-    end: usize,
-    seen: &mut HashSet<String>,
-    on_response: &impl Fn(Response),
-    language: Option<String>,
-) -> Result<(), String> {
-    // The results and channel pages keep paging forever, so the limit is needed here.
-    let mut child = crate::settings::yt_dlp()
+/// The yt-dlp command listing `url` up to `end` entries, one JSON line each. The results and
+/// channel pages keep paging forever, so the limit is needed.
+fn listing_command(url: &str, end: usize, language: Vec<String>) -> tokio::process::Command {
+    let mut command = crate::settings::yt_dlp();
+    command
         .args([
             "--no-warnings",
             "--flat-playlist",
@@ -836,8 +856,68 @@ async fn stream_listing(
             &format!("--playlist-end={end}"),
             "-j",
         ])
-        .args(crate::settings::language_args(language))
-        .arg(url)
+        .args(language)
+        .arg(url);
+    command
+}
+
+/// The dates of what is listed at `url`, by video id, from a listing in English.
+async fn listing_dates(url: &str, end: usize) -> HashMap<String, i64> {
+    let output = listing_command(
+        url,
+        end,
+        vec!["--extractor-args".into(), "youtube:lang=en".into()],
+    )
+    .stdin(Stdio::null())
+    .stderr(Stdio::null())
+    .kill_on_drop(true)
+    .output()
+    .await;
+    let Ok(output) = output else {
+        return HashMap::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| parse_entry(&serde_json::from_str(line).ok()?))
+        .filter_map(|entry| Some((entry.id, entry.published?)))
+        .collect()
+}
+
+/// Gives the entries without a date the one the English listing has.
+async fn fill_dates(
+    batch: &mut [Entry],
+    task: &mut Option<tokio::task::JoinHandle<HashMap<String, i64>>>,
+    dates: &mut Option<HashMap<String, i64>>,
+) {
+    if let Some(task) = task.take() {
+        *dates = task.await.ok();
+    }
+    if let Some(dates) = dates {
+        for entry in batch.iter_mut().filter(|e| e.published.is_none()) {
+            entry.published = dates.get(&entry.id).copied();
+        }
+    }
+}
+
+async fn stream_listing(
+    key: &str,
+    url: &str,
+    end: usize,
+    seen: &mut HashSet<String>,
+    on_response: &impl Fn(Response),
+    language: Option<String>,
+) -> Result<(), String> {
+    // The dates come from the relative ones YouTube shows ("3 days ago"), which yt-dlp can only
+    // read in English. In another language they are taken from a listing in English.
+    let mut dates = crate::settings::listing_language(language.clone())
+        .is_some_and(|language| !language.starts_with("en"))
+        .then(|| {
+            let url = url.to_string();
+            tokio::spawn(async move { listing_dates(&url, end).await })
+        });
+    let mut dates_by_id: Option<HashMap<String, i64>> = None;
+
+    let mut child = listing_command(url, end, crate::settings::language_args(language))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -863,6 +943,7 @@ async fn stream_listing(
             match tokio::time::timeout(Duration::from_millis(100), lines.next_line()).await {
                 Ok(line) => line,
                 Err(_) => {
+                    fill_dates(&mut batch, &mut dates, &mut dates_by_id).await;
                     on_response(Response::Entries {
                         key: key.to_string(),
                         entries: std::mem::take(&mut batch),
@@ -889,6 +970,7 @@ async fn stream_listing(
     }
 
     if !batch.is_empty() {
+        fill_dates(&mut batch, &mut dates, &mut dates_by_id).await;
         on_response(Response::Entries {
             key: key.to_string(),
             entries: batch,

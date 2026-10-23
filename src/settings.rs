@@ -170,15 +170,66 @@ pub fn valid_language(language: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// The codes yt-dlp accepts for `youtube:lang`, case-sensitive; it refuses any other.
+const YOUTUBE_LANGUAGES: &[&str] = &[
+    "af", "az", "id", "ms", "bs", "ca", "cs", "da", "de", "et", "en-IN", "en-GB", "en", "es",
+    "es-419", "es-US", "eu", "fil", "fr", "fr-CA", "gl", "hr", "zu", "is", "it", "sw", "lv", "lt",
+    "hu", "nl", "no", "uz", "pl", "pt-PT", "pt", "ro", "sq", "sk", "sl", "sr-Latn", "fi", "sv",
+    "vi", "tr", "be", "bg", "ky", "kk", "mk", "mn", "ru", "sr", "uk", "el", "hy", "iw", "ur", "ar",
+    "fa", "ne", "mr", "hi", "as", "bn", "pa", "gu", "or", "ta", "te", "kn", "ml", "si", "th", "lo",
+    "my", "ka", "am", "km", "zh-CN", "zh-TW", "zh-HK", "ja", "ko",
+];
+
+/// The code YouTube accepts closest to a language tag: the tag itself, like `pt-PT`, otherwise its
+/// plain language, like `en` for `en-US`, which YouTube spells some other ways.
+fn youtube_language(tag: &str) -> Option<String> {
+    let tag = tag.replace('_', "-");
+    let plain = tag.split('-').next().unwrap_or(&tag).to_ascii_lowercase();
+    let plain = match plain.as_str() {
+        "he" => "iw",
+        "nb" | "nn" => "no",
+        "tl" => "fil",
+        "zh" => "zh-CN",
+        other => other,
+    };
+    let known = |code: &str| YOUTUBE_LANGUAGES.contains(&code);
+    if known(&tag) {
+        Some(tag)
+    } else {
+        known(plain).then(|| plain.to_string())
+    }
+}
+
 /// Makes yt-dlp ask for the titles of the listings in the default language. YouTube gives
 /// English ones otherwise, translated if the uploader has no English title.
 /// A `language` replaces the default one, for the channels that have their own.
 pub fn language_args(own: Option<String>) -> Vec<String> {
-    match own.or_else(language) {
+    match listing_language(own) {
         Some(language) => vec![
             "--extractor-args".to_string(),
             format!("youtube:lang={language}"),
         ],
         None => Vec::new(),
+    }
+}
+
+/// The language the listings are asked in, as YouTube names it.
+pub fn listing_language(own: Option<String>) -> Option<String> {
+    own.or_else(language)
+        .and_then(|language| youtube_language(&language))
+}
+
+#[cfg(test)]
+mod youtube_language_tests {
+    use super::youtube_language;
+
+    #[test]
+    fn tags_become_codes_youtube_accepts() {
+        assert_eq!(youtube_language("en-US").as_deref(), Some("en"));
+        assert_eq!(youtube_language("en-GB").as_deref(), Some("en-GB"));
+        assert_eq!(youtube_language("pt-BR").as_deref(), Some("pt"));
+        assert_eq!(youtube_language("he").as_deref(), Some("iw"));
+        assert_eq!(youtube_language("zh-Hans").as_deref(), Some("zh-CN"));
+        assert_eq!(youtube_language("xx"), None);
     }
 }

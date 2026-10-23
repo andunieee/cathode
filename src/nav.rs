@@ -867,7 +867,15 @@ fn show() {
                 crate::fetch::bare_id(&id)
             )));
 
-            show_listing(key, Source::Channel { id, query });
+            let language = subscriptions::language(&id);
+            show_listing(
+                key,
+                Source::Channel {
+                    id,
+                    query,
+                    language,
+                },
+            );
         }
         Page::Video(entry) => {
             ui.stack.set_visible_child_name("video");
