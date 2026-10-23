@@ -1,6 +1,7 @@
 //! The videos watched, one JSON object per line in `history.jsonl` in the data directory of
-//! the app, the latest last. A new entry is appended to the file, and reading goes backwards from
-//! its end, which gives the most recent ones, as far back as one cares to go.
+//! the app, the latest last. A new entry is appended to the file, unless the video is there
+//! already, and reading goes backwards from its end, which gives the most recent ones, as far
+//! back as one cares to go.
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -31,7 +32,7 @@ fn path() -> PathBuf {
         .join("history.jsonl")
 }
 
-/// Puts the video at the end of the history.
+/// Puts the video at the end of the history, unless it is there already.
 pub fn record(entry: &Entry) -> Result<(), String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -47,6 +48,9 @@ pub fn record(entry: &Entry) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     // One write, so a line is either all there or not at all.
     let mut ids = IDS.lock().unwrap();
+    if ids.get_or_insert_with(read_ids).contains(&entry.id) {
+        return Ok(());
+    }
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
