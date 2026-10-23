@@ -12,6 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Notify, Semaphore};
 
+use crate::state::CaptionMode;
 use crate::profile::{ChannelRef, Input, Item, PlaylistRef};
 
 const SEARCH_MAX_RESULTS: usize = 100;
@@ -23,6 +24,8 @@ const FIRST_PAGE: usize = 30;
 pub const LATEST_PER_CHANNEL: usize = 15;
 /// Channels whose newest videos are looked up at the same time.
 const LATEST_PARALLEL: usize = 3;
+/// Details of videos looked up at the same time.
+const INFO_PARALLEL: usize = 3;
 
 /// Thumbnails shown in lists are scaled down to keep a thousand of them cheap to hold.
 const SMALL_THUMBNAIL: (u32, u32) = (168, 94);
@@ -90,6 +93,8 @@ pub struct VideoInfo {
     pub upload_date: Option<String>,
     pub views: Option<u64>,
     pub likes: Option<u64>,
+    /// The language of the video as YouTube has it, like `pt-BR`. Not every video has one.
+    pub language: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 
@@ -180,6 +185,13 @@ pub enum Request {
         entry: Entry,
         height: Option<u32>,
     },
+    /// Gets the captions for the mode of a video that is on disk at `video`, and answers with
+    /// `Response::Captions`. Nothing is downloaded if they are there already.
+    Captions {
+        entry: Entry,
+        video: PathBuf,
+        mode: CaptionMode,
+    },
     /// Stops the download of the video with this id, if one is running.
     Cancel {
         id: String,
@@ -233,6 +245,13 @@ pub enum Response {
         id: String,
         height: Option<u32>,
         result: Result<PathBuf, String>,
+    },
+    /// The captions asked for with `Request::Captions`: the track and its file, none if the
+    /// video has no such captions.
+    Captions {
+        id: String,
+        mode: CaptionMode,
+        found: Option<(String, PathBuf)>,
     },
     Thumbnail {
         id: String,
@@ -294,6 +313,8 @@ async fn run(
 ) {
     let thumbnail_slots = Arc::new(Semaphore::new(8));
     let latest_slots = Arc::new(Semaphore::new(LATEST_PARALLEL));
+    // A queue of videos asks for the details of all of them at once.
+    let info_slots = Arc::new(Semaphore::new(INFO_PARALLEL));
     let downloads: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Default::default();
 
     // Without the tools there is nothing to run, so the first start waits for them. Later ones
@@ -316,14 +337,19 @@ async fn run(
                 tokio::spawn(async move { listing(key, source, on_response.as_ref()).await });
             }
             Request::Info { key, url } => {
+                let slots = info_slots.clone();
                 tokio::spawn(async move {
+                    let _slot = slots.acquire().await;
                     on_response(Response::Info {
                         key,
                         result: info(&url).await,
                     });
                 });
             }
-            Request::Download { entry, height } => {
+            Request::Download {
+                entry,
+                height,
+            } => {
                 let cancel = Arc::new(Notify::new());
                 let before = downloads
                     .lock()
@@ -355,6 +381,16 @@ async fn run(
                             result,
                         });
                     }
+                });
+            }
+            Request::Captions { entry, video, mode } => {
+                tokio::spawn(async move {
+                    let found = fetch_captions(&entry, &video, mode).await;
+                    on_response(Response::Captions {
+                        id: entry.id,
+                        mode,
+                        found,
+                    });
                 });
             }
             Request::Cancel { id } => {
@@ -540,7 +576,7 @@ async fn related(id: &str) -> Result<Vec<Entry>, String> {
             "client": {
                 "clientName": "WEB",
                 "clientVersion": "2.20250101.00.00",
-                "hl": "en",
+                "hl": crate::settings::language().unwrap_or_else(|| "en".to_string()),
                 "gl": "US",
             },
         },
@@ -739,8 +775,9 @@ async fn stream_listing(
             "youtubetab:approximate_date",
             &format!("--playlist-end={end}"),
             "-j",
-            url,
         ])
+        .args(crate::settings::language_args())
+        .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -896,6 +933,76 @@ async fn check_cookies(browser: &str) -> Result<(), String> {
     }
 }
 
+/// What a video offers in captions, from its details.
+#[derive(Debug, Clone, Default)]
+struct CaptionSource {
+    language: Option<String>,
+    /// Languages with subtitles somebody made, which come first.
+    manual: Vec<String>,
+    /// Languages with the captions YouTube generates, `pt-orig` being the speech as it was said.
+    automatic: Vec<String>,
+}
+
+impl CaptionSource {
+    fn parse(video: &Value) -> Self {
+        let keys = |name: &str| -> Vec<String> {
+            video[name]
+                .as_object()
+                .map(|tracks| tracks.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+        Self {
+            language: string(video, "language"),
+            manual: keys("subtitles"),
+            automatic: keys("automatic_captions"),
+        }
+    }
+
+    /// The track for `language`, as yt-dlp names it: the subtitles somebody made when there are,
+    /// otherwise the generated captions. With `original` it is the generated captions of what
+    /// was said that are looked for, `pt-orig`: a dubbed video has captions for each dub, and
+    /// only the language of the video tells which one is the real speech.
+    fn track(&self, language: &str, original: bool) -> Option<String> {
+        let base = language.split('-').next()?;
+        let has = |tracks: &[String], key: &str| tracks.iter().any(|track| track == key);
+
+        [language, base]
+            .into_iter()
+            .find(|key| has(&self.manual, key))
+            .map(str::to_string)
+            .or_else(|| {
+                let keys = if original {
+                    [format!("{language}-orig"), format!("{base}-orig")]
+                } else {
+                    [language.to_string(), base.to_string()]
+                };
+                keys.into_iter().find(|key| has(&self.automatic, key))
+            })
+    }
+
+    /// The track to download for the mode, `default` being the default language.
+    fn track_for(&self, mode: CaptionMode, default: Option<&str>) -> Option<String> {
+        let base = |language: &str| language.split('-').next().unwrap_or(language).to_string();
+        let original = self.language.as_deref();
+
+        match mode {
+            CaptionMode::Off => None,
+            CaptionMode::Original => self.track(original?, true),
+            CaptionMode::Default => {
+                let default = default?;
+                match original {
+                    // The language of the video is the one wanted.
+                    Some(original) if base(original) == base(default) => self.track(original, true),
+                    _ => self.track(default, false),
+                }
+            }
+        }
+    }
+}
+
+/// The caption sources of the videos whose details were fetched, by bare id.
+static CAPTION_SOURCES: Mutex<Option<HashMap<String, CaptionSource>>> = Mutex::new(None);
+
 async fn info(url: &str) -> Result<VideoInfo, String> {
     let output = crate::settings::yt_dlp()
         .args([
@@ -915,9 +1022,16 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
         return Err(error_line(&output.stderr));
     };
 
+    let id = youtube_id(&string(&video, "id").ok_or("yt-dlp did not report the video id")?);
+    CAPTION_SOURCES
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(bare_id(&id).to_string(), CaptionSource::parse(&video));
+
     Ok(VideoInfo {
         entry: Entry {
-            id: youtube_id(&string(&video, "id").ok_or("yt-dlp did not report the video id")?),
+            id,
             url: string(&video, "webpage_url").unwrap_or_else(|| url.to_string()),
             title: string(&video, "title").unwrap_or_default(),
             channel: string(&video, "channel")
@@ -932,6 +1046,7 @@ async fn info(url: &str) -> Result<VideoInfo, String> {
         upload_date: string(&video, "upload_date"),
         views: video["view_count"].as_u64(),
         likes: video["like_count"].as_u64(),
+        language: string(&video, "language"),
         chapters: video["chapters"]
             .as_array()
             .map(|chapters| {
@@ -1037,6 +1152,59 @@ async fn download(
 
     path.or_else(|| crate::cache::find_size(&entry.id, height))
         .ok_or_else(|| "yt-dlp did not report the downloaded file".to_string())
+}
+
+/// Gets the captions the mode asks for, as `<video>.<track>.vtt` next to the video, and returns
+/// the track and the file. `None` when the video has none or they can't be had, a video is fine
+/// without them.
+async fn fetch_captions(
+    entry: &Entry,
+    video: &std::path::Path,
+    mode: CaptionMode,
+) -> Option<(String, PathBuf)> {
+    if mode == CaptionMode::Off || entry.url.is_empty() {
+        return None;
+    }
+
+    let id = bare_id(&entry.id).to_string();
+    let known = |id: &str| CAPTION_SOURCES.lock().unwrap().as_ref().and_then(|s| s.get(id).cloned());
+    let source = match known(&id) {
+        Some(source) => source,
+        None => {
+            info(&entry.url).await.ok()?;
+            known(&id)?
+        }
+    };
+
+    let track = source.track_for(mode, crate::settings::language().as_deref())?;
+    let base = video.with_extension("");
+    let file = PathBuf::from(format!("{}.{track}.vtt", base.display()));
+    if file.exists() {
+        return Some((track, file));
+    }
+
+    let status = crate::settings::yt_dlp()
+        .args([
+            "--no-warnings",
+            "--no-playlist",
+            "--skip-download",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-format",
+            "vtt",
+            "--sub-langs",
+            &track,
+            "-o",
+        ])
+        .arg(format!("{}.%(ext)s", base.display()))
+        .arg(&entry.url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status()
+        .await;
+    (status.is_ok() && file.exists()).then_some((track, file))
 }
 
 /// The sponsor segments SponsorBlock knows for a video. Only the start of the hash of the id is
@@ -1162,5 +1330,49 @@ mod link_tests {
         for text in ["cats", "rust video", "https://example.com/watch?v=dQw4w9WgXcQ", "https://youtube.com/results?search_query=a"] {
             assert_eq!(video_id_of_link(text), None, "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use super::*;
+
+    fn source(language: &str, manual: &[&str], automatic: &[&str]) -> CaptionSource {
+        let own = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect();
+        CaptionSource {
+            language: Some(language.to_string()),
+            manual: own(manual),
+            automatic: own(automatic),
+        }
+    }
+
+    #[test]
+    fn the_track_follows_the_mode() {
+        use CaptionMode::*;
+
+        // A dubbed video has the captions of every dub, only one is the real speech.
+        let dubbed = source("pt-BR", &[], &["en-orig", "es-orig", "pt-orig", "pt", "en"]);
+        assert_eq!(dubbed.track_for(Original, Some("en")).as_deref(), Some("pt-orig"));
+        assert_eq!(dubbed.track_for(Default, Some("en")).as_deref(), Some("en"));
+        assert_eq!(dubbed.track_for(Default, Some("pt")).as_deref(), Some("pt-orig"));
+        assert_eq!(dubbed.track_for(Off, Some("en")), None);
+
+        // Subtitles somebody made win over the generated captions.
+        let made = source("en", &["de", "en"], &["en-orig", "en"]);
+        assert_eq!(made.track_for(Original, None).as_deref(), Some("en"));
+        assert_eq!(made.track_for(Default, Some("de")).as_deref(), Some("de"));
+
+        let regional = source("en-US", &[], &["en-US-orig", "es-US-orig"]);
+        assert_eq!(regional.track_for(Original, None).as_deref(), Some("en-US-orig"));
+
+        // Without the language of the video there is no original, only the default one.
+        let unknown = CaptionSource {
+            language: None,
+            manual: vec!["en".to_string()],
+            automatic: Vec::new(),
+        };
+        assert_eq!(unknown.track_for(Original, Some("en")), None);
+        assert_eq!(unknown.track_for(Default, Some("en")).as_deref(), Some("en"));
+        assert_eq!(unknown.track_for(Default, None), None);
     }
 }

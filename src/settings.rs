@@ -41,11 +41,9 @@ pub struct Settings {
     pub skip_sponsors: bool,
     /// Hides the seek bar of the player.
     pub hide_progress_bar: bool,
-    /// Languages of the subtitles to download with the videos (`--sub-langs`, like `en,fr`),
-    /// empty for none.
-    pub subtitle_languages: String,
-    /// Whether the automatic captions count as subtitles.
-    pub automatic_captions: bool,
+    /// The language the titles of the listings and the subtitles are wanted in, like `en` or
+    /// `pt-BR`. Empty for what YouTube gives by default.
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -57,8 +55,7 @@ impl Default for Settings {
             limit_rate: String::new(),
             skip_sponsors: false,
             hide_progress_bar: false,
-            subtitle_languages: "en".to_string(),
-            automatic_captions: true,
+            language: "en".to_string(),
         }
     }
 }
@@ -153,24 +150,28 @@ pub fn download_args(height: Option<u32>) -> Vec<String> {
     };
     args.extend(["-f".to_string(), format]);
 
-    // Written next to the video as `<name>.<language>.vtt`, see `cache::subtitle_files`.
-    let languages = settings.subtitle_languages.trim();
-    if !languages.is_empty() {
-        args.extend([
-            "--write-subs".to_string(),
-            "--sub-format".to_string(),
-            "vtt".to_string(),
-            "--sub-langs".to_string(),
-            languages.to_string(),
-        ]);
-        if settings.automatic_captions {
-            args.push("--write-auto-subs".to_string());
-        }
-    }
-
     let rate = settings.limit_rate.trim();
     if !rate.is_empty() {
         args.extend(["--limit-rate".to_string(), rate.to_string()]);
     }
     args
+}
+
+/// The default language, if it is a code YouTube can be asked for: letters, digits and dashes.
+pub fn language() -> Option<String> {
+    let language = get().language.trim().to_string();
+    let valid = !language.is_empty()
+        && language
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    valid.then_some(language)
+}
+
+/// Makes yt-dlp ask for the titles of the listings in the default language. YouTube gives
+/// English ones otherwise, translated if the uploader has no English title.
+pub fn language_args() -> Vec<String> {
+    match language() {
+        Some(language) => vec!["--extractor-args".to_string(), format!("youtube:lang={language}")],
+        None => Vec::new(),
+    }
 }

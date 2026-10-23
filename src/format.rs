@@ -78,3 +78,81 @@ pub fn epoch_date(secs: u64) -> String {
 
     format!("{year}-{month:02}-{day:02}")
 }
+
+/// The name of a language from its tag, like `pt-BR` or the `pt-orig` of YouTube's captions of
+/// the speech as it was said. Tags that aren't known are shown as they are.
+pub fn language_name(tag: &str) -> String {
+    const NAMES: [(&str, &str); 38] = [
+        ("ar", "Arabic"),
+        ("cs", "Czech"),
+        ("da", "Danish"),
+        ("de", "German"),
+        ("el", "Greek"),
+        ("en", "English"),
+        ("es", "Spanish"),
+        ("es-419", "Spanish (Latin America)"),
+        ("fa", "Persian"),
+        ("fi", "Finnish"),
+        ("fr", "French"),
+        ("he", "Hebrew"),
+        ("hi", "Hindi"),
+        ("hu", "Hungarian"),
+        ("id", "Indonesian"),
+        ("it", "Italian"),
+        ("iw", "Hebrew"),
+        ("ja", "Japanese"),
+        ("ko", "Korean"),
+        ("nb", "Norwegian"),
+        ("nl", "Dutch"),
+        ("no", "Norwegian"),
+        ("pl", "Polish"),
+        ("pt", "Portuguese"),
+        ("pt-BR", "Portuguese (Brazil)"),
+        ("pt-PT", "Portuguese (Portugal)"),
+        ("ro", "Romanian"),
+        ("ru", "Russian"),
+        ("sv", "Swedish"),
+        ("th", "Thai"),
+        ("tr", "Turkish"),
+        ("uk", "Ukrainian"),
+        ("vi", "Vietnamese"),
+        ("zh", "Chinese"),
+        ("zh-CN", "Chinese (China)"),
+        ("zh-Hans", "Chinese (Simplified)"),
+        ("zh-Hant", "Chinese (Traditional)"),
+        ("zh-TW", "Chinese (Taiwan)"),
+    ];
+
+    let (tag, original) = match tag.strip_suffix("-orig") {
+        Some(tag) => (tag, true),
+        None => (tag, false),
+    };
+    let find = |wanted: &str| {
+        NAMES
+            .iter()
+            .find(|(known, _)| known.eq_ignore_ascii_case(wanted))
+            .map(|(_, name)| name.to_string())
+    };
+    let name = find(tag)
+        .or_else(|| tag.split(['-', '_']).next().and_then(find))
+        .unwrap_or_else(|| tag.to_string());
+    if original {
+        format!("{name} (original)")
+    } else {
+        name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn languages_have_names() {
+        assert_eq!(language_name("en"), "English");
+        assert_eq!(language_name("pt-BR"), "Portuguese (Brazil)");
+        assert_eq!(language_name("pt-orig"), "Portuguese (original)");
+        assert_eq!(language_name("en-US"), "English");
+        assert_eq!(language_name("xx"), "xx");
+    }
+}

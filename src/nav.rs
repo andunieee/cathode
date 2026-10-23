@@ -18,7 +18,7 @@ use crate::history;
 use crate::library;
 use crate::settings;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
-use crate::state;
+use crate::state::{self, CaptionMode};
 use crate::subscriptions::{self, Subscription};
 use crate::ui::{self, CacheRow, Ui};
 
@@ -105,7 +105,8 @@ struct State {
     /// Listings and video details already fetched, so going back doesn't wait on yt-dlp again.
     listings: HashMap<String, Listing>,
     infos: HashMap<String, VideoInfo>,
-    /// Videos whose details were asked for because the cache doesn't know them.
+    /// Videos whose details were asked for, because the cache doesn't know them or to learn
+    /// their original title.
     info_lookups: HashSet<String>,
 
     /// Small thumbnails for lists, and large ones for video pages.
@@ -384,7 +385,14 @@ fn show_video(entry: &Entry) {
     let ui = ui::get();
     let info = with(|state| state.infos.get(&Page::Video(entry.clone()).key()).cloned());
 
-    ui.video_title.set_text(&entry.title);
+    // Listings can carry a translated title (YouTube's automatic ones), the details have the
+    // one the uploader wrote.
+    let title = info
+        .as_ref()
+        .map(|info| info.entry.title.as_str())
+        .filter(|title| !title.is_empty())
+        .unwrap_or(&entry.title);
+    ui.video_title.set_text(title);
     ui.video_channel.set_label(&entry.channel);
     ui.video_channel.set_visible(!entry.channel_id.is_empty());
     ui.video_channel
@@ -405,6 +413,9 @@ fn show_video(entry: &Entry) {
     }
     if let Some(duration) = entry.duration {
         meta.push(format::duration(duration));
+    }
+    if let Some(language) = info.as_ref().and_then(|info| info.language.as_deref()) {
+        meta.push(language.to_string());
     }
     if local_path(&entry.id).is_some() {
         let mut saved = if entry.url.is_empty() {
@@ -1096,7 +1107,10 @@ fn start_download(entry: Entry) {
     });
 
     if start {
-        send(Request::Download { entry, height });
+        send(Request::Download {
+            entry,
+            height,
+        });
     }
 }
 
@@ -1119,6 +1133,7 @@ fn swap_playback(entry: &Entry, path: &std::path::Path) {
     let ui = ui::get();
     let (position, paused) = (ui.player.position(), ui.player.is_paused());
 
+    apply_caption_mode(Some(&entry.id));
     ui.player.load(&entry.id, &path.to_string_lossy());
     with(|state| state.pending_seek = Some((entry.id.clone(), position)));
     ui.player.set_paused(paused);
@@ -1401,6 +1416,10 @@ fn restore_session() {
         state.positions = saved.positions;
     });
     pump_queue();
+    let queued: Vec<Entry> = with(|state| state.queue.iter().map(|i| i.entry.clone()).collect());
+    for entry in &queued {
+        fetch_original_title(entry);
+    }
 
     if let Some(entry) = saved.playing.filter(|entry| video_allowed(entry)) {
         with(|state| state.start_paused = Some(entry.id.clone()));
@@ -1429,6 +1448,7 @@ fn remember_position() {
 fn start_playback(entry: &Entry, path: &std::path::Path) {
     let ui = ui::get();
     remember_position();
+    apply_caption_mode(Some(&entry.id));
     ui.player.load(&entry.id, &path.to_string_lossy());
     let paused = with(|state| state.start_paused.take()).as_deref() == Some(&entry.id);
     if paused {
@@ -1443,6 +1463,7 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
                 .map(|&position| (entry.id.clone(), position));
         }
     });
+    request_captions();
     show_player_chapters();
     show_sponsor_marks(Vec::new());
     if settings::get().skip_sponsors && !entry.url.is_empty() {
@@ -1497,7 +1518,7 @@ fn unload_player() {
         toggle_fullscreen();
     }
     ui.player.stop();
-    refresh_subtitles();
+    refresh_captions();
     with(|state| {
         state.positions.clear();
         state.playing = None;
@@ -1527,7 +1548,9 @@ fn remember_playback(change: impl Fn(&mut state::State)) {
     let mut before = state::get();
     change(&mut before);
     let now = state::get();
-    if (before.volume, before.speed, before.subtitles) == (now.volume, now.speed, now.subtitles) {
+    if (before.volume, before.speed, before.caption_mode)
+        == (now.volume, now.speed, now.caption_mode)
+    {
         return;
     }
     if let Err(error) = state::update(change) {
@@ -1546,52 +1569,137 @@ fn restore_playback() {
     if let Some(index) = index {
         ui.speed.set_selected(index);
     }
-    ui.player
-        .set_subtitles(saved.subtitles, &settings::get().subtitle_languages);
+    sync_caption_mode(saved.caption_mode);
+    apply_caption_mode(None);
 }
 
-/// Shows or hides the subtitles.
-pub fn toggle_subtitles() {
+/// What the subtitle choice of the player's settings says.
+pub fn caption_mode_label(mode: CaptionMode) -> String {
+    match mode {
+        CaptionMode::Off => "No subtitles".to_string(),
+        CaptionMode::Original => "Original subtitles".to_string(),
+        CaptionMode::Default => match settings::language() {
+            Some(language) => format!("{} subtitles", format::language_name(&language)),
+            None => "Subtitles in the default language".to_string(),
+        },
+    }
+}
+
+/// Brings the subtitle choices up to date with a new default language.
+pub fn default_language_changed() {
     let ui = ui::get();
-    let wanted = !ui.player.subtitles_wanted();
-    ui.player
-        .set_subtitles(wanted, &settings::get().subtitle_languages);
-    remember_playback(|state| state.subtitles = wanted);
-    let (tracks, _) = ui.player.subtitle_tracks();
-    player_message(match (wanted, tracks.is_empty()) {
-        (true, true) => "No subtitles",
-        (true, false) => "Subtitles on",
-        (false, _) => "Subtitles off",
-    });
+    if let Some(button) = ui.caption_modes.get(CaptionMode::Default as usize) {
+        button.set_label(Some(&caption_mode_label(CaptionMode::Default)));
+        button.set_visible(settings::language().is_some());
+    }
 }
 
-/// Picks a row of the subtitles list: the first one turns them off, the others are the tracks.
-pub fn pick_subtitle(row: usize) {
+/// Checks the choice for the mode, without acting on it.
+fn sync_caption_mode(mode: CaptionMode) {
+    let ui = ui::get();
+    ui.syncing.set(true);
+    if let Some(button) = ui.caption_modes.get(mode as usize) {
+        button.set_active(true);
+    }
+    ui.syncing.set(false);
+    default_language_changed();
+}
+
+/// What mpv should prefer when picking a caption track: the language of the mode.
+fn caption_slang(mode: CaptionMode, id: Option<&str>) -> String {
+    let plain = |language: &str| language.split('-').next().unwrap_or(language).to_string();
+    match mode {
+        CaptionMode::Off => String::new(),
+        CaptionMode::Default => settings::language().map(|l| plain(&l)).unwrap_or_default(),
+        CaptionMode::Original => id
+            .and_then(|id| {
+                with(|state| {
+                    state
+                        .infos
+                        .get(&format!("v:{id}"))
+                        .and_then(|info| info.language.clone())
+                })
+            })
+            .map(|l| plain(&l))
+            .unwrap_or_default(),
+    }
+}
+
+/// Tells the player which captions to go for, for the video `id` it is about to play or the one
+/// it is playing.
+fn apply_caption_mode(id: Option<&str>) {
+    let ui = ui::get();
+    let mode = state::get().caption_mode;
+    let current = ui.player.id();
+    let id = id.or(current.as_deref());
+    ui.player
+        .set_captions(mode != CaptionMode::Off, &caption_slang(mode, id));
+}
+
+/// Picks which captions to download and show.
+pub fn set_caption_mode(mode: CaptionMode) {
+    remember_playback(|state| state.caption_mode = mode);
+    apply_caption_mode(None);
+    refresh_captions();
+    request_captions();
+    player_message(&caption_mode_label(mode));
+}
+
+/// Asks for the captions of the video playing, for the mode that is set. They are loaded into
+/// the player when they come, see `Response::Captions`.
+fn request_captions() {
+    let mode = state::get().caption_mode;
+    let Some(entry) = with(|state| state.playing.clone()).filter(|entry| !entry.url.is_empty())
+    else {
+        return;
+    };
+    if mode == CaptionMode::Off {
+        return;
+    }
+    if let Some(video) = local_path(&entry.id) {
+        send(Request::Captions { entry, video, mode });
+    }
+}
+
+/// Goes to the next choice of subtitles, from the keyboard.
+pub fn toggle_captions() {
+    let mode = match state::get().caption_mode {
+        CaptionMode::Off => CaptionMode::Original,
+        CaptionMode::Original if settings::language().is_some() => CaptionMode::Default,
+        _ => CaptionMode::Off,
+    };
+    sync_caption_mode(mode);
+    set_caption_mode(mode);
+}
+
+/// Picks a row of the subtitles list: the first one turns them off, the others are the tracks
+/// of the video, which only change what is shown for it.
+pub fn pick_caption(row: usize) {
     let ui = ui::get();
     let track = row
         .checked_sub(1)
-        .and_then(|index| ui.subtitle_tracks.borrow().0.get(index).map(|track| track.id));
+        .and_then(|index| ui.caption_tracks.borrow().0.get(index).map(|track| track.id));
+    ui.captions_button.popdown();
     match track {
-        Some(id) => ui.player.select_subtitle(id),
-        None => ui
-            .player
-            .set_subtitles(false, &settings::get().subtitle_languages),
+        Some(id) => ui.player.select_caption(id),
+        None => {
+            sync_caption_mode(CaptionMode::Off);
+            set_caption_mode(CaptionMode::Off);
+        }
     }
-    remember_playback(|state| state.subtitles = track.is_some());
-    ui.subtitles_button.popdown();
-    refresh_subtitles();
+    refresh_captions();
 }
 
-/// Brings the list of subtitle tracks up to date with the file playing.
-fn refresh_subtitles() {
+/// Brings the list of caption tracks up to date with the file playing.
+fn refresh_captions() {
     let ui = ui::get();
-    let now = ui.player.subtitle_tracks();
-    if *ui.subtitle_tracks.borrow() == now {
+    let now = ui.player.caption_tracks();
+    if *ui.caption_tracks.borrow() == now {
         return;
     }
 
-    clear_rows(&ui.subtitles_list);
-    ui.subtitles_button.set_visible(!now.0.is_empty());
+    clear_rows(&ui.captions_list);
+    ui.captions_button.set_visible(!now.0.is_empty());
     let selected = now.1;
     let rows = std::iter::once(("Off", selected.is_none()))
         .chain(now.0.iter().map(|t| (t.label.as_str(), selected == Some(t.id))));
@@ -1606,9 +1714,9 @@ fn refresh_subtitles() {
         let check = gtk::Image::from_icon_name("object-select-symbolic");
         check.set_opacity(if active { 1.0 } else { 0.0 });
         row.append(&check);
-        ui.subtitles_list.append(&row);
+        ui.captions_list.append(&row);
     }
-    *ui.subtitle_tracks.borrow_mut() = now;
+    *ui.caption_tracks.borrow_mut() = now;
 }
 
 pub fn volume_icon(volume: f64, muted: bool) -> &'static str {
@@ -1835,8 +1943,8 @@ pub fn tick() {
         "media-playback-pause-symbolic"
     });
 
-    ui.player.add_pending_subtitles();
-    refresh_subtitles();
+    ui.player.add_pending_captions();
+    refresh_captions();
 
     if ui.player.take_ended() {
         if let Some(id) = ui.player.id() {
@@ -1900,8 +2008,52 @@ fn enqueue(entry: Entry) -> bool {
     if added {
         save_session();
         pump_queue();
+        if let Some(entry) = with(|state| state.queue.last().map(|item| item.entry.clone())) {
+            fetch_original_title(&entry);
+        }
     }
     added
+}
+
+/// Asks for the details of a video unless they are known, the listings it came from may show a
+/// translated title and the details have the original one, see `retitle`.
+fn fetch_original_title(entry: &Entry) {
+    if entry.url.is_empty() {
+        return;
+    }
+    let key = Page::Video(entry.clone()).key();
+    let ask = with(|state| {
+        !state.infos.contains_key(&key) && state.info_lookups.insert(key.clone())
+    });
+    if ask {
+        send(Request::Info {
+            key,
+            url: entry.url.clone(),
+        });
+    }
+}
+
+/// Gives the videos of the queue, and the one playing, the original title from their details.
+/// Returns whether any changed.
+fn retitle(original: &Entry) -> bool {
+    if original.title.is_empty() {
+        return false;
+    }
+    with(|state| {
+        let mut changed = false;
+        let entries = state
+            .queue
+            .iter_mut()
+            .map(|item| &mut item.entry)
+            .chain(state.playing.as_mut());
+        for entry in entries.filter(|entry| entry.id == original.id) {
+            if entry.title != original.title {
+                entry.title = original.title.clone();
+                changed = true;
+            }
+        }
+        changed
+    })
 }
 
 fn queue_remove(id: &str) {
@@ -2795,6 +2947,12 @@ pub fn handle(response: Response) {
 
             match result {
                 Ok(info) => {
+                    with(|state| state.info_lookups.remove(&key));
+                    if retitle(&info.entry) {
+                        refresh_queue();
+                        save_session();
+                    }
+
                     // Videos that were in the cache before we kept track of them.
                     let unknown = cache::find(&info.entry.id).is_some()
                         && !cache::scan()
@@ -2833,7 +2991,9 @@ pub fn handle(response: Response) {
                     ui.video_description
                         .set_text(&format!("Failed to load details: {error}"));
                 }
-                Err(_) => {}
+                Err(_) => {
+                    with(|state| state.info_lookups.remove(&key));
+                }
             }
         }
         Response::Latest { channel_id, result } => {
@@ -2874,6 +3034,19 @@ pub fn handle(response: Response) {
                         banner.set_revealed(true);
                     }
                 }
+            }
+        }
+        Response::Captions { id, mode, found } => {
+            // The video or the choice may have changed while they were being fetched.
+            if ui.player.id().as_deref() != Some(&id) {
+                return;
+            }
+            match found {
+                Some((track, file)) => ui.player.queue_caption(track, file),
+                None if state::get().caption_mode == mode => {
+                    player_message("No subtitles for this video")
+                }
+                None => {}
             }
         }
         Response::Segments { id, segments } => {

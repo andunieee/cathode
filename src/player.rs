@@ -104,9 +104,9 @@ fn mpv_get_proc_address(_ctx: &*mut c_void, name: &str) -> *mut c_void {
     gl_proc_address(name)
 }
 
-/// A subtitle track of the file loaded.
+/// A caption track of the file loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubtitleTrack {
+pub struct CaptionTrack {
     pub id: i64,
     pub label: String,
 }
@@ -121,11 +121,15 @@ pub struct Player {
     /// A file to load once the render context exists: without it mpv drops the video.
     waiting: RefCell<Option<String>>,
     this: std::rc::Weak<Player>,
-    /// Subtitle files of the file loaded, `(language, path)`, until mpv has loaded the file and
+    /// Caption files of the file loaded, `(track, path)`, until mpv has loaded the file and
     /// they can be added.
-    pending_subtitles: RefCell<Vec<(String, std::path::PathBuf)>>,
-    /// Whether subtitles are wanted, which holds from one file to the next.
-    subtitles: Cell<bool>,
+    pending_captions: RefCell<Vec<(String, std::path::PathBuf)>>,
+    /// The caption files mpv has been given for the file loaded.
+    added_captions: RefCell<Vec<std::path::PathBuf>>,
+    /// The languages mpv picks a caption track from, like `pt`, none for any.
+    preferred_languages: RefCell<String>,
+    /// Whether captions are wanted, which holds from one file to the next.
+    captions: Cell<bool>,
     /// Parts of the video to jump over, `(start, end)` in seconds.
     skips: RefCell<Vec<(f64, f64)>>,
     /// Fires when the next of those parts is reached.
@@ -158,8 +162,10 @@ impl Player {
 
         let player = Rc::new_cyclic(|this| Self {
             this: this.clone(),
-            pending_subtitles: RefCell::new(Vec::new()),
-            subtitles: Cell::new(false),
+            pending_captions: RefCell::new(Vec::new()),
+            added_captions: RefCell::new(Vec::new()),
+            preferred_languages: RefCell::new(String::new()),
+            captions: Cell::new(false),
             skips: RefCell::new(Vec::new()),
             skip_timer: RefCell::new(None),
             area,
@@ -284,9 +290,10 @@ impl Player {
         self.settling.set(10);
         self.skips.borrow_mut().clear();
         self.cancel_skip();
-        *self.pending_subtitles.borrow_mut() =
-            crate::cache::subtitle_files(std::path::Path::new(file));
-        self.apply_subtitles();
+        self.added_captions.borrow_mut().clear();
+        *self.pending_captions.borrow_mut() =
+            crate::cache::caption_files(std::path::Path::new(file));
+        self.apply_captions();
         if self.render.borrow().is_some() {
             *self.waiting.borrow_mut() = None;
             let _ = self.mpv.command("loadfile", &[file, "replace"]);
@@ -301,7 +308,8 @@ impl Player {
         *self.id.borrow_mut() = None;
         self.ended.set(false);
         *self.waiting.borrow_mut() = None;
-        self.pending_subtitles.borrow_mut().clear();
+        self.pending_captions.borrow_mut().clear();
+        self.added_captions.borrow_mut().clear();
         self.skips.borrow_mut().clear();
         self.cancel_skip();
         let _ = self.mpv.command("stop", &[]);
@@ -337,49 +345,73 @@ impl Player {
         let _ = self.mpv.set_property("mute", muted);
     }
 
-    /// Hands the subtitle files to mpv once it has loaded the file, they can't be added before.
-    pub fn add_pending_subtitles(&self) {
-        if self.pending_subtitles.borrow().is_empty() || self.duration() <= 0.0 {
+    /// Lets the file loaded have a caption file that turned up, it is added once mpv has
+    /// loaded the file. Does nothing for a file that was added already.
+    pub fn queue_caption(&self, track: String, path: std::path::PathBuf) {
+        let known = self.added_captions.borrow().contains(&path)
+            || self.pending_captions.borrow().iter().any(|(_, pending)| *pending == path);
+        if !known {
+            self.pending_captions.borrow_mut().push((track, path));
+        }
+    }
+
+    /// Hands the caption files to mpv once it has loaded the file, they can't be added before.
+    pub fn add_pending_captions(&self) {
+        if self.pending_captions.borrow().is_empty() || self.duration() <= 0.0 {
             return;
         }
-        let files = std::mem::take(&mut *self.pending_subtitles.borrow_mut());
+        let files = std::mem::take(&mut *self.pending_captions.borrow_mut());
         for (language, path) in files {
-            // "cached" adds the track without selecting it.
+            self.added_captions.borrow_mut().push(path.clone());
+            // "cached" adds the track without selecting it. The language is the plain one, like
+            // `pt` for `pt-orig`, so that it matches what is preferred.
+            let plain = language.split('-').next().unwrap_or(&language);
             let _ = self.mpv.command(
                 "sub-add",
-                &[&path.to_string_lossy(), "cached", &language, &language],
+                &[
+                    &path.to_string_lossy(),
+                    "cached",
+                    &crate::format::language_name(&language),
+                    plain,
+                ],
             );
         }
-        self.apply_subtitles();
+        self.apply_captions();
+        // With no language to go by, any track is better than none.
+        if self.captions.get() && self.preferred_languages.borrow().is_empty() {
+            if let (tracks, None) = self.caption_tracks() {
+                if let Some(track) = tracks.first() {
+                    let _ = self.mpv.set_property("sid", track.id);
+                }
+            }
+        }
     }
 
-    pub fn subtitles_wanted(&self) -> bool {
-        self.subtitles.get()
-    }
-
-    /// Turns subtitles on or off for this file and the next ones. On picks the track of the
+    /// Turns captions on or off for this file and the next ones. On picks the track of the
     /// preferred languages, `languages` being a list like `en,fr`.
-    pub fn set_subtitles(&self, wanted: bool, languages: &str) {
-        self.subtitles.set(wanted);
+    pub fn set_captions(&self, wanted: bool, languages: &str) {
+        self.captions.set(wanted);
+        *self.preferred_languages.borrow_mut() = languages.to_string();
         let _ = self.mpv.set_property("slang", languages);
-        self.apply_subtitles();
+        self.apply_captions();
     }
 
-    fn apply_subtitles(&self) {
-        let _ = self
-            .mpv
-            .set_property("sid", if self.subtitles.get() { "auto" } else { "no" });
+    fn apply_captions(&self) {
+        // Going through "no" makes mpv choose again, as the preferred languages may have changed.
+        let _ = self.mpv.set_property("sid", "no");
+        if self.captions.get() {
+            let _ = self.mpv.set_property("sid", "auto");
+        }
     }
 
     /// Shows this track, or the next file starts with the automatic choice again.
-    pub fn select_subtitle(&self, id: i64) {
-        self.subtitles.set(true);
+    pub fn select_caption(&self, id: i64) {
         let _ = self.mpv.set_property("sid", id);
         self.area.queue_render();
     }
 
-    /// The subtitle tracks of the file, and the id of the one shown.
-    pub fn subtitle_tracks(&self) -> (Vec<SubtitleTrack>, Option<i64>) {
+    /// The caption tracks of the file, and the id of the one shown.
+    pub fn caption_tracks(&self) -> (Vec<CaptionTrack>, Option<i64>) {
         let count = self.mpv.get_property::<i64>("track-list/count").unwrap_or(0);
         let mut tracks = Vec::new();
         let mut selected = None;
@@ -401,7 +433,7 @@ impl Player {
             {
                 selected = Some(id);
             }
-            tracks.push(SubtitleTrack { id, label });
+            tracks.push(CaptionTrack { id, label });
         }
         (tracks, selected)
     }

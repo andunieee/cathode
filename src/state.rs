@@ -23,12 +23,24 @@ pub struct State {
     pub volume: Option<f64>,
     /// The playback speed, none until it is changed.
     pub speed: Option<f64>,
-    /// Whether subtitles are shown.
-    pub subtitles: bool,
+    /// Which captions are downloaded and shown. It was called `subtitle_mode`.
+    #[serde(alias = "subtitle_mode")]
+    pub caption_mode: CaptionMode,
     /// The queue and the player of the normal mode.
     pub session: Session,
     /// The same, for the restricted mode.
     pub restricted_session: Session,
+}
+
+/// Which captions the player goes for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaptionMode {
+    #[default]
+    Off = 0,
+    /// The language the video was made in.
+    Original = 1,
+    /// The default language of the settings.
+    Default = 2,
 }
 
 /// What the queue and the player were up to, each mode has its own.

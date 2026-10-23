@@ -123,28 +123,25 @@ fn general() -> adw::PreferencesPage {
         |text| save(|s| s.limit_rate = text),
     );
 
-    let subtitles = entry_row(
-        "Subtitle languages",
-        "Downloaded with the videos, like en or en,fr. Empty for none",
-        &current.subtitle_languages,
-        |text| save(|s| s.subtitle_languages = text),
+    let language = entry_row(
+        "Default language",
+        "Like en or pt-BR. Empty for what YouTube gives by default",
+        &current.language,
+        |text| {
+            save(|s| s.language = text);
+            nav::default_language_changed();
+        },
     );
-    let captions = adw::SwitchRow::builder()
-        .title("Automatic captions")
-        .subtitle("Also download the captions YouTube generates, when there are no subtitles")
-        .active(current.automatic_captions)
+    let languages = adw::PreferencesGroup::builder()
+        .title("Language")
+        .description("The language of the titles in lists and of the subtitles to download")
         .build();
-    captions.connect_active_notify(|row| {
-        let active = row.is_active();
-        save(|s| s.automatic_captions = active);
-    });
+    languages.add(&language);
 
     let downloads = adw::PreferencesGroup::builder().title("Downloads").build();
     downloads.add(&quality);
     downloads.add(&sponsors);
     downloads.add(&rate);
-    downloads.add(&subtitles);
-    downloads.add(&captions);
 
     let mut browsers = vec!["None"];
     browsers.extend(BROWSERS);
@@ -196,6 +193,7 @@ fn general() -> adw::PreferencesPage {
     network.add(&proxy);
 
     let page = adw::PreferencesPage::new();
+    page.add(&languages);
     page.add(&downloads);
     page.add(&network);
     page

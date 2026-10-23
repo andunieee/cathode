@@ -102,9 +102,9 @@ pub fn find_size(id: &str, height: Option<u32>) -> Option<PathBuf> {
         .map(|(_, path)| path)
 }
 
-/// The subtitle files next to a video, as `(language, path)`. They are named after the video,
+/// The caption files next to a video, as `(language, path)`. They are named after the video,
 /// like `id.en.vtt` for `id.mp4`.
-pub fn subtitle_files(video: &Path) -> Vec<(String, PathBuf)> {
+pub fn caption_files(video: &Path) -> Vec<(String, PathBuf)> {
     let (Some(dir), Some(stem)) = (
         video.parent(),
         video.file_stem().and_then(|stem| stem.to_str()),
@@ -235,8 +235,8 @@ pub fn delete(stems: &[String]) {
 
     for (stem, path) in video_files(&dir) {
         if stems.contains(&stem) {
-            for (_, subtitles) in subtitle_files(&path) {
-                let _ = std::fs::remove_file(subtitles);
+            for (_, captions) in caption_files(&path) {
+                let _ = std::fs::remove_file(captions);
             }
             let _ = std::fs::remove_file(path);
         }
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn subtitles_belong_to_their_video() {
+    fn captions_belong_to_their_video() {
         let dir = std::env::temp_dir().join(format!("cathode-subs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -273,7 +273,7 @@ mod tests {
         }
 
         let languages = |video: &str| -> Vec<String> {
-            subtitle_files(&dir.join(video)).into_iter().map(|(l, _)| l).collect()
+            caption_files(&dir.join(video)).into_iter().map(|(l, _)| l).collect()
         };
         assert_eq!(languages("abc.mp4"), ["en", "fr"]);
         assert_eq!(languages("abc.720p.mp4"), ["en"]);
