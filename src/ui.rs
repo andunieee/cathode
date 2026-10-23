@@ -457,13 +457,13 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     // Straight to the restricted mode, asking for the password if there is one.
     let controls_button = icon_button("system-users-symbolic", "Turn on the restricted mode");
     controls_button.connect_clicked(|_| controls::toggle_profile());
-    header.pack_start(&controls_button);
 
     let subs_toggle = gtk::ToggleButton::builder().cursor(&crate::ui::pointer())
         .icon_name("starred-symbolic")
         .tooltip_text("Subscriptions and collections")
         .build();
     header.pack_start(&subs_toggle);
+    header.pack_start(&controls_button);
 
     let search_entry = gtk::SearchEntry::builder()
         .placeholder_text("Search YouTube")
