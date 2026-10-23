@@ -12,12 +12,14 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::cache;
 use crate::collections;
 use crate::controls;
-use crate::fetch::{Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo};
+use crate::fetch::{
+    Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo,
+};
 use crate::format;
 use crate::history;
 use crate::library;
-use crate::settings;
 use crate::profile::{self, ChannelRef, Item, PlaylistRef};
+use crate::settings;
 use crate::state::{self, CaptionMode};
 use crate::subscriptions::{self, Subscription};
 use crate::ui::{self, CacheRow, Ui};
@@ -323,7 +325,8 @@ fn show_channel_results(channels: &[ChannelRef]) {
         .iter()
         .filter(|c| !profile::restricted() || profile::allows_channel(&c.id))
     {
-        let button = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let button = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .label(&channel.name)
             .tooltip_text("Open the channel")
             .build();
@@ -625,7 +628,10 @@ fn note_listed(key: &str, entries: &[Entry]) {
         profile::allows_playlist(id)
     } else if let Some(rest) = key.strip_prefix("c:") {
         // The id has a colon of its own, the query comes after the next one.
-        let end = rest.match_indices(':').nth(1).map_or(rest.len(), |(i, _)| i);
+        let end = rest
+            .match_indices(':')
+            .nth(1)
+            .map_or(rest.len(), |(i, _)| i);
         profile::allows_channel(&rest[..end])
     } else {
         false
@@ -1169,10 +1175,7 @@ fn start_download(entry: Entry) {
     });
 
     if start {
-        send(Request::Download {
-            entry,
-            height,
-        });
+        send(Request::Download { entry, height });
     }
 }
 
@@ -1738,9 +1741,13 @@ pub fn toggle_captions() {
 /// of the video, which only change what is shown for it.
 pub fn pick_caption(row: usize) {
     let ui = ui::get();
-    let track = row
-        .checked_sub(1)
-        .and_then(|index| ui.caption_tracks.borrow().0.get(index).map(|track| track.id));
+    let track = row.checked_sub(1).and_then(|index| {
+        ui.caption_tracks
+            .borrow()
+            .0
+            .get(index)
+            .map(|track| track.id)
+    });
     ui.captions_button.popdown();
     match track {
         Some(id) => ui.player.select_caption(id),
@@ -1763,15 +1770,22 @@ fn refresh_captions() {
     clear_rows(&ui.captions_list);
     ui.captions_button.set_visible(!now.0.is_empty());
     let selected = now.1;
-    let rows = std::iter::once(("Off", selected.is_none()))
-        .chain(now.0.iter().map(|t| (t.label.as_str(), selected == Some(t.id))));
+    let rows = std::iter::once(("Off", selected.is_none())).chain(
+        now.0
+            .iter()
+            .map(|t| (t.label.as_str(), selected == Some(t.id))),
+    );
     for (label, active) in rows {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.set_margin_top(6);
         row.set_margin_bottom(6);
         row.set_margin_start(12);
         row.set_margin_end(12);
-        let name = gtk::Label::builder().label(label).xalign(0.0).hexpand(true).build();
+        let name = gtk::Label::builder()
+            .label(label)
+            .xalign(0.0)
+            .hexpand(true)
+            .build();
         row.append(&name);
         let check = gtk::Image::from_icon_name("object-select-symbolic");
         check.set_opacity(if active { 1.0 } else { 0.0 });
@@ -1807,13 +1821,20 @@ pub fn change_volume(delta: f64) {
     }
     ui.volume_scale
         .set_value((ui.volume_scale.value() + delta).clamp(0.0, 1.0));
-    player_message(&format!("Volume: {}%", (ui.volume_scale.value() * 100.0).round()));
+    player_message(&format!(
+        "Volume: {}%",
+        (ui.volume_scale.value() * 100.0).round()
+    ));
 }
 
 /// Picks the next or the previous of the playback speeds on offer.
 pub fn step_speed(direction: i32) {
     let ui = ui::get();
-    let last = ui.speed.model().map_or(0, |model| model.n_items()).saturating_sub(1);
+    let last = ui
+        .speed
+        .model()
+        .map_or(0, |model| model.n_items())
+        .saturating_sub(1);
     let selected = (ui.speed.selected() as i64 + direction as i64).clamp(0, last as i64);
     ui.speed.set_selected(selected as u32);
     show_speed();
@@ -1833,7 +1854,11 @@ pub fn reset_speed() {
 pub fn step_frame(forward: bool) {
     let ui = ui::get();
     ui.player.step_frame(forward);
-    player_message(if forward { "Next frame" } else { "Previous frame" });
+    player_message(if forward {
+        "Next frame"
+    } else {
+        "Previous frame"
+    });
 }
 
 /// Jumps to the start of the next chapter, or of the current one if it was left a while ago.
@@ -1844,7 +1869,9 @@ pub fn step_chapter(direction: i32) {
     };
     let chapters = chapters_of(&id);
     let position = ui.player.position();
-    let current = chapters.iter().rposition(|chapter| chapter.start <= position);
+    let current = chapters
+        .iter()
+        .rposition(|chapter| chapter.start <= position);
     let target = match (current, direction) {
         (None, d) if d > 0 => Some(0),
         (None, _) => None,
@@ -1949,7 +1976,11 @@ fn show_fullscreen(fullscreen: bool) {
 
     // Sit under the queue normally, take the whole sidebar once the queue is hidden.
     ui.player_frame.set_vexpand(fullscreen);
-    ui.player_frame.set_valign(if fullscreen { gtk::Align::Fill } else { gtk::Align::End });
+    ui.player_frame.set_valign(if fullscreen {
+        gtk::Align::Fill
+    } else {
+        gtk::Align::End
+    });
 
     if let Some(content) = split.content() {
         content.set_visible(!fullscreen);
@@ -1982,7 +2013,11 @@ pub fn tick() {
             ui.player.seek_to(start);
         }
     }
-    if with(|state| state.chapter_stop.is_some_and(|stop| position >= stop - 0.05)) {
+    if with(|state| {
+        state
+            .chapter_stop
+            .is_some_and(|stop| position >= stop - 0.05)
+    }) {
         with(|state| state.chapter_stop = None);
         ui.player.set_paused(true);
     }
@@ -2084,9 +2119,8 @@ fn fetch_original_title(entry: &Entry) {
         return;
     }
     let key = Page::Video(entry.clone()).key();
-    let ask = with(|state| {
-        !state.infos.contains_key(&key) && state.info_lookups.insert(key.clone())
-    });
+    let ask =
+        with(|state| !state.infos.contains_key(&key) && state.info_lookups.insert(key.clone()));
     if ask {
         send(Request::Info {
             key,
@@ -2228,7 +2262,8 @@ fn refresh_queue() {
             move |_| open_video(entry.clone())
         });
 
-        let play = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let play = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("media-playback-start-symbolic")
             .tooltip_text("Play")
             .valign(gtk::Align::Center)
@@ -2245,7 +2280,8 @@ fn refresh_queue() {
             row.add_css_class("queue-playing");
         }
 
-        let remove = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let remove = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
             .tooltip_text("Remove from the queue")
             .valign(gtk::Align::Center)
@@ -2439,7 +2475,8 @@ fn refresh_subscriptions() {
             move |_| open_channel(&subscription.id, &subscription.name)
         });
 
-        let remove = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let remove = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
             .tooltip_text("Unsubscribe")
             .valign(gtk::Align::Center)
@@ -2732,7 +2769,8 @@ fn show_cache() {
         });
         row.add_prefix(&check);
 
-        let queue = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let queue = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("list-add-symbolic")
             .tooltip_text("Add to queue")
             .valign(gtk::Align::Center)
@@ -2746,7 +2784,8 @@ fn show_cache() {
         queue.set_visible(!variant);
         row.add_suffix(&queue);
 
-        let save = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let save = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("document-save-symbolic")
             .tooltip_text("Save to a collection")
             .valign(gtk::Align::Center)
@@ -2762,7 +2801,8 @@ fn show_cache() {
         save.set_visible(!variant);
         row.add_suffix(&save);
 
-        let delete = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let delete = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("user-trash-symbolic")
             .tooltip_text("Delete from the cache")
             .valign(gtk::Align::Center)
@@ -3065,7 +3105,11 @@ pub fn handle(response: Response) {
                 }
             }
         }
-        Response::Latest { channel_id, result, language } => {
+        Response::Latest {
+            channel_id,
+            result,
+            language,
+        } => {
             if let Some(language) = language {
                 subscriptions::set_language(&channel_id, language);
             }
@@ -3207,7 +3251,10 @@ pub fn handle(response: Response) {
                 match (&result, playing) {
                     (Ok(path), Some(entry)) => {
                         swap_playback(&entry, path);
-                        toast(&format!("Playing at {}", size_name(height.unwrap_or(settings::get().max_height))));
+                        toast(&format!(
+                            "Playing at {}",
+                            size_name(height.unwrap_or(settings::get().max_height))
+                        ));
                     }
                     _ => {
                         with(|state| state.picked.remove(&id));

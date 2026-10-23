@@ -393,10 +393,16 @@ fn free_path(directory: &Path, entry: &Entry, source: &Path) -> PathBuf {
         .map(|ext| ext.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mp4".to_string());
 
-    let mut path = directory.join(format!("{title} [{}].{extension}", crate::fetch::bare_id(&entry.id)));
+    let mut path = directory.join(format!(
+        "{title} [{}].{extension}",
+        crate::fetch::bare_id(&entry.id)
+    ));
     let mut number = 2;
     while path.exists() {
-        path = directory.join(format!("{title} [{}] {number}.{extension}", crate::fetch::bare_id(&entry.id)));
+        path = directory.join(format!(
+            "{title} [{}] {number}.{extension}",
+            crate::fetch::bare_id(&entry.id)
+        ));
         number += 1;
     }
     path

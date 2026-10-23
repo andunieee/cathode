@@ -131,7 +131,8 @@ impl Widgets {
             .hexpand(true)
             .build();
         settings_entry.connect_activate(|_| add_typed_item());
-        let add = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let add = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .label("Add")
             .css_classes(["suggested-action"])
             .build();
@@ -154,9 +155,13 @@ impl Widgets {
         );
 
         let password_row = adw::ActionRow::builder().title("Password").build();
-        let password_set = gtk::Button::builder().cursor(&crate::ui::pointer()).valign(gtk::Align::Center).build();
+        let password_set = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .valign(gtk::Align::Center)
+            .build();
         password_set.connect_clicked(|_| set_password());
-        let password_remove = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let password_remove = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .label("Remove")
             .valign(gtk::Align::Center)
             .css_classes(["destructive-action"])
@@ -219,7 +224,8 @@ fn row(title: &str, subtitle: &str, icon: &str) -> adw::ActionRow {
 }
 
 fn remove_button(on_remove: impl Fn() + 'static) -> gtk::Button {
-    let button = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let button = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .icon_name("user-trash-symbolic")
         .tooltip_text("Remove from restricted mode")
         .valign(gtk::Align::Center)

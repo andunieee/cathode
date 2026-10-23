@@ -61,7 +61,10 @@ pub fn parse_stem(stem: &str) -> (&str, Option<u32>) {
     };
     match size {
         "best" => (id, Some(0)),
-        _ => match size.strip_suffix('p').and_then(|height| height.parse().ok()) {
+        _ => match size
+            .strip_suffix('p')
+            .and_then(|height| height.parse().ok())
+        {
             Some(height) => (id, Some(height)),
             None => (stem, None),
         },
@@ -119,7 +122,10 @@ pub fn caption_files(video: &Path) -> Vec<(String, PathBuf)> {
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
-            let language = name.strip_prefix(stem)?.strip_prefix('.')?.strip_suffix(".vtt")?;
+            let language = name
+                .strip_prefix(stem)?
+                .strip_prefix('.')?
+                .strip_suffix(".vtt")?;
             // The sizes of a video share its id as a prefix, their languages have no dot.
             (!language.is_empty() && !language.contains('.'))
                 .then(|| (language.to_string(), entry.path()))
@@ -268,12 +274,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cathode-subs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["abc.mp4", "abc.en.vtt", "abc.fr.vtt", "abc.720p.mp4", "abc.720p.en.vtt"] {
+        for name in [
+            "abc.mp4",
+            "abc.en.vtt",
+            "abc.fr.vtt",
+            "abc.720p.mp4",
+            "abc.720p.en.vtt",
+        ] {
             std::fs::File::create(dir.join(name)).unwrap();
         }
 
         let languages = |video: &str| -> Vec<String> {
-            caption_files(&dir.join(video)).into_iter().map(|(l, _)| l).collect()
+            caption_files(&dir.join(video))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect()
         };
         assert_eq!(languages("abc.mp4"), ["en", "fr"]);
         assert_eq!(languages("abc.720p.mp4"), ["en"]);

@@ -175,7 +175,10 @@ pub fn valid_language(language: &str) -> bool {
 /// A `language` replaces the default one, for the channels that have their own.
 pub fn language_args(own: Option<String>) -> Vec<String> {
     match own.or_else(language) {
-        Some(language) => vec!["--extractor-args".to_string(), format!("youtube:lang={language}")],
+        Some(language) => vec![
+            "--extractor-args".to_string(),
+            format!("youtube:lang={language}"),
+        ],
         None => Vec::new(),
     }
 }

@@ -104,7 +104,11 @@ fn main() -> glib::ExitCode {
     });
 
     // Only ours are passed on, GTK doesn't get to see the rest.
-    let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--foreground").collect();
+    let args: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| *a != "--foreground")
+        .collect();
     app.run_with_args(&args)
 }
 

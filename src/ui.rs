@@ -10,10 +10,10 @@ use crate::controls;
 use crate::fetch::{Entry, SearchFilter, SearchSort};
 use crate::library;
 use crate::nav;
-use crate::state::CaptionMode;
 use crate::player::Player;
 use crate::preferences;
 use crate::profile;
+use crate::state::CaptionMode;
 
 /// Playback speeds on offer, 1.0 being the first selected.
 const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -165,7 +165,10 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
         std::iter::successors(focus.clone(), |widget| widget.parent()).any(|widget| check(&widget))
     };
     // Typing, and the widgets that use the arrows themselves.
-    if focus.as_ref().is_some_and(|widget| widget.is::<gtk::Editable>()) {
+    if focus
+        .as_ref()
+        .is_some_and(|widget| widget.is::<gtk::Editable>())
+    {
         return false;
     }
     let arrows_taken = inside(&|widget| {
@@ -284,7 +287,8 @@ impl Card {
             .css_classes(["heading"])
             .build();
 
-        let channel = gtk::LinkButton::builder().cursor(&crate::ui::pointer())
+        let channel = gtk::LinkButton::builder()
+            .cursor(&crate::ui::pointer())
             .uri("cathode:channel")
             .halign(gtk::Align::Start)
             .build();
@@ -316,7 +320,8 @@ impl Card {
         text.append(&title);
         text.append(&line);
 
-        let queue = gtk::Button::builder().cursor(&crate::ui::pointer())
+        let queue = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
             .icon_name("list-add-symbolic")
             .tooltip_text("Add to queue")
             .valign(gtk::Align::Center)
@@ -422,7 +427,8 @@ pub fn pointer() -> gtk::gdk::Cursor {
 }
 
 fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
-    gtk::Button::builder().cursor(&crate::ui::pointer())
+    gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .icon_name(icon)
         .tooltip_text(tooltip)
         .build()
@@ -458,7 +464,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let controls_button = icon_button("system-users-symbolic", "Turn on the restricted mode");
     controls_button.connect_clicked(|_| controls::toggle_profile());
 
-    let subs_toggle = gtk::ToggleButton::builder().cursor(&crate::ui::pointer())
+    let subs_toggle = gtk::ToggleButton::builder()
+        .cursor(&crate::ui::pointer())
         .icon_name("starred-symbolic")
         .tooltip_text("Subscriptions and collections")
         .build();
@@ -505,7 +512,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     );
     header.set_title_widget(Some(&title_stack));
 
-    let queue_toggle = gtk::ToggleButton::builder().cursor(&crate::ui::pointer())
+    let queue_toggle = gtk::ToggleButton::builder()
+        .cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
         .tooltip_text("Queue")
         .build();
@@ -566,12 +574,14 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     channel_header.set_margin_end(12);
     channel_header.append(&channel_title);
     channel_header.append(&channel_entry);
-    let allow_channel = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let allow_channel = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .valign(gtk::Align::Center)
         .visible(false)
         .build();
     allow_channel.connect_clicked(|_| nav::toggle_allowed());
-    let subscribe_button = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let subscribe_button = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .valign(gtk::Align::Center)
         .visible(false)
         .build();
@@ -635,7 +645,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .focusable(false)
         .css_classes(["title-2"])
         .build();
-    let video_channel = gtk::LinkButton::builder().cursor(&crate::ui::pointer())
+    let video_channel = gtk::LinkButton::builder()
+        .cursor(&crate::ui::pointer())
         .uri("cathode:channel")
         .halign(gtk::Align::Start)
         .build();
@@ -650,12 +661,14 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .focusable(false)
         .css_classes(["dim-label"])
         .build();
-    let play = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let play = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .label("Play")
         .css_classes(["suggested-action"])
         .build();
     play.connect_clicked(|_| nav::play_current());
-    let queue_video = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let queue_video = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .label("Queue")
         .build();
     queue_video.connect_clicked(|_| nav::queue_current());
@@ -666,14 +679,16 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     buttons.append(&play);
     buttons.append(&queue_video);
-    let related = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let related = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .label("Related")
         .build();
     related.connect_clicked(|_| nav::open_related());
     buttons.append(&related);
     let library = library::Widgets::new();
     buttons.append(&library.save);
-    let allow_video = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let allow_video = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .visible(false)
         .build();
     allow_video.connect_clicked(|_| nav::toggle_allowed());
@@ -724,15 +739,18 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .xalign(0.0)
         .css_classes(["dim-label"])
         .build();
-    let cache_queue = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let cache_queue = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .label("Add to queue")
         .sensitive(false)
         .build();
-    let cache_save = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let cache_save = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .label("Save")
         .sensitive(false)
         .build();
-    let cache_delete = gtk::Button::builder().cursor(&crate::ui::pointer())
+    let cache_delete = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
         .label("Delete")
         .sensitive(false)
         .css_classes(["destructive-action"])
@@ -894,7 +912,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             let (width, bar) = (width as f64, 6.0);
             for (start, end) in segments {
                 let (from, to) = (start / duration, (end / duration).min(1.0));
-                context.rectangle(from * width, (height as f64 - bar) / 2.0, (to - from) * width, bar);
+                context.rectangle(
+                    from * width,
+                    (height as f64 - bar) / 2.0,
+                    (to - from) * width,
+                    bar,
+                );
             }
             let _ = context.fill();
         }
@@ -926,7 +949,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     volume_scale.set_draw_value(false);
     volume_scale.set_height_request(140);
     volume_scale.set_value(1.0);
-    let volume = gtk::MenuButton::builder().cursor(&crate::ui::pointer())
+    let volume = gtk::MenuButton::builder()
+        .cursor(&crate::ui::pointer())
         .icon_name("audio-volume-high-symbolic")
         .tooltip_text("Volume")
         .direction(gtk::ArrowType::Up)
@@ -944,7 +968,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .selection_mode(gtk::SelectionMode::None)
         .build();
     chapters_list.connect_row_activated(|_, row| nav::play_playing_chapter(row.index() as usize));
-    let chapters_button = gtk::MenuButton::builder().cursor(&crate::ui::pointer())
+    let chapters_button = gtk::MenuButton::builder()
+        .cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
         .tooltip_text("Chapters")
         .direction(gtk::ArrowType::Up)
@@ -996,7 +1021,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     progress_bar.set_active(!crate::settings::get().hide_progress_bar);
     progress_bar.connect_toggled(|button| nav::set_progress_bar(button.is_active()));
     let mut caption_modes: Vec<gtk::CheckButton> = Vec::new();
-    for mode in [CaptionMode::Off, CaptionMode::Original, CaptionMode::Default] {
+    for mode in [
+        CaptionMode::Off,
+        CaptionMode::Original,
+        CaptionMode::Default,
+    ] {
         let button = gtk::CheckButton::with_label(&nav::caption_mode_label(mode));
         button.set_cursor(Some(&crate::ui::pointer()));
         if let Some(first) = caption_modes.first() {
@@ -1267,8 +1296,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             let width = f64::from(window.width());
             let content_min = f64::from(toolbar.measure(gtk::Orientation::Horizontal, -1).0);
             let subs = if subs_split.shows_sidebar() {
-                (width * subs_split.sidebar_width_fraction())
-                    .clamp(subs_split.min_sidebar_width(), subs_split.max_sidebar_width())
+                (width * subs_split.sidebar_width_fraction()).clamp(
+                    subs_split.min_sidebar_width(),
+                    subs_split.max_sidebar_width(),
+                )
             } else {
                 0.0
             };

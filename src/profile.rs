@@ -446,10 +446,8 @@ mod tests {
         let profile: Profile = serde_json::from_str("{}").unwrap();
         assert!(profile.channels.is_empty());
 
-        let profile: Profile = serde_json::from_str(
-            r#"{"channels": [{"id": "yt:UC1", "name": "A"}]}"#,
-        )
-        .unwrap();
+        let profile: Profile =
+            serde_json::from_str(r#"{"channels": [{"id": "yt:UC1", "name": "A"}]}"#).unwrap();
         assert!(profile.channels[0].id == "yt:UC1");
     }
 }

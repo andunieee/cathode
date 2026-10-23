@@ -349,7 +349,11 @@ impl Player {
     /// loaded the file. Does nothing for a file that was added already.
     pub fn queue_caption(&self, track: String, path: std::path::PathBuf) {
         let known = self.added_captions.borrow().contains(&path)
-            || self.pending_captions.borrow().iter().any(|(_, pending)| *pending == path);
+            || self
+                .pending_captions
+                .borrow()
+                .iter()
+                .any(|(_, pending)| *pending == path);
         if !known {
             self.pending_captions.borrow_mut().push((track, path));
         }
@@ -412,15 +416,25 @@ impl Player {
 
     /// The caption tracks of the file, and the id of the one shown.
     pub fn caption_tracks(&self) -> (Vec<CaptionTrack>, Option<i64>) {
-        let count = self.mpv.get_property::<i64>("track-list/count").unwrap_or(0);
+        let count = self
+            .mpv
+            .get_property::<i64>("track-list/count")
+            .unwrap_or(0);
         let mut tracks = Vec::new();
         let mut selected = None;
         for index in 0..count {
-            let property = |name: &str| self.mpv.get_property::<String>(&format!("track-list/{index}/{name}")).ok();
+            let property = |name: &str| {
+                self.mpv
+                    .get_property::<String>(&format!("track-list/{index}/{name}"))
+                    .ok()
+            };
             if property("type").as_deref() != Some("sub") {
                 continue;
             }
-            let Ok(id) = self.mpv.get_property::<i64>(&format!("track-list/{index}/id")) else {
+            let Ok(id) = self
+                .mpv
+                .get_property::<i64>(&format!("track-list/{index}/id"))
+            else {
                 continue;
             };
             let label = property("title")
@@ -440,9 +454,14 @@ impl Player {
 
     /// Moves one frame, which leaves the video paused.
     pub fn step_frame(&self, forward: bool) {
-        let _ = self
-            .mpv
-            .command(if forward { "frame-step" } else { "frame-back-step" }, &[]);
+        let _ = self.mpv.command(
+            if forward {
+                "frame-step"
+            } else {
+                "frame-back-step"
+            },
+            &[],
+        );
         self.area.queue_render();
         self.cancel_skip();
     }
@@ -496,7 +515,11 @@ impl Player {
             return;
         };
 
-        let speed = self.mpv.get_property::<f64>("speed").unwrap_or(1.0).max(0.01);
+        let speed = self
+            .mpv
+            .get_property::<f64>("speed")
+            .unwrap_or(1.0)
+            .max(0.01);
         let delay = std::time::Duration::from_secs_f64(((start - position) / speed).max(0.0));
         let this = self.this.clone();
         let timer = glib::timeout_add_local_once(delay, move || {
@@ -508,7 +531,11 @@ impl Player {
             let now = player.position();
             if now >= start - 0.5 && now < end {
                 let duration = player.duration();
-                player.seek_to(if duration > 0.0 { end.min(duration) } else { end });
+                player.seek_to(if duration > 0.0 {
+                    end.min(duration)
+                } else {
+                    end
+                });
             } else {
                 // Something moved the playback in the meantime.
                 player.schedule_skip(now);

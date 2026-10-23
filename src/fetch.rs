@@ -12,8 +12,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Notify, Semaphore};
 
-use crate::state::CaptionMode;
 use crate::profile::{ChannelRef, Input, Item, PlaylistRef};
+use crate::state::CaptionMode;
 
 const SEARCH_MAX_RESULTS: usize = 100;
 const CHANNEL_MAX_RESULTS: usize = 1000;
@@ -50,18 +50,28 @@ pub fn video_id_of_link(text: &str) -> Option<String> {
     let url = reqwest::Url::parse(text)
         .or_else(|_| reqwest::Url::parse(&format!("https://{text}")))
         .ok()?;
-    let host = url.host_str()?.trim_start_matches("www.").trim_start_matches("m.");
+    let host = url
+        .host_str()?
+        .trim_start_matches("www.")
+        .trim_start_matches("m.");
     let mut segments = url.path_segments()?;
     let id = match host {
         "youtu.be" => segments.next()?.to_string(),
         "youtube.com" | "music.youtube.com" | "youtube-nocookie.com" => match segments.next()? {
-            "watch" => url.query_pairs().find(|(key, _)| key == "v")?.1.into_owned(),
+            "watch" => url
+                .query_pairs()
+                .find(|(key, _)| key == "v")?
+                .1
+                .into_owned(),
             "shorts" | "embed" | "live" | "v" => segments.next()?.to_string(),
             _ => return None,
         },
         _ => return None,
     };
-    let valid = id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let valid = id.len() == 11
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     valid.then_some(id)
 }
 
@@ -350,10 +360,7 @@ async fn run(
                     });
                 });
             }
-            Request::Download {
-                entry,
-                height,
-            } => {
+            Request::Download { entry, height } => {
                 let cancel = Arc::new(Notify::new());
                 let before = downloads
                     .lock()
@@ -402,7 +409,10 @@ async fn run(
                     cancel.notify_one();
                 }
             }
-            Request::Latest { channel_id, language } => {
+            Request::Latest {
+                channel_id,
+                language,
+            } => {
                 let slots = latest_slots.clone();
                 tokio::spawn(async move {
                     let _slot = slots.acquire().await;
@@ -544,7 +554,9 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
     // channel. A short one comes first so there is something to look at in the meantime.
     let mut seen = HashSet::new();
     if limit > SEARCH_MAX_RESULTS {
-        if let Err(error) = stream_listing(&key, &url, FIRST_PAGE, &mut seen, on_response, None).await {
+        if let Err(error) =
+            stream_listing(&key, &url, FIRST_PAGE, &mut seen, on_response, None).await
+        {
             return finish(Some(error));
         }
     }
@@ -562,7 +574,10 @@ async fn latest(
     channel_id: &str,
     known: Option<String>,
 ) -> (Result<Vec<Entry>, String>, Option<String>) {
-    let url = format!("https://www.youtube.com/channel/{}/videos", bare_id(channel_id));
+    let url = format!(
+        "https://www.youtube.com/channel/{}/videos",
+        bare_id(channel_id)
+    );
     let list = |language: Option<String>| {
         let url = url.clone();
         async move {
@@ -1212,7 +1227,13 @@ async fn fetch_captions(
     }
 
     let id = bare_id(&entry.id).to_string();
-    let known = |id: &str| CAPTION_SOURCES.lock().unwrap().as_ref().and_then(|s| s.get(id).cloned());
+    let known = |id: &str| {
+        CAPTION_SOURCES
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.get(id).cloned())
+    };
     let source = match known(&id) {
         Some(source) => source,
         None => {
@@ -1297,13 +1318,16 @@ async fn sponsor_segments(id: &str) -> Result<Vec<(f64, f64)>, String> {
 }
 
 async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
-    let bytes = reqwest::get(format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", bare_id(id)))
-        .await
-        .and_then(|response| response.error_for_status())
-        .map_err(|e| e.to_string())?
-        .bytes()
-        .await
-        .map_err(|e| e.to_string())?;
+    let bytes = reqwest::get(format!(
+        "https://i.ytimg.com/vi/{}/mqdefault.jpg",
+        bare_id(id)
+    ))
+    .await
+    .and_then(|response| response.error_for_status())
+    .map_err(|e| e.to_string())?
+    .bytes()
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
     if !large {
@@ -1343,7 +1367,9 @@ async fn resolve(input: Input) -> Result<Item, String> {
         Input::Channel(url) => {
             let channel = listing_head(&format!("{url}/videos")).await?;
             Ok(Item::Channel(ChannelRef {
-                id: youtube_id(&string(&channel, "channel_id").ok_or("This channel could not be found")?),
+                id: youtube_id(
+                    &string(&channel, "channel_id").ok_or("This channel could not be found")?,
+                ),
                 name: string(&channel, "channel")
                     .or_else(|| string(&channel, "uploader"))
                     .unwrap_or_else(|| "Unnamed channel".to_string()),
@@ -1370,9 +1396,18 @@ mod link_tests {
             "youtu.be/dQw4w9WgXcQ?si=x",
             "https://m.youtube.com/shorts/dQw4w9WgXcQ",
         ] {
-            assert_eq!(video_id_of_link(link).as_deref(), Some("dQw4w9WgXcQ"), "{link}");
+            assert_eq!(
+                video_id_of_link(link).as_deref(),
+                Some("dQw4w9WgXcQ"),
+                "{link}"
+            );
         }
-        for text in ["cats", "rust video", "https://example.com/watch?v=dQw4w9WgXcQ", "https://youtube.com/results?search_query=a"] {
+        for text in [
+            "cats",
+            "rust video",
+            "https://example.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/results?search_query=a",
+        ] {
             assert_eq!(video_id_of_link(text), None, "{text}");
         }
     }
@@ -1397,9 +1432,15 @@ mod caption_tests {
 
         // A dubbed video has the captions of every dub, only one is the real speech.
         let dubbed = source("pt-BR", &[], &["en-orig", "es-orig", "pt-orig", "pt", "en"]);
-        assert_eq!(dubbed.track_for(Original, Some("en")).as_deref(), Some("pt-orig"));
+        assert_eq!(
+            dubbed.track_for(Original, Some("en")).as_deref(),
+            Some("pt-orig")
+        );
         assert_eq!(dubbed.track_for(Default, Some("en")).as_deref(), Some("en"));
-        assert_eq!(dubbed.track_for(Default, Some("pt")).as_deref(), Some("pt-orig"));
+        assert_eq!(
+            dubbed.track_for(Default, Some("pt")).as_deref(),
+            Some("pt-orig")
+        );
         assert_eq!(dubbed.track_for(Off, Some("en")), None);
 
         // Subtitles somebody made win over the generated captions.
@@ -1408,7 +1449,10 @@ mod caption_tests {
         assert_eq!(made.track_for(Default, Some("de")).as_deref(), Some("de"));
 
         let regional = source("en-US", &[], &["en-US-orig", "es-US-orig"]);
-        assert_eq!(regional.track_for(Original, None).as_deref(), Some("en-US-orig"));
+        assert_eq!(
+            regional.track_for(Original, None).as_deref(),
+            Some("en-US-orig")
+        );
 
         // Without the language of the video there is no original, only the default one.
         let unknown = CaptionSource {
@@ -1417,7 +1461,10 @@ mod caption_tests {
             automatic: Vec::new(),
         };
         assert_eq!(unknown.track_for(Original, Some("en")), None);
-        assert_eq!(unknown.track_for(Default, Some("en")).as_deref(), Some("en"));
+        assert_eq!(
+            unknown.track_for(Default, Some("en")).as_deref(),
+            Some("en")
+        );
         assert_eq!(unknown.track_for(Default, None), None);
     }
 }
