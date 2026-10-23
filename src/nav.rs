@@ -393,6 +393,9 @@ fn show_video(entry: &Entry) {
         .filter(|title| !title.is_empty())
         .unwrap_or(&entry.title);
     ui.video_title.set_text(title);
+    // A file has no page on YouTube.
+    ui.video_link
+        .set(Some(entry.url.as_str()).filter(|url| !url.is_empty()));
     ui.video_channel.set_label(&entry.channel);
     ui.video_channel.set_visible(!entry.channel_id.is_empty());
     ui.video_channel
@@ -799,6 +802,7 @@ fn show() {
             filter,
         } => {
             ui.channel_header.set_visible(false);
+            ui.channel_link.set(None);
 
             ui.syncing.set(true);
             ui.search_entry.set_text(&query);
@@ -831,6 +835,10 @@ fn show() {
             ui.channel_title.set_text(&title);
             // There is nothing to search in a playlist.
             ui.channel_entry.set_visible(false);
+            ui.channel_link.set(Some(&format!(
+                "https://www.youtube.com/playlist?list={}",
+                crate::fetch::bare_id(&id)
+            )));
 
             show_listing(key, Source::Playlist { id });
         }
@@ -839,6 +847,10 @@ fn show() {
             ui.channel_title.set_text(&name);
             ui.channel_entry.set_text(&query);
             ui.channel_entry.set_visible(true);
+            ui.channel_link.set(Some(&format!(
+                "https://www.youtube.com/channel/{}",
+                crate::fetch::bare_id(&id)
+            )));
 
             show_listing(key, Source::Channel { id, query });
         }
@@ -859,6 +871,7 @@ fn show() {
             ui.channel_title
                 .set_text(&format!("Suggested after {}", entry.title));
             ui.channel_entry.set_visible(false);
+            ui.channel_link.set(None);
 
             show_listing(key, Source::Related { id: entry.id });
         }

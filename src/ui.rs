@@ -52,6 +52,8 @@ pub struct Ui {
     // Search and channel pages show their results the same way.
     pub channel_header: gtk::Box,
     pub channel_title: gtk::Label,
+    /// The YouTube link of the channel or playlist shown, and its row.
+    pub channel_link: LinkRow,
     pub channel_entry: gtk::SearchEntry,
     pub allow_channel: gtk::Button,
     pub subscribe_button: gtk::Button,
@@ -65,6 +67,7 @@ pub struct Ui {
     pub video_title: gtk::Label,
     pub video_channel: gtk::LinkButton,
     pub video_meta: gtk::Label,
+    pub video_link: LinkRow,
     pub video_description: gtk::Label,
     pub video_chapters: gtk::ListBox,
     /// The chapters of the video playing, in the player controls.
@@ -202,6 +205,50 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
         _ => return false,
     }
     true
+}
+
+/// A link to show, with a button to copy it.
+pub struct LinkRow {
+    pub row: gtk::Box,
+    label: gtk::Label,
+}
+
+impl LinkRow {
+    fn new() -> Self {
+        let label = gtk::Label::builder()
+            .xalign(0.0)
+            .selectable(true)
+            .focusable(false)
+            .ellipsize(pango::EllipsizeMode::End)
+            .css_classes(["dim-label"])
+            .build();
+        let copy = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .icon_name("edit-copy-symbolic")
+            .tooltip_text("Copy the link")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        copy.connect_clicked({
+            let label = label.clone();
+            move |button| {
+                button.clipboard().set_text(&label.text());
+                nav::toast("Link copied");
+            }
+        });
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.set_visible(false);
+        row.append(&label);
+        row.append(&copy);
+        Self { row, label }
+    }
+
+    /// Shows the link, or hides the row when there is none.
+    pub fn set(&self, link: Option<&str>) {
+        self.label.set_text(link.unwrap_or_default());
+        self.row.set_visible(link.is_some());
+    }
 }
 
 pub fn get() -> Rc<Ui> {
@@ -558,7 +605,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .child(&channel_results)
         .build();
     let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let channel_link = LinkRow::new();
+    channel_link.row.set_margin_start(12);
+    channel_link.row.set_margin_end(12);
     results.append(&channel_header);
+    results.append(&channel_link.row);
     results.append(&channel_results_row);
     results.append(&results_status);
     results.append(
@@ -632,7 +683,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     video_info.set_hexpand(true);
     video_info.append(&video_title);
     video_info.append(&video_channel);
+    let video_link = LinkRow::new();
     video_info.append(&video_meta);
+    video_info.append(&video_link.row);
     video_info.append(&buttons);
 
     let video_top = gtk::Box::new(gtk::Orientation::Horizontal, 18);
@@ -1305,6 +1358,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         stack,
         channel_header,
         channel_title,
+        channel_link,
         channel_entry,
         allow_channel,
         subscribe_button,
@@ -1316,6 +1370,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         video_title,
         video_channel,
         video_meta,
+        video_link,
         video_description,
         video_chapters,
         chapters_button,
