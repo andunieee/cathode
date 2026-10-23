@@ -1,7 +1,9 @@
 //! The suggestions of the home page: the videos YouTube suggests next to the ones in the history,
-//! the oldest first, one request at a time. Each video suggested is worth as many points as the
-//! line of the history that suggested it (1 for the oldest), and the ones suggested again add up.
-//! It lives in `suggestions.json` in the data directory of the app, with how far into the history
+//! the oldest first, one request at a time. Each video suggested is worth 2^(line / HALF_LIFE)
+//! points, `line` being the line of the history that suggested it (1 for the oldest), so a line
+//! always counts the same relative to the ones before it however long the history gets. The ones
+//! suggested again add up. The sums are kept as base 2 logarithms, which can't overflow.
+//! It lives in `scores_v1.json` in the data directory of the app, with how far into the history
 //! the requests have got, so they go on from there on the next start.
 
 use std::cell::RefCell;
@@ -16,7 +18,17 @@ use crate::history;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Suggested {
     entry: Entry,
-    points: u64,
+    /// The base 2 logarithm of the points.
+    score: f64,
+}
+
+/// The lines of the history after which a suggestion is worth half as much.
+const HALF_LIFE: f64 = 50.0;
+
+/// log2(2^a + 2^b), without leaving the logarithms.
+fn log_add(a: f64, b: f64) -> f64 {
+    let (high, low) = if a > b { (a, b) } else { (b, a) };
+    high + (1.0 + (low - high).exp2()).log2()
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -50,7 +62,7 @@ fn path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("cathode")
-        .join("suggestions.json")
+        .join("scores_v1.json")
 }
 
 fn save(file: &File) -> Result<(), String> {
@@ -97,14 +109,19 @@ pub fn finish(index: usize, id: &str, result: Result<Vec<Entry>, String>) -> Res
     let entries = result?;
 
     with(|state| {
+        let score = index as f64 / HALF_LIFE;
         for entry in entries {
-            if !history::is_watched(&entry.id) {
-                state
-                    .file
-                    .videos
-                    .entry(entry.id.clone())
-                    .or_insert_with(|| Suggested { entry, points: 0 })
-                    .points += index as u64;
+            if history::is_watched(&entry.id) {
+                continue;
+            }
+            match state.file.videos.get_mut(&entry.id) {
+                Some(video) => video.score = log_add(video.score, score),
+                None => {
+                    state
+                        .file
+                        .videos
+                        .insert(entry.id.clone(), Suggested { entry, score });
+                }
             }
         }
         // The ones watched since are no use to keep.
@@ -130,8 +147,8 @@ pub fn ranked() -> Vec<Entry> {
             .filter(|video| !history::is_watched(&video.entry.id))
             .collect();
         videos.sort_by(|a, b| {
-            b.points
-                .cmp(&a.points)
+            b.score
+                .total_cmp(&a.score)
                 .then_with(|| a.entry.id.cmp(&b.entry.id))
         });
         videos
