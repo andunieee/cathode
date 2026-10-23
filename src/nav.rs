@@ -390,8 +390,25 @@ fn show_listing(key: String, source: Source) {
 
 // Video page
 
+fn playing_rumble() -> bool {
+    with(|state| state.playing.as_ref().is_some_and(|e| is_rumble(&e.id)))
+}
+
+fn is_rumble(id: &str) -> bool {
+    id.starts_with(crate::fetch::RUMBLE_PREFIX)
+}
+
+/// Rumble has no suggestions to show next to a video.
+fn update_related() {
+    let hidden =
+        profile::restricted() || matches!(current(), Page::Video(entry) if is_rumble(&entry.id));
+    ui::get().related.set_visible(!hidden);
+}
+
 fn show_video(entry: &Entry) {
     let ui = ui::get();
+    ui.related
+        .set_visible(!profile::restricted() && !is_rumble(&entry.id));
     let info = with(|state| state.infos.get(&Page::Video(entry.clone()).key()).cloned());
 
     // Listings can carry a translated title (YouTube's automatic ones), the details have the
@@ -664,7 +681,7 @@ fn apply_mode() {
     ui.title_stack
         .set_visible_child_name(if restricted { "restricted" } else { "search" });
     ui.downloads.set_visible(!restricted);
-    ui.related.set_visible(!restricted);
+    update_related();
     ui.history_button.set_visible(!restricted);
     // The subscriptions would be a way around the restricted mode.
     ui.subs_toggle.set_visible(!restricted);
@@ -1476,6 +1493,7 @@ pub fn play(entry: Entry) {
     let ui = ui::get();
     set_sidebar_toggle(&ui.queue_toggle, true);
     with(|state| state.playing = Some(entry.clone()));
+    caption_options_changed();
     show_player(&entry);
 
     // The chapters come with the details.
@@ -1670,6 +1688,7 @@ fn unload_player() {
         state.awaiting_play = None;
         state.chapter_stop = None;
     });
+    caption_options_changed();
     ui.player_status.set_visible(false);
     ui.player_frame.set_visible(false);
     ui.play_button
@@ -1735,8 +1754,20 @@ pub fn default_language_changed() {
     let ui = ui::get();
     if let Some(button) = ui.caption_modes.get(CaptionMode::Default as usize) {
         button.set_label(Some(&caption_mode_label(CaptionMode::Default)));
-        button.set_visible(settings::language().is_some());
     }
+    caption_options_changed();
+}
+
+/// Rumble videos have no subtitles, so their choices are left out.
+fn caption_options_changed() {
+    let ui = ui::get();
+    let rumble = playing_rumble();
+    for (index, button) in ui.caption_modes.iter().enumerate() {
+        let has_default = index != CaptionMode::Default as usize || settings::language().is_some();
+        button.set_visible(!rumble && has_default);
+    }
+    ui.captions_button
+        .set_visible(!rumble && !ui.caption_tracks.borrow().0.is_empty());
 }
 
 /// Checks the choice for the mode, without acting on it.
@@ -1850,7 +1881,8 @@ fn refresh_captions() {
     }
 
     clear_rows(&ui.captions_list);
-    ui.captions_button.set_visible(!now.0.is_empty());
+    ui.captions_button
+        .set_visible(!now.0.is_empty() && !playing_rumble());
     let selected = now.1;
     let rows = std::iter::once(("Off", selected.is_none())).chain(
         now.0

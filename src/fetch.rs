@@ -17,6 +17,8 @@ use crate::state::CaptionMode;
 
 const SEARCH_MAX_RESULTS: usize = 100;
 const CHANNEL_MAX_RESULTS: usize = 1000;
+/// How much of a Rumble channel is listed, each of its videos taking a request of its own.
+const RUMBLE_MAX_RESULTS: usize = 30;
 /// How much of a long listing is fetched first, to have something to show early.
 const FIRST_PAGE: usize = 30;
 
@@ -702,7 +704,7 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
         } if id.starts_with(RUMBLE_PREFIX) => {
             // Rumble channels can't be searched, what is typed is ignored.
             language = own;
-            (channel_videos_url(&id), CHANNEL_MAX_RESULTS)
+            (channel_videos_url(&id), RUMBLE_MAX_RESULTS)
         }
         Source::Channel {
             id,
@@ -773,7 +775,7 @@ async fn latest(
         }
     };
 
-    if known.is_some() {
+    if known.is_some() || channel_id.starts_with(RUMBLE_PREFIX) {
         return (list(known).await, None);
     }
 
@@ -999,10 +1001,14 @@ fn search_sp(sort: SearchSort, filter: SearchFilter) -> String {
 /// channel pages keep paging forever, so the limit is needed.
 fn listing_command(url: &str, end: usize, language: Vec<String>) -> tokio::process::Command {
     let mut command = crate::settings::yt_dlp();
+    // The entries of a Rumble channel are bare links, the title and the date are only known
+    // once each video has been looked at.
+    if rumble_channel_of_link(url).is_none() {
+        command.arg("--flat-playlist");
+    }
     command
         .args([
             "--no-warnings",
-            "--flat-playlist",
             // Without this the listings have no dates, the extractor works them out from
             // the relative ones YouTube shows ("3 days ago").
             "--extractor-args",
@@ -1063,12 +1069,13 @@ async fn stream_listing(
 ) -> Result<(), String> {
     // The dates come from the relative ones YouTube shows ("3 days ago"), which yt-dlp can only
     // read in English. In another language they are taken from a listing in English.
-    let mut dates = crate::settings::listing_language(language.clone())
+    let mut dates = (crate::settings::listing_language(language.clone())
         .is_some_and(|language| !language.starts_with("en"))
-        .then(|| {
-            let url = url.to_string();
-            tokio::spawn(async move { listing_dates(&url, end).await })
-        });
+        && rumble_channel_of_link(url).is_none())
+    .then(|| {
+        let url = url.to_string();
+        tokio::spawn(async move { listing_dates(&url, end).await })
+    });
     let mut dates_by_id: Option<HashMap<String, i64>> = None;
 
     let mut child = listing_command(url, end, crate::settings::language_args(language))
@@ -1181,10 +1188,12 @@ fn parse_rumble_entry(entry: &Value, id: String, url: String) -> Option<Entry> {
 
 /// Parses one line of `yt-dlp --flat-playlist -j` output.
 fn parse_entry(entry: &Value) -> Option<Entry> {
-    let url = string(entry, "url")?;
-    if let Some((id, _)) = rumble_video_of_link(&url) {
+    let url = string(entry, "url");
+    let page = string(entry, "webpage_url").or_else(|| url.clone())?;
+    if let Some((id, url)) = rumble_video_of_link(&page) {
         return parse_rumble_entry(entry, id, url);
     }
+    let url = url?;
     // Playlists and channels show up in search results too.
     if !url.contains("/watch?v=") && !url.contains("/shorts/") {
         return None;
@@ -1496,7 +1505,7 @@ async fn fetch_captions(
     video: &std::path::Path,
     mode: CaptionMode,
 ) -> (Option<(String, PathBuf)>, bool) {
-    if mode == CaptionMode::Off || entry.url.is_empty() {
+    if mode == CaptionMode::Off || entry.url.is_empty() || entry.id.starts_with(RUMBLE_PREFIX) {
         return (None, false);
     }
 
@@ -1787,5 +1796,37 @@ mod caption_tests {
             Some("en")
         );
         assert_eq!(unknown.track_for(Default, None), None);
+    }
+}
+
+#[cfg(test)]
+mod rumble_tests {
+    use super::*;
+
+    #[test]
+    fn a_fully_extracted_video_is_an_entry() {
+        let entry = parse_entry(&serde_json::json!({
+            "id": "v5abcde",
+            "webpage_url": "https://rumble.com/v5abcde-some-title.html",
+            "title": "Some title",
+            "channel": "Some channel",
+            "channel_url": "https://rumble.com/c/SomeChannel",
+            "duration": 61.0,
+            "timestamp": 1700000000,
+        }))
+        .unwrap();
+        assert_eq!(entry.id, "rumble:v5abcde");
+        assert_eq!(entry.channel_id, "rumble:c/SomeChannel");
+        assert_eq!(entry.published, Some(1700000000));
+        assert_eq!(
+            channel_url(&entry.channel_id),
+            "https://rumble.com/c/SomeChannel"
+        );
+    }
+
+    #[test]
+    fn a_bare_link_is_not() {
+        let bare = serde_json::json!({"url": "https://rumble.com/v5abcde-some-title.html"});
+        assert!(parse_entry(&bare).is_none());
     }
 }
