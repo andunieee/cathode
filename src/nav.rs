@@ -2354,6 +2354,46 @@ fn pump_queue() {
     refresh_queue();
 }
 
+fn queue_status(state: &State, item: &QueueItem) -> String {
+    match &item.state {
+        QueueState::Waiting => "Waiting".to_string(),
+        QueueState::Downloading => match state.progress.get(&item.entry.id) {
+            Some(fraction) => format!("Downloading {:.0}%", fraction * 100.0),
+            None => "Downloading…".to_string(),
+        },
+        QueueState::Ready => "Ready".to_string(),
+        QueueState::Failed(error) => format!("Failed: {error}"),
+    }
+}
+
+/// Updates the subtitle of one row, so that the others aren't rebuilt under the pointer while
+/// hovering or dragging.
+fn refresh_queue_status(id: &str) {
+    let ui = ui::get();
+    let Some(status) = with(|state| {
+        let item = state.queue.iter().find(|item| item.entry.id == id)?;
+        Some(queue_status(state, item))
+    }) else {
+        return;
+    };
+
+    let playing = ui.player.id();
+    let mut child = ui.queue_list.first_child();
+    while let Some(row) = child {
+        if row.widget_name() == id {
+            if let Some(row) = row.downcast_ref::<adw::ActionRow>() {
+                row.set_subtitle(&if playing.as_deref() == Some(id) {
+                    format!("Playing · {status}")
+                } else {
+                    status
+                });
+            }
+            return;
+        }
+        child = row.next_sibling();
+    }
+}
+
 fn refresh_queue() {
     let ui = ui::get();
     while let Some(row) = ui.queue_list.first_child() {
@@ -2366,15 +2406,7 @@ fn refresh_queue() {
             .queue
             .iter()
             .map(|item| {
-                let status = match &item.state {
-                    QueueState::Waiting => "Waiting".to_string(),
-                    QueueState::Downloading => match state.progress.get(&item.entry.id) {
-                        Some(fraction) => format!("Downloading {:.0}%", fraction * 100.0),
-                        None => "Downloading…".to_string(),
-                    },
-                    QueueState::Ready => "Ready".to_string(),
-                    QueueState::Failed(error) => format!("Failed: {error}"),
-                };
+                let status = queue_status(state, item);
                 let ready = matches!(item.state, QueueState::Ready);
                 (item.entry.clone(), status, ready)
             })
@@ -2404,6 +2436,7 @@ fn refresh_queue() {
             .title_lines(2)
             .use_markup(false)
             .activatable(true)
+            .name(&entry.id)
             .build();
         row.connect_activated({
             let entry = entry.clone();
@@ -3459,7 +3492,7 @@ pub fn handle(response: Response) {
             }
 
             if with(|state| state.queue_downloading.as_deref() == Some(&id)) {
-                refresh_queue();
+                refresh_queue_status(&id);
             }
             if with(|state| state.switching.as_deref() == Some(&id)) {
                 let size = wanted_size(&id).unwrap_or(0);
