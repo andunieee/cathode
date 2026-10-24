@@ -290,8 +290,14 @@ jobs:
           done
 
           # The loaders cache lists absolute paths, so it is written on each launch.
-          GDK_PIXBUF_MODULEDIR="$PIXBUF" "$BREW/bin/gdk-pixbuf-query-loaders" "$PIXBUF"/*.so \
-            | sed "s|$PIXBUF|@RES@/lib/gdk-pixbuf-2.0/2.10.0/loaders|" > "$RES_DIR/loaders.cache.in"
+          # It is queried from Homebrew's own loaders: the bundled copies point at
+          # @executable_path/lib, which gdk-pixbuf-query-loaders can't dlopen
+          # (that left the cache empty, without even the SVG loader).
+          BREW_PIXBUF="$BREW/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+          GDK_PIXBUF_MODULEDIR="$BREW_PIXBUF" "$BREW/bin/gdk-pixbuf-query-loaders" "$BREW_PIXBUF"/*.so \
+            | sed "s|$BREW_PIXBUF|@RES@/lib/gdk-pixbuf-2.0/2.10.0/loaders|" > "$RES_DIR/loaders.cache.in"
+          grep -q '@RES@/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.so' "$RES_DIR/loaders.cache.in" \
+            || { echo "the pixbuf loaders cache has no SVG loader"; cat "$RES_DIR/loaders.cache.in"; exit 1; }
 
           # 4. App icon.
           ICONSET="$(mktemp -d)/Cathode.iconset"
@@ -373,22 +379,35 @@ jobs:
 
           cp target/release/cathode.exe bundle/bin/
 
-          # Copy every dependency DLL (recursively via ntldd), skipping the
-          # Windows system ones that are already present on any machine.
-          ntldd -R bundle/bin/cathode.exe | tr -s '[:space:]' '\n' | while read -r tok; do
+          cp /ucrt64/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll bundle/lib/gdk-pixbuf-2.0/2.10.0/loaders/
+
+          # Copy every dependency DLL (recursively via ntldd) of the binary and
+          # of the dlopen()ed pixbuf loaders, skipping the Windows system ones
+          # that are already present on any machine. ntldd prints Windows paths
+          # ("D:\a\_temp\msys64\ucrt64\bin\foo.dll", runner root varies), so the
+          # backslashes are turned into slashes before matching.
+          ntldd -R bundle/bin/cathode.exe bundle/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll \
+            | tr -s '[:space:]' '\n' | tr '\\' '/' | while read -r tok; do
             case "$tok" in
               /ucrt64/*|?:/*)
-                # Direct POSIX path or "D:/msys64/ucrt64/…" (runner root varies).
-                unix="$(cygpath -u "${tok//\\//}")"
-                case "$unix" in *ucrt64/bin/*) cp -n "$unix" bundle/bin/ ;; esac ;;
+                unix="$(cygpath -u "$tok")"
+                case "$unix" in
+                  */ucrt64/bin/*.dll)
+                    [ -e "bundle/bin/$(basename "$unix")" ] || cp "$unix" bundle/bin/ ;;
+                esac ;;
             esac
           done
 
-          # glib schemas (compiled), icon theme, pixbuf loaders + cache.
+          # Fail here rather than ship a bundle that can't start.
+          for dll in libgtk-4-1.dll libadwaita-1-0.dll libcairo-2.dll libcairo-gobject-2.dll \
+            libgdk_pixbuf-2.0-0.dll libglib-2.0-0.dll libmpv-2.dll; do
+            [ -e "bundle/bin/$dll" ] || { echo "missing $dll in the bundle"; exit 1; }
+          done
+
+          # glib schemas (compiled), icon theme, pixbuf loaders cache.
           cp /ucrt64/share/glib-2.0/schemas/*.xz bundle/share/glib-2.0/schemas/ 2>/dev/null || true
           cp -r /ucrt64/share/glib-2.0/schemas/gschemas.compiled bundle/share/glib-2.0/schemas/
           cp -r /ucrt64/share/icons/hicolor bundle/share/icons/
-          cp /ucrt64/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll bundle/lib/gdk-pixbuf-2.0/2.10.0/loaders/
           (cd bundle && gdk-pixbuf-query-loaders lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll \
             > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache)
 
