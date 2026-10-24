@@ -1495,6 +1495,7 @@ pub fn play(entry: Entry) {
     with(|state| state.playing = Some(entry.clone()));
     caption_options_changed();
     show_player(&entry);
+    refresh_queue();
 
     // The chapters come with the details.
     let key = Page::Video(entry.clone()).key();
@@ -1523,6 +1524,9 @@ fn show_player(entry: &Entry) {
     match local_path(&entry.id) {
         Some(path) => start_playback(entry, &path),
         None => {
+            // Black screen rather than the previous video, paused, while this one downloads.
+            remember_position();
+            ui.player.stop();
             with(|state| state.awaiting_play = Some(entry.id.clone()));
             ui.player_status.set_text("Downloading…");
             ui.player_status.set_visible(true);
@@ -2306,7 +2310,7 @@ fn retitle(original: &Entry) -> bool {
 
 fn queue_remove(id: &str) {
     crate::log::info!("removing {id} from the queue");
-    if ui::get().player.id().as_deref() == Some(id) {
+    if playing_id().as_deref() == Some(id) {
         return;
     }
     let cancel = with(|state| {
@@ -2342,7 +2346,7 @@ pub fn clear_queue() {
     }
 
     button.set_label(CLEAR_QUEUE_LABEL);
-    let playing = ui::get().player.id();
+    let playing = playing_id();
     let ids: Vec<String> = with(|state| {
         state
             .queue
@@ -2413,7 +2417,7 @@ fn refresh_queue_status(id: &str) {
         return;
     };
 
-    let playing = ui.player.id();
+    let playing = playing_id();
     let mut child = ui.queue_list.first_child();
     while let Some(row) = child {
         if row.widget_name() == id {
@@ -2430,6 +2434,11 @@ fn refresh_queue_status(id: &str) {
     }
 }
 
+/// The video chosen to play, which may still be downloading, unlike the one loaded in the player.
+fn playing_id() -> Option<String> {
+    with(|state| state.playing.as_ref().map(|entry| entry.id.clone()))
+}
+
 fn refresh_queue() {
     sync_queue_buttons();
     let ui = ui::get();
@@ -2437,16 +2446,12 @@ fn refresh_queue() {
         ui.queue_list.remove(&row);
     }
 
-    let playing = ui.player.id();
-    let items: Vec<(Entry, String, bool)> = with(|state| {
+    let playing = playing_id();
+    let items: Vec<(Entry, String)> = with(|state| {
         state
             .queue
             .iter()
-            .map(|item| {
-                let status = queue_status(state, item);
-                let ready = matches!(item.state, QueueState::Ready);
-                (item.entry.clone(), status, ready)
-            })
+            .map(|item| (item.entry.clone(), queue_status(state, item)))
             .collect()
     });
 
@@ -2460,7 +2465,7 @@ fn refresh_queue() {
         );
     }
 
-    for (entry, status, ready) in items {
+    for (entry, status) in items {
         let is_playing = playing.as_deref() == Some(&entry.id);
 
         let row = adw::ActionRow::builder()
@@ -2485,7 +2490,7 @@ fn refresh_queue() {
             .icon_name("media-playback-start-symbolic")
             .tooltip_text("Play")
             .valign(gtk::Align::Center)
-            .sensitive(ready && !is_playing && video_allowed(&entry))
+            .sensitive(!is_playing && video_allowed(&entry))
             .css_classes(["flat", "circular"])
             .build();
         play.connect_clicked({

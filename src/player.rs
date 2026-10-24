@@ -264,7 +264,7 @@ impl Player {
                     );
                     // The first frame of a file comes after the loading, and nothing redraws
                     // while paused: keep drawing until the video has a position for a while.
-                    if player.mpv.get_property::<f64>("time-pos").is_ok() {
+                    if player.id().is_none() || player.mpv.get_property::<f64>("time-pos").is_ok() {
                         player.settling.set(player.settling.get().saturating_sub(1));
                     }
                 }
@@ -324,6 +324,9 @@ impl Player {
         self.skips.borrow_mut().clear();
         self.cancel_skip();
         let _ = self.mpv.command("stop", &[]);
+        // mpv unloads the file after this returns, and nothing redraws while paused: keep drawing
+        // until the last frame is gone.
+        self.settling.set(10);
         self.area.queue_render();
     }
 
