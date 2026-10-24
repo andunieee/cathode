@@ -15,6 +15,7 @@ type GetProcAddress = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
 
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+const GL_VIEWPORT: u32 = 0x0BA2;
 
 /// Looks up OpenGL functions through whichever of EGL, GLX (Linux), WGL
 /// (Windows) or the OpenGL framework (macOS) the GTK renderer is using. Values that the proc-address entry
@@ -242,13 +243,23 @@ impl Player {
                 let mut fbo = 0;
                 unsafe { get_integerv(GL_FRAMEBUFFER_BINDING, &mut fbo) };
 
+                // GTK sets the viewport to the size of its framebuffer, which is not always the widget
+                // size times the integer scale factor (fractional scaling, other GL stacks): mpv
+                // would lay the video and the controls out for the wrong size.
                 let scale = area.scale_factor();
+                let mut viewport = [0; 4];
+                unsafe { get_integerv(GL_VIEWPORT, viewport.as_mut_ptr()) };
+                let (width, height) = if viewport[2] > 0 && viewport[3] > 0 {
+                    (viewport[2], viewport[3])
+                } else {
+                    (area.width() * scale, area.height() * scale)
+                };
                 if let Some(render) = player.render.borrow().as_ref() {
                     let _ = render.update();
                     let _ = render.render::<*mut c_void>(
                         fbo,
-                        area.width() * scale,
-                        area.height() * scale,
+                        width,
+                        height,
                         true,
                     );
                     // The first frame of a file comes after the loading, and nothing redraws

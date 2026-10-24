@@ -2076,25 +2076,9 @@ fn show_fullscreen(fullscreen: bool) {
         split.set_sidebar_width_fraction(fraction);
     }
 
-    // The player takes the shape of the screen rather than a video's.
-    let screen = ui
-        .window
-        .surface()
-        .and_then(|surface| surface.display().monitor_at_surface(&surface))
-        .map(|monitor| monitor.geometry())
-        .filter(|geometry| geometry.height() > 0);
-    ui.player_frame.set_ratio(match screen {
-        Some(geometry) if fullscreen => geometry.width() as f32 / geometry.height() as f32,
-        _ => 16.0 / 9.0,
-    });
-
     // Sit under the queue normally, take the whole sidebar once the queue is hidden.
     ui.player_frame.set_vexpand(fullscreen);
-    ui.player_frame.set_valign(if fullscreen {
-        gtk::Align::Fill
-    } else {
-        gtk::Align::End
-    });
+    ui.player_frame.set_valign(gtk::Align::Fill);
 
     if let Some(content) = split.content() {
         content.set_visible(!fullscreen);

@@ -115,7 +115,7 @@ pub struct Ui {
     pub queue_header: adw::HeaderBar,
     pub queue_scroll: gtk::ScrolledWindow,
     /// Keeps the player in proportion, in the queue sidebar.
-    pub player_frame: gtk::AspectFrame,
+    pub player_frame: gtk::Box,
     pub player: Rc<Player>,
     pub player_status: gtk::Label,
     /// A quick message at the top of the video, like the volume after changing it.
@@ -1197,11 +1197,29 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     overlay.add_overlay(&player_status);
     overlay.add_overlay(&player_message);
     overlay.add_overlay(&player_controls);
-    let player_frame = gtk::AspectFrame::new(0.5, 0.5, 16.0 / 9.0, false);
-    player_frame.set_child(Some(&overlay));
+    // Not a `gtk::AspectFrame`: that one lays its child out at the wrong place in GTK 4.20.
+    let player_frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    player_frame.append(&overlay);
+    player_frame.add_tick_callback({
+        let overlay = overlay.clone();
+        move |frame, _clock| {
+            // In fullscreen the player fills the sidebar, otherwise it is kept 16:9.
+            let height = if frame.vexpands() {
+                -1
+            } else {
+                (frame.width() as f32 * 9.0 / 16.0).round() as i32
+            };
+            if overlay.height_request() != height {
+                overlay.set_height_request(height);
+            }
+            overlay.set_vexpand(frame.vexpands());
+            glib::ControlFlow::Continue
+        }
+    });
     // The player's expand flags would otherwise share the sidebar's height with the queue.
     player_frame.set_vexpand(false);
-    player_frame.set_valign(gtk::Align::End);
+    player_frame.set_hexpand(true);
+    player_frame.set_valign(gtk::Align::Fill);
     // Nothing to show until something plays.
     player_frame.set_visible(false);
 
