@@ -47,9 +47,7 @@ pub enum Item {
 }
 
 fn path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::config()
         .join("restricted")
         .join("default.json")
 }

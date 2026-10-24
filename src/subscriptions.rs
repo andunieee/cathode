@@ -46,9 +46,7 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
 }
 
 fn path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::config()
         .join("subscriptions.json")
 }
 

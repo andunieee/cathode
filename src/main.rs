@@ -10,9 +10,11 @@ mod extension;
 mod fetch;
 mod format;
 mod history;
+mod instance;
 mod library;
 mod log;
 mod nav;
+mod paths;
 mod player;
 mod preferences;
 mod profile;
@@ -84,8 +86,61 @@ fn point_pixbuf_at_bundle() {
     }
 }
 
+/// What the command line asks for.
+struct Arguments {
+    profile: Option<String>,
+    foreground: bool,
+    /// Links and absolute file paths to open.
+    targets: Vec<String>,
+}
+
+fn is_link(target: &str) -> bool {
+    target.starts_with("cathode:") || target.contains("://")
+}
+
+fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
+    let mut parsed = Arguments {
+        profile: None,
+        foreground: false,
+        targets: Vec::new(),
+    };
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--foreground" => parsed.foreground = true,
+            "--profile" => {
+                parsed.profile = Some(args.next().cloned().ok_or("--profile needs a name")?)
+            }
+            _ if arg.starts_with("--profile=") => {
+                parsed.profile = Some(arg["--profile=".len()..].to_string())
+            }
+            _ if arg.starts_with("--") => return Err(format!("unknown option {arg}")),
+            // Paths are made absolute here, the running instance has another working directory.
+            _ if is_link(arg) => parsed.targets.push(arg.clone()),
+            _ => parsed.targets.push(
+                std::fs::canonicalize(arg)
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| arg.clone()),
+            ),
+        }
+    }
+    Ok(parsed)
+}
+
+/// Opens links from the browser, `cathode://` or plain YouTube ones, and files to play.
+fn open_targets(targets: &[String]) {
+    for target in targets {
+        log::info!("asked to open {target}");
+        if is_link(target) {
+            nav::open_link(target);
+        } else {
+            nav::open_file(target.into());
+        }
+    }
+    ui::get().window.present();
+}
+
 fn main() -> glib::ExitCode {
-    // Cathode detaches from the terminal unless --foreground is given.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--install-desktop-entry") {
         #[cfg(target_os = "linux")]
@@ -100,53 +155,71 @@ fn main() -> glib::ExitCode {
         }
         return glib::ExitCode::SUCCESS;
     }
+    let arguments = match parse_arguments(&args[1..]) {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            eprintln!("{error}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = paths::set_profile(arguments.profile.clone()) {
+        eprintln!("{error}");
+        return glib::ExitCode::FAILURE;
+    }
     #[cfg(windows)]
     point_pixbuf_at_bundle();
-    let foreground = args.iter().any(|a| a == "--foreground");
-    if !foreground && detach() {
-        return glib::ExitCode::SUCCESS;
+
+    // Cathode detaches from the terminal unless --foreground is given. If one is running
+    // already, it is told what to open and this one is done.
+    if !arguments.foreground {
+        if instance::send(&arguments.targets) || detach() {
+            return glib::ExitCode::SUCCESS;
+        }
     }
     log::init();
     log::info!("arguments: {:?}", &args[1..]);
 
-    // A second launch hands its files and links to the running one.
+    // Only one Cathode per profile. This also catches two launching at the same moment.
+    let primary = match instance::acquire() {
+        Ok(instance::Role::Primary(primary)) => primary,
+        Ok(instance::Role::Secondary) => {
+            return if instance::send_waiting(&arguments.targets) {
+                glib::ExitCode::SUCCESS
+            } else {
+                eprintln!("Cathode is already running but does not answer");
+                glib::ExitCode::FAILURE
+            };
+        }
+        Err(error) => {
+            eprintln!("Could not check for a running Cathode: {error}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
+
+    // The instance check above is ours; GApplication's would only get in the way.
     let app = adw::Application::builder()
         .application_id("io.github.andunieee.Cathode")
-        .flags(gio::ApplicationFlags::HANDLES_OPEN)
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
     app.connect_startup(|_| load_css());
 
     let started = Rc::new(Cell::new(false));
+    let primary = Cell::new(Some(primary));
+    let targets = arguments.targets;
 
-    app.connect_activate({
-        let started = started.clone();
-        move |app| {
-            start(app, &started);
-            ui::get().window.present();
-        }
-    });
-
-    app.connect_open(move |app, files, _| {
+    app.connect_activate(move |app| {
         start(app, &started);
-        for file in files {
-            log::info!("asked to open {}", file.uri());
-            // Links from the browser, `cathode://` or plain YouTube ones, or files to play.
-            match file.path() {
-                Some(path) if file.is_native() => nav::open_file(path),
-                _ => nav::open_link(&file.uri()),
-            }
+        open_targets(&targets);
+        if let Some(primary) = primary.take() {
+            primary.listen(|targets| {
+                glib::MainContext::default().invoke(move || open_targets(&targets));
+            });
         }
-        ui::get().window.present();
     });
 
-    // Only ours are passed on, GTK doesn't get to see the rest.
-    let args: Vec<&str> = args
-        .iter()
-        .map(String::as_str)
-        .filter(|a| *a != "--foreground")
-        .collect();
-    app.run_with_args(&args)
+    // GTK doesn't get to see our options.
+    app.run_with_args(&args[..1])
 }
 
 /// Clickable widgets get a pointer cursor, the way they do on the web.

@@ -26,9 +26,7 @@ pub struct Watched {
 }
 
 fn path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::data()
         .join("history.jsonl")
 }
 

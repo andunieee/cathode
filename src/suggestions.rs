@@ -75,9 +75,7 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
 }
 
 fn path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::data()
         .join("scores_v1.json")
 }
 

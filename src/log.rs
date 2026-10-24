@@ -11,9 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static FILE: Mutex<Option<File>> = Mutex::new(None);
 
 pub fn path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::data()
         .join("cathode.log")
 }
 

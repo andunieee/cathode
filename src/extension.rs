@@ -10,9 +10,7 @@ const FILES: [(&str, &str); 3] = [
 ];
 
 pub fn directory() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::data()
         .join("extension")
 }
 

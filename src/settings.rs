@@ -63,9 +63,7 @@ impl Default for Settings {
 static SETTINGS: RwLock<Option<Settings>> = RwLock::new(None);
 
 fn path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::config()
         .join("settings.json")
 }
 

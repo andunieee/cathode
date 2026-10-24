@@ -60,17 +60,13 @@ fn with<R>(f: impl FnOnce(&mut Vec<Collection>) -> R) -> R {
 }
 
 fn directory() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode")
+    crate::paths::config()
         .join("collections")
 }
 
 /// Where the videos saved to a collection without a directory of its own go.
 pub fn default_directory(name: &str) -> PathBuf {
-    let base = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("cathode");
+    let base = crate::paths::data();
     if name == DEFAULT_NAME {
         base.join("saved")
     } else {

@@ -36,6 +36,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Cathode handles `cathode://play/?url=<YouTube link>` links, and opens a running window instead of a new one
 - `packaging/cathode.user.js` is a userscript (Tampermonkey, Violentmonkey) that sends the page you are on to Cathode with `Alt+C`
 - Or a Chrome extension that does the same, plus a right-click menu on YouTube links: Settings → Browser → Set up writes it to a folder and opens it, then load it from `chrome://extensions` (Developer mode → Load unpacked)
+- Only one Cathode runs at a time: opening a link while it is running hands it to the open window
 - Or from a terminal: `cathode https://youtu.be/dQw4w9WgXcQ`
 
 ## Channels
@@ -65,6 +66,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ![Restricted mode on](assets/restricted.jpg)
 
 ## And also
+- `cathode --profile NAME` runs a separate Cathode with its own settings, history, downloads and cache, which can be open alongside the default one
 - Back and forward navigation, with Alt+Left/Right and the mouse buttons
 - Watch history
 - Settings for download quality, sponsor segment skipping, speed limit, proxy and browser cookies for age-restricted videos
