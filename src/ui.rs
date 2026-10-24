@@ -344,6 +344,27 @@ impl Card {
             }
         });
 
+        nav::track_queue_button(&queue, true, {
+            let entry = entry.clone();
+            move || entry.borrow().as_ref().map(|entry| entry.id.clone())
+        });
+
+        let play = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .icon_name("media-playback-start-symbolic")
+            .tooltip_text("Play")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        play.connect_clicked({
+            let entry = entry.clone();
+            move |_| {
+                if let Some(entry) = entry.borrow().clone() {
+                    nav::play_now(entry);
+                }
+            }
+        });
+
         let dismiss = gtk::Button::builder()
             .cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
@@ -368,6 +389,7 @@ impl Card {
         root.set_margin_end(12);
         root.append(&picture);
         root.append(&text);
+        root.append(&play);
         root.append(&queue);
         root.append(&dismiss);
 
@@ -402,6 +424,7 @@ impl Card {
         }
         self.picture.set_opacity(if watched { 0.5 } else { 1.0 });
         *self.entry.borrow_mut() = Some(entry.clone());
+        nav::sync_queue_buttons();
 
         // The pictures are recycled, the name tells which video a late thumbnail is for.
         self.picture.set_widget_name(&entry.id);

@@ -2177,6 +2177,58 @@ pub fn queue_current() {
     }
 }
 
+/// Plays a video right away, from a listing: it joins the queue, as with the Play button of its page.
+pub fn play_now(entry: Entry) {
+    if video_allowed(&entry) {
+        enqueue(entry.clone());
+    }
+    play(entry);
+}
+
+thread_local! {
+    /// The "add to queue" buttons of the listings, which are disabled for the videos in the queue.
+    static QUEUE_BUTTONS: RefCell<Vec<QueueButton>> = const { RefCell::new(Vec::new()) };
+}
+
+struct QueueButton {
+    button: glib::WeakRef<gtk::Button>,
+    /// Whether the button would be enabled if the video wasn't in the queue.
+    usable: bool,
+    /// The id of the video the button is for now, listings recycle their rows.
+    id: Box<dyn Fn() -> Option<String>>,
+}
+
+/// Keeps `button` disabled while the video it is for is in the queue.
+pub fn track_queue_button(
+    button: &gtk::Button,
+    usable: bool,
+    id: impl Fn() -> Option<String> + 'static,
+) {
+    QUEUE_BUTTONS.with(|buttons| {
+        buttons.borrow_mut().push(QueueButton {
+            button: button.downgrade(),
+            usable,
+            id: Box::new(id),
+        })
+    });
+    sync_queue_buttons();
+}
+
+pub fn sync_queue_buttons() {
+    let queued: Vec<String> =
+        with(|state| state.queue.iter().map(|item| item.entry.id.clone()).collect());
+    QUEUE_BUTTONS.with(|buttons| {
+        buttons.borrow_mut().retain(|tracked| {
+            let Some(button) = tracked.button.upgrade() else {
+                return false;
+            };
+            let queued = (tracked.id)().is_some_and(|id| queued.contains(&id));
+            button.set_sensitive(tracked.usable && !queued);
+            true
+        })
+    });
+}
+
 pub fn queue_add(entry: Entry) {
     if !video_allowed(&entry) {
         toast("This video is not available in the restricted mode");
@@ -2379,6 +2431,7 @@ fn refresh_queue_status(id: &str) {
 }
 
 fn refresh_queue() {
+    sync_queue_buttons();
     let ui = ui::get();
     while let Some(row) = ui.queue_list.first_child() {
         ui.queue_list.remove(&row);
@@ -2900,6 +2953,18 @@ fn history_more() {
             .cursor(&crate::ui::pointer())
             .build();
         row.add_prefix(&picture);
+        let play = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .icon_name("media-playback-start-symbolic")
+            .tooltip_text("Play")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        play.connect_clicked({
+            let entry = entry.clone();
+            move |_| play_now(entry.clone())
+        });
+        row.add_suffix(&play);
         row.connect_activated(move |_| open_video(entry.clone()));
         list.append(&row);
     }
@@ -3011,6 +3076,23 @@ fn show_cache() {
         });
         // Only the usual size can be queued or saved, those go by the id of the video.
         queue.set_visible(!variant);
+        track_queue_button(&queue, true, {
+            let id = entry.id.clone();
+            move || Some(id.clone())
+        });
+        let play = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .icon_name("media-playback-start-symbolic")
+            .tooltip_text("Play")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .visible(!variant)
+            .build();
+        play.connect_clicked({
+            let entry = entry.clone();
+            move |_| play_now(entry.clone())
+        });
+        row.add_suffix(&play);
         row.add_suffix(&queue);
 
         let save = gtk::Button::builder()

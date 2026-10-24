@@ -397,7 +397,16 @@ fn video_row(collection: &Collection, video: &SavedVideo) -> adw::ActionRow {
         let entry = entry.clone();
         move || nav::queue_add(entry.clone())
     });
-    queue.set_sensitive(present);
+    nav::track_queue_button(&queue, present, {
+        let id = entry.id.clone();
+        move || Some(id.clone())
+    });
+    let play = remove_button("Play", "media-playback-start-symbolic", {
+        let entry = entry.clone();
+        move || nav::play_now(entry.clone())
+    });
+    play.set_sensitive(present);
+    row.add_suffix(&play);
     row.add_suffix(&queue);
 
     // The restricted mode only watches.
