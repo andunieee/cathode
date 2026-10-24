@@ -2450,7 +2450,7 @@ fn refresh_queue() {
             .icon_name("window-close-symbolic")
             .tooltip_text("Remove from the queue")
             .valign(gtk::Align::Center)
-            .sensitive(!is_playing)
+            .visible(!is_playing)
             .css_classes(["flat", "circular"])
             .build();
         remove.connect_clicked({
