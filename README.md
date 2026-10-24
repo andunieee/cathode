@@ -35,6 +35,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ## Links from the browser
 - Cathode handles `cathode://play/?url=<YouTube link>` links, and opens a running window instead of a new one
 - `packaging/cathode.user.js` is a userscript (Tampermonkey, Violentmonkey) that sends the page you are on to Cathode with `Alt+C`
+- Or a Chrome extension that does the same, plus a right-click menu on YouTube links: Settings → Browser → Set up writes it to a folder and opens it, then load it from `chrome://extensions` (Developer mode → Load unpacked)
 - Or from a terminal: `cathode https://youtu.be/dQw4w9WgXcQ`
 
 ## Channels

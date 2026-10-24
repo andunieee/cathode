@@ -4,6 +4,7 @@
 mod cache;
 mod collections;
 mod controls;
+mod extension;
 mod fetch;
 mod format;
 mod history;

@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 
 use adw::prelude::*;
 
+use crate::extension;
 use crate::fetch::Request;
 use crate::nav;
 use crate::settings::{self, BROWSERS, QUALITIES};
@@ -192,10 +193,39 @@ fn general() -> adw::PreferencesPage {
     network.add(&cookies);
     network.add(&proxy);
 
+    let browser_button = gtk::Button::builder()
+        .label("Set up")
+        .valign(gtk::Align::Center)
+        .build();
+    browser_button.connect_clicked(|button| match extension::install() {
+        Ok(dir) => {
+            let uri = gtk::gio::File::for_path(&dir).uri();
+            if let Err(error) =
+                gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>)
+            {
+                nav::toast(&format!("Could not open {}: {error}", dir.display()));
+                return;
+            }
+            button.clipboard().set_text("chrome://extensions");
+            nav::toast(
+                "Paste chrome://extensions in Chrome, turn on Developer mode, click Load unpacked and pick the folder",
+            );
+        }
+        Err(error) => nav::toast(&format!("Could not write the extension: {error}")),
+    });
+    let browser_row = adw::ActionRow::builder()
+        .title("Chrome extension")
+        .subtitle("Alt+C, the toolbar button or the right-click menu on YouTube opens the page in Cathode")
+        .build();
+    browser_row.add_suffix(&browser_button);
+    let browser = adw::PreferencesGroup::builder().title("Browser").build();
+    browser.add(&browser_row);
+
     let page = adw::PreferencesPage::new();
     page.add(&languages);
     page.add(&downloads);
     page.add(&network);
+    page.add(&browser);
     page
 }
 
