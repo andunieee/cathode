@@ -4,6 +4,8 @@
 mod cache;
 mod collections;
 mod controls;
+#[cfg(target_os = "linux")]
+mod desktop;
 mod extension;
 mod fetch;
 mod format;
@@ -68,9 +70,38 @@ fn start(app: &adw::Application, started: &Cell<bool>) {
     ui.window.present();
 }
 
+/// The bundle keeps the image loaders next to the executable; `cathode.bat` used to say so.
+#[cfg(windows)]
+fn point_pixbuf_at_bundle() {
+    if std::env::var_os("GDK_PIXBUF_MODULE_FILE").is_some() {
+        return;
+    }
+    if let Some(root) = std::env::current_exe().ok().and_then(|exe| exe.parent()?.parent().map(|p| p.to_path_buf())) {
+        let cache = root.join("lib/gdk-pixbuf-2.0/2.10.0/loaders.cache");
+        if cache.exists() {
+            std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache);
+        }
+    }
+}
+
 fn main() -> glib::ExitCode {
     // Cathode detaches from the terminal unless --foreground is given.
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--install-desktop-entry") {
+        #[cfg(target_os = "linux")]
+        if let Err(error) = desktop::install() {
+            eprintln!("Could not install the desktop entry: {error}");
+            return glib::ExitCode::FAILURE;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("--install-desktop-entry only works on Linux");
+            return glib::ExitCode::FAILURE;
+        }
+        return glib::ExitCode::SUCCESS;
+    }
+    #[cfg(windows)]
+    point_pixbuf_at_bundle();
     let foreground = args.iter().any(|a| a == "--foreground");
     if !foreground && detach() {
         return glib::ExitCode::SUCCESS;

@@ -396,6 +396,11 @@ jobs:
           printf '@echo off\r\nset GDK_PIXBUF_MODULE_FILE=%%~dp0lib\\gdk-pixbuf-2.0\\2.10.0\\loaders.cache\r\nstart "" "%%~dp0bin\\cathode.exe" %%*\r\n' > bundle/cathode.bat
 
           mkdir -p dist
+          # The installer: Start menu entry, uninstaller and the cathode:// handler.
+          # Inno Setup comes with the runner image.
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            "/DVersion=${VERSION}" "/DBundle=$(cygpath -w "$PWD/bundle")" "/DOutput=$(cygpath -w "$PWD/dist")" \
+            "$(cygpath -w "$PWD/packaging/windows/cathode.iss")"
           powershell -NoProfile -Command "Compress-Archive -Force -Path bundle/* -DestinationPath 'dist/cathode-windows-x64-v${VERSION}.zip'"
 
       - uses: actions/upload-artifact@v4
@@ -424,7 +429,7 @@ jobs:
 
           - **linux**: `.flatpak` (`flatpak install cathode-*.flatpak`), `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, needs [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise, and glibc 2.41+), or `.tar.gz` (requires system GTK4 4.10+/libadwaita 1.7+/libmpv).
           - **macos**: Apple Silicon (arm64) only, unsigned — first launch: right-click > Open, or `xattr -d com.apple.quarantine cathode.app`.
-          - **windows**: extract, run `cathode.bat`.
+          - **windows**: run the `-setup-` installer, or extract the `.zip` and run `cathode.bat`.
           yt-dlp is managed by the app at runtime, not bundled.
           EOF
           gh release create "$TAG" --verify-tag --generate-notes --notes-file "$NOTES"

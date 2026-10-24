@@ -85,8 +85,12 @@ curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/late
 
 **Windows** (PowerShell), unzips to `%LOCALAPPDATA%\Cathode`, launch `cathode.bat`:
 ```
-$u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64'; iwr $u -OutFile $env:TEMP\cathode.zip; Expand-Archive -Force $env:TEMP\cathode.zip $env:LOCALAPPDATA\Cathode
+$u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-v'; iwr $u -OutFile $env:TEMP\cathode.zip; Expand-Archive -Force $env:TEMP\cathode.zip $env:LOCALAPPDATA\Cathode
 ```
+
+**Windows installer**: `cathode-windows-x64-setup-v*.exe` from the releases page adds a Start menu entry and an uninstaller, and registers the `cathode://` links.
+
+**Linux, outside a package** (tarball, AppImage): `cathode --install-desktop-entry` adds Cathode to the application menu and registers `cathode://` links for your user.
 
 ## Releases
 Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
