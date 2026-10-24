@@ -389,7 +389,7 @@ jobs:
           cp -r /ucrt64/share/glib-2.0/schemas/gschemas.compiled bundle/share/glib-2.0/schemas/
           cp -r /ucrt64/share/icons/hicolor bundle/share/icons/
           cp /ucrt64/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll bundle/lib/gdk-pixbuf-2.0/2.10.0/loaders/
-          (cd bundle && gdk-pixbuf-query-loaders "lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll" \
+          (cd bundle && gdk-pixbuf-query-loaders lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll \
             > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache)
 
           # CRLF batch wrapper (Finder-style entry point, LF breaks cmd.exe).
@@ -398,7 +398,8 @@ jobs:
           mkdir -p dist
           # The installer: Start menu entry, uninstaller and the cathode:// handler.
           # Inno Setup comes with the runner image.
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+          # MSYS would rewrite the /D switches as POSIX paths, so skip its argument conversion.
+          MSYS2_ARG_CONV_EXCL='*' "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
             "/DVersion=${VERSION}" "/DBundle=$(cygpath -w "$PWD/bundle")" "/DOutput=$(cygpath -w "$PWD/dist")" \
             "$(cygpath -w "$PWD/packaging/windows/cathode.iss")"
           powershell -NoProfile -Command "Compress-Archive -Force -Path bundle/* -DestinationPath 'dist/cathode-windows-x64-v${VERSION}.zip'"

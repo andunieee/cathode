@@ -2132,6 +2132,9 @@ pub fn tick() {
         format::duration(position),
         format::duration(duration)
     ));
+    if let Some(id) = ui.player.id() {
+        refresh_queue_status(&id);
+    }
     // Don't fight the user dragging the slider.
     if duration > 0.0 && !ui.seek.state_flags().contains(gtk::StateFlags::ACTIVE) {
         ui.seek.set_value(position / duration);
@@ -2395,14 +2398,33 @@ fn pump_queue() {
 }
 
 fn queue_status(state: &State, item: &QueueItem) -> String {
-    match &item.state {
+    let status = match &item.state {
         QueueState::Waiting => "Waiting".to_string(),
         QueueState::Downloading => match state.progress.get(&item.entry.id) {
             Some(fraction) => format!("Downloading {:.0}%", fraction * 100.0),
             None => "Downloading…".to_string(),
         },
         QueueState::Ready => "Ready".to_string(),
-        QueueState::Failed(error) => format!("Failed: {error}"),
+        QueueState::Failed(error) => return format!("Failed: {error}"),
+    };
+
+    // Where the video is left off, out of how long it is.
+    let player = &ui::get().player;
+    let (position, duration) = if player.id().as_deref() == Some(&item.entry.id) {
+        (player.position(), Some(player.duration()).filter(|d| *d > 0.0))
+    } else {
+        (
+            state.positions.get(&item.entry.id).copied().unwrap_or(0.0),
+            None,
+        )
+    };
+    match duration.or(item.entry.duration) {
+        Some(duration) => format!(
+            "{status} · {} / {}",
+            format::duration(position),
+            format::duration(duration)
+        ),
+        None => status,
     }
 }
 
@@ -2422,11 +2444,15 @@ fn refresh_queue_status(id: &str) {
     while let Some(row) = child {
         if row.widget_name() == id {
             if let Some(row) = row.downcast_ref::<adw::ActionRow>() {
-                row.set_subtitle(&if playing.as_deref() == Some(id) {
+                let subtitle = if playing.as_deref() == Some(id) {
                     format!("Playing · {status}")
                 } else {
                     status
-                });
+                };
+                // The clock calls this all the time, most of them change nothing.
+                if row.subtitle().as_deref() != Some(subtitle.as_str()) {
+                    row.set_subtitle(&subtitle);
+                }
             }
             return;
         }
