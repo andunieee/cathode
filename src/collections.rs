@@ -16,8 +16,6 @@ use crate::fetch::Entry;
 /// What the default place to save to is called.
 pub const DEFAULT_NAME: &str = "Saved";
 const VIDEO_EXTENSIONS: [&str; 6] = ["mp4", "mkv", "webm", "mov", "m4v", "avi"];
-/// How deep an imported folder is searched.
-const IMPORT_DEPTH: usize = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedVideo {
@@ -201,7 +199,7 @@ pub fn create(name: &str, directory: Option<PathBuf>) -> Result<String, String> 
 /// how many videos it found.
 pub fn import_folder(folder: &Path) -> Result<(String, usize), String> {
     let mut paths = Vec::new();
-    find_videos(folder, IMPORT_DEPTH, &mut paths);
+    find_videos(folder, &mut paths);
     paths.sort();
     if paths.is_empty() {
         return Err("There are no videos in that folder".to_string());
@@ -234,7 +232,8 @@ pub fn import_folder(folder: &Path) -> Result<(String, usize), String> {
     Ok((name, count))
 }
 
-fn find_videos(folder: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+/// Only looks at the folder itself, not at the folders inside it.
+fn find_videos(folder: &Path, found: &mut Vec<PathBuf>) {
     let Ok(read_dir) = std::fs::read_dir(folder) else {
         return;
     };
@@ -247,11 +246,8 @@ fn find_videos(folder: &Path, depth: usize, found: &mut Vec<PathBuf>) {
             continue;
         }
 
-        if path.is_dir() {
-            if depth > 0 {
-                find_videos(&path, depth - 1, found);
-            }
-        } else if path.to_str().is_some()
+        if path.is_file()
+            && path.to_str().is_some()
             && path
                 .extension()
                 .and_then(|ext| ext.to_str())
@@ -489,7 +485,7 @@ mod tests {
         std::fs::write(folder.join("one.mkv"), b"1").unwrap();
         std::fs::write(folder.join("sub/two.MP4"), b"2").unwrap();
         std::fs::write(folder.join("notes.txt"), b"3").unwrap();
-        assert_eq!(import_folder(&folder).unwrap(), ("movies".to_string(), 2));
+        assert_eq!(import_folder(&folder).unwrap(), ("movies".to_string(), 1));
         let imported = get("movies").unwrap();
         assert!(!imported.saves() && imported.videos[0].entry.title == "one");
         assert!(save("movies", &entry, &saved, true).is_err());
