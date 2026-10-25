@@ -117,6 +117,10 @@ struct State {
     /// Small thumbnails for lists, and large ones for video pages.
     thumbnails: [HashMap<String, gdk::Texture>; 2],
     thumbnails_requested: HashSet<(String, bool)>,
+    /// The pictures of channels, by channel id, and the avatars waiting for theirs.
+    avatars: HashMap<String, gdk::Texture>,
+    avatars_requested: HashSet<String>,
+    waiting_avatars: HashMap<String, Vec<glib::WeakRef<adw::Avatar>>>,
     waiting_pictures: HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>,
 
     queue: Vec<QueueItem>,
@@ -180,6 +184,9 @@ thread_local! {
         info_lookups: HashSet::new(),
         thumbnails: [HashMap::new(), HashMap::new()],
         thumbnails_requested: HashSet::new(),
+        avatars: HashMap::new(),
+        avatars_requested: HashSet::new(),
+        waiting_avatars: HashMap::new(),
         waiting_pictures: HashMap::new(),
         queue: Vec::new(),
         queue_downloading: None,
@@ -287,6 +294,32 @@ pub fn thumbnail(id: &str, large: bool, picture: Option<&gtk::Picture>) -> Optio
         });
     }
     texture
+}
+
+/// Gives the avatar the picture of the channel, now if we have it or when it arrives.
+pub fn channel_avatar(id: &str, avatar: &adw::Avatar) {
+    avatar.set_widget_name(id);
+    avatar.set_custom_image(gdk::Paintable::NONE);
+    if id.is_empty() {
+        return;
+    }
+    let (texture, request) = with(|state| {
+        if let Some(texture) = state.avatars.get(id) {
+            return (Some(texture.clone()), false);
+        }
+        state
+            .waiting_avatars
+            .entry(id.to_string())
+            .or_default()
+            .push(avatar.downgrade());
+        (None, state.avatars_requested.insert(id.to_string()))
+    });
+    if let Some(texture) = texture {
+        avatar.set_custom_image(Some(&texture));
+    }
+    if request {
+        send(Request::Avatar { id: id.to_string() });
+    }
 }
 
 // Results
@@ -901,6 +934,9 @@ fn show() {
         Page::Channel { id, name, query } => {
             ui.channel_header.set_visible(true);
             ui.channel_title.set_text(&name);
+            ui.channel_avatar.set_text(Some(&name));
+            ui.channel_avatar.set_visible(true);
+            channel_avatar(&id, &ui.channel_avatar);
             ui.channel_entry.set_text(&query);
             ui.channel_entry.set_visible(true);
             ui.channel_link.set(Some(&crate::fetch::channel_url(&id)));
@@ -931,6 +967,7 @@ fn show() {
             ui.channel_header.set_visible(true);
             ui.channel_title
                 .set_text(&format!("Suggested after {}", entry.title));
+            ui.channel_avatar.set_visible(false);
             ui.channel_entry.set_visible(false);
             ui.channel_link.set(None);
 
@@ -2767,6 +2804,9 @@ fn refresh_subscriptions() {
             .activatable(true)
             .cursor(&crate::ui::pointer())
             .build();
+        let avatar = adw::Avatar::new(32, Some(&subscription.name), true);
+        channel_avatar(&subscription.id, &avatar);
+        row.add_prefix(&avatar);
         row.connect_activated({
             let subscription = subscription.clone();
             move |_| open_channel(&subscription.id, &subscription.name)
@@ -3662,6 +3702,27 @@ pub fn handle(response: Response) {
                 let have_large = with(|state| state.thumbnails[1].contains_key(&id));
                 if entry.id == id && (large || !have_large) {
                     ui.video_picture.set_paintable(Some(&texture));
+                }
+            }
+        }
+        Response::Avatar { id, image } => {
+            let bytes = glib::Bytes::from_owned(image.rgba);
+            let texture: gdk::Texture = gdk::MemoryTexture::new(
+                image.width as i32,
+                image.height as i32,
+                gdk::MemoryFormat::R8g8b8a8,
+                &bytes,
+                image.width as usize * 4,
+            )
+            .upcast();
+            let avatars = with(|state| {
+                state.avatars.insert(id.clone(), texture.clone());
+                state.waiting_avatars.remove(&id).unwrap_or_default()
+            });
+            for avatar in avatars.iter().filter_map(|avatar| avatar.upgrade()) {
+                // The avatar may have been given to another channel since.
+                if avatar.widget_name() == id {
+                    avatar.set_custom_image(Some(&texture));
                 }
             }
         }

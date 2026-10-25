@@ -53,6 +53,7 @@ pub struct Ui {
     // Search and channel pages show their results the same way.
     pub channel_header: gtk::Box,
     pub channel_title: gtk::Label,
+    pub channel_avatar: adw::Avatar,
     /// The YouTube link of the channel or playlist shown, and its row.
     pub channel_link: LinkRow,
     pub channel_entry: gtk::SearchEntry,
@@ -789,6 +790,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     channel_header.set_margin_bottom(6);
     channel_header.set_margin_start(12);
     channel_header.set_margin_end(12);
+    let channel_avatar = adw::Avatar::new(40, None, true);
+    channel_header.append(&channel_avatar);
     channel_header.append(&channel_title);
     channel_header.append(&channel_entry);
     let allow_channel = gtk::Button::builder()
@@ -1645,6 +1648,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         stack,
         channel_header,
         channel_title,
+        channel_avatar,
         channel_link,
         channel_entry,
         allow_channel,

@@ -278,6 +278,10 @@ pub enum Request {
         id: String,
         large: bool,
     },
+    /// The picture of a channel.
+    Avatar {
+        id: String,
+    },
     /// Looks up what a link typed in by the user points to.
     Resolve {
         input: Input,
@@ -319,6 +323,7 @@ impl Request {
             }
             Request::Cancel { id } => format!("cancel the download of {id}"),
             Request::Thumbnail { id, large } => format!("thumbnail of {id}, large: {large}"),
+            Request::Avatar { id } => format!("avatar of {id}"),
             Request::Resolve { .. } => "resolve a link".to_string(),
             Request::Latest { channel_id, .. } => format!("latest videos of {channel_id}"),
             Request::Suggest { id, .. } => format!("suggestions after {id}"),
@@ -403,6 +408,10 @@ pub enum Response {
         large: bool,
         image: Thumbnail,
     },
+    Avatar {
+        id: String,
+        image: Thumbnail,
+    },
     Latest {
         channel_id: String,
         result: Result<Vec<Entry>, String>,
@@ -463,6 +472,7 @@ async fn run(
     on_response: Arc<impl Fn(Response) + Send + Sync + 'static>,
 ) {
     let thumbnail_slots = Arc::new(Semaphore::new(8));
+    let avatar_slots = Arc::new(Semaphore::new(2));
     let latest_slots = Arc::new(Semaphore::new(LATEST_PARALLEL));
     // A queue of videos asks for the details of all of them at once.
     let info_slots = Arc::new(Semaphore::new(INFO_PARALLEL));
@@ -594,6 +604,16 @@ async fn run(
                     // Not worth bothering the user when SponsorBlock is out of reach.
                     let segments = sponsor_segments(&id).await.unwrap_or_default();
                     on_response(Response::Segments { id, segments });
+                });
+            }
+            Request::Avatar { id } => {
+                let slots = avatar_slots.clone();
+                tokio::spawn(async move {
+                    let _slot = slots.acquire().await;
+                    match avatar(&id).await {
+                        Ok(image) => on_response(Response::Avatar { id, image }),
+                        Err(error) => crate::log::info!("no avatar for {id}: {error}"),
+                    }
                 });
             }
             Request::Thumbnail { id, large } => {
@@ -1655,6 +1675,58 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
     }
     let image = image.into_rgba8();
 
+    Ok(Thumbnail {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    })
+}
+
+/// How big the avatars are kept, they are shown at 40 pixels at most.
+const AVATAR_SIZE: u32 = 96;
+
+/// The picture of a YouTube channel, from the disk if it was fetched before.
+async fn avatar(id: &str) -> Result<Thumbnail, String> {
+    if id.starts_with(RUMBLE_PREFIX) {
+        return Err("Rumble channels have no avatar here".to_string());
+    }
+    let file = cache_dir().join("avatars").join(format!("{}.jpg", bare_id(id)));
+    let bytes = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let head = listing_head(&channel_videos_url(id)).await?;
+            let url = head["thumbnails"]
+                .as_array()
+                .and_then(|list| {
+                    list.iter()
+                        .find(|t| t["id"] == "avatar_uncropped")
+                        .and_then(|t| t["url"].as_str())
+                })
+                .ok_or("The channel has no avatar")?;
+            // The address ends with the size asked for, 0 being the original.
+            let url = match url.rsplit_once("=s0") {
+                Some((base, _)) => format!("{base}=s{AVATAR_SIZE}-c"),
+                None => url.to_string(),
+            };
+            let bytes = reqwest::get(url)
+                .await
+                .and_then(|response| response.error_for_status())
+                .map_err(|e| e.to_string())?
+                .bytes()
+                .await
+                .map_err(|e| e.to_string())?
+                .to_vec();
+            if let Some(dir) = file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&file, &bytes);
+            bytes
+        }
+    };
+
+    let image = image::load_from_memory(&bytes)
+        .map_err(|e| e.to_string())?
+        .into_rgba8();
     Ok(Thumbnail {
         width: image.width(),
         height: image.height(),
