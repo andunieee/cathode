@@ -109,12 +109,23 @@ pub fn browser_argument(browser: &str) -> String {
     let profile =
         dirs::data_local_dir().map(|dir| dir.join("imput").join("Helium").join("User Data"));
     #[cfg(not(target_os = "windows"))]
-    let profile = dirs::config_dir().map(|dir| dir.join("net.imput.helium"));
+    let profile = host_config_dir().map(|dir| dir.join("net.imput.helium"));
 
     match profile {
         // The profile goes after the first colon; a colon inside the path is fine.
         Some(profile) => format!("chromium:{}", profile.display()),
         None => "chromium".to_string(),
+    }
+}
+
+/// The `~/.config` of the user. In a Flatpak `XDG_CONFIG_HOME` points inside the sandbox, but the
+/// browsers keep their profiles in the real one.
+#[cfg(not(target_os = "windows"))]
+fn host_config_dir() -> Option<std::path::PathBuf> {
+    if std::path::Path::new("/.flatpak-info").exists() {
+        dirs::home_dir().map(|home| home.join(".config"))
+    } else {
+        dirs::config_dir()
     }
 }
 
@@ -125,6 +136,11 @@ pub fn yt_dlp() -> Command {
 
     if let Some(browser) = &settings.cookies_from_browser {
         command.args(["--cookies-from-browser", &browser_argument(browser)]);
+    }
+    // yt-dlp looks for the Chromium profiles under `XDG_CONFIG_HOME`.
+    #[cfg(not(target_os = "windows"))]
+    if let Some(dir) = host_config_dir() {
+        command.env("XDG_CONFIG_HOME", dir);
     }
     let proxy = settings.proxy.trim();
     if !proxy.is_empty() {
