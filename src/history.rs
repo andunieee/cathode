@@ -62,6 +62,40 @@ pub fn record(entry: &Entry) -> Result<(), String> {
     Ok(())
 }
 
+/// Takes the video out of the history.
+pub fn remove(id: &str) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct Line {
+        entry: Entry,
+    }
+
+    let path = path();
+    let mut ids = IDS.lock().unwrap();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut kept = String::with_capacity(text.len());
+    for line in text.lines() {
+        // Lines that can't be read are kept as they are.
+        if serde_json::from_str::<Line>(line).is_ok_and(|l| l.entry.id == id) {
+            continue;
+        }
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    // Written aside and renamed, so the history is never left half written.
+    let temporary = path.with_extension("jsonl.tmp");
+    std::fs::write(&temporary, kept)
+        .and_then(|_| std::fs::rename(&temporary, &path))
+        .map_err(|e| e.to_string())?;
+    if let Some(ids) = ids.as_mut() {
+        ids.remove(id);
+    }
+    Ok(())
+}
+
 /// Whether the video is in the history.
 pub fn is_watched(id: &str) -> bool {
     IDS.lock()

@@ -393,6 +393,42 @@ impl Card {
         root.append(&queue);
         root.append(&dismiss);
 
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let popover = gtk::Popover::builder()
+            .child(&menu)
+            .has_arrow(false)
+            .halign(gtk::Align::Start)
+            .build();
+        popover.set_parent(&root);
+        root.connect_destroy({
+            let popover = popover.clone();
+            move |_| popover.unparent()
+        });
+        let click = gtk::GestureClick::builder().button(3).build();
+        click.connect_pressed({
+            let entry = entry.clone();
+            let popover = popover.clone();
+            move |gesture, _, x, y| {
+                let Some(current) = entry.borrow().clone() else {
+                    return;
+                };
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                fill_menu(&menu, &popover, &current);
+                popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.popup();
+            }
+        });
+        root.add_controller(click);
+
+        CARDS.with_borrow_mut(|cards| {
+            cards.push(LiveCard {
+                title: title.downgrade(),
+                details: details.downgrade(),
+                picture: picture.downgrade(),
+                entry: Rc::downgrade(&entry),
+            })
+        });
+
         Self {
             root,
             picture,
@@ -410,19 +446,7 @@ impl Card {
         // In the restricted mode only the channels that are allowed can be visited.
         self.channel
             .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
-        let watched = history::is_watched(&entry.id);
-        let details = nav::details(entry);
-        self.details.set_text(&if watched {
-            format!("Watched  ·  {details}")
-        } else {
-            details
-        });
-        if watched {
-            self.title.add_css_class("dim-label");
-        } else {
-            self.title.remove_css_class("dim-label");
-        }
-        self.picture.set_opacity(if watched { 0.5 } else { 1.0 });
+        show_watched(&self.title, &self.details, &self.picture, entry);
         *self.entry.borrow_mut() = Some(entry.clone());
         nav::sync_queue_buttons();
 
@@ -430,6 +454,137 @@ impl Card {
         self.picture.set_widget_name(&entry.id);
         self.picture
             .set_paintable(nav::thumbnail(&entry.id, false, Some(&self.picture)).as_ref());
+    }
+}
+
+struct LiveCard {
+    title: glib::WeakRef<gtk::Label>,
+    details: glib::WeakRef<gtk::Label>,
+    picture: glib::WeakRef<gtk::Picture>,
+    entry: std::rc::Weak<RefCell<Option<Entry>>>,
+}
+
+thread_local! {
+    /// The cards of the video lists, to update them when the history changes.
+    static CARDS: RefCell<Vec<LiveCard>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Shows again whether each video in the lists was watched.
+pub fn refresh_watched() {
+    CARDS.with_borrow_mut(|cards| {
+        cards.retain(|card| {
+            let (Some(title), Some(details), Some(picture), Some(entry)) = (
+                card.title.upgrade(),
+                card.details.upgrade(),
+                card.picture.upgrade(),
+                card.entry.upgrade(),
+            ) else {
+                return false;
+            };
+            if let Some(entry) = entry.borrow().as_ref() {
+                show_watched(&title, &details, &picture, entry);
+            }
+            true
+        });
+    });
+}
+
+/// Shows whether the video was watched: dimmed, with the label in front of the details.
+fn show_watched(title: &gtk::Label, details: &gtk::Label, picture: &gtk::Picture, entry: &Entry) {
+    let watched = history::is_watched(&entry.id);
+    let text = nav::details(entry);
+    details.set_text(&if watched {
+        format!("Watched  ·  {text}")
+    } else {
+        text
+    });
+    if watched {
+        title.add_css_class("dim-label");
+    } else {
+        title.remove_css_class("dim-label");
+    }
+    picture.set_opacity(if watched { 0.5 } else { 1.0 });
+}
+
+/// Fills the right-click menu of a video in a list.
+fn fill_menu(menu: &gtk::Box, popover: &gtk::Popover, entry: &Entry) {
+    while let Some(child) = menu.first_child() {
+        menu.remove(&child);
+    }
+    let add = |icon: &str, label: &str, action: Box<dyn Fn()>| {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.append(&gtk::Image::from_icon_name(icon));
+        row.append(
+            &gtk::Label::builder()
+                .label(label)
+                .xalign(0.0)
+                .ellipsize(pango::EllipsizeMode::End)
+                .build(),
+        );
+        let item = gtk::Button::builder()
+            .cursor(&pointer())
+            .css_classes(["flat"])
+            .child(&row)
+            .build();
+        let popover = popover.clone();
+        item.connect_clicked(move |_| {
+            popover.popdown();
+            action();
+        });
+        menu.append(&item);
+    };
+
+    add("media-playback-start-symbolic", "Play", {
+        let entry = entry.clone();
+        Box::new(move || nav::play_now(entry.clone()))
+    });
+    add("list-add-symbolic", "Add to queue", {
+        let entry = entry.clone();
+        Box::new(move || nav::queue_add(entry.clone()))
+    });
+    if !entry.url.is_empty() {
+        if history::is_watched(&entry.id) {
+            add("list-remove-symbolic", "Mark as not watched", {
+                let entry = entry.clone();
+                Box::new(move || {
+                    nav::mark_unwatched(&entry);
+                })
+            });
+        } else {
+            add("document-open-recent-symbolic", "Mark as watched", {
+                let entry = entry.clone();
+                Box::new(move || {
+                    nav::mark_watched(&entry);
+                })
+            });
+        }
+    }
+    add("emblem-shared-symbolic", "Related", {
+        let entry = entry.clone();
+        Box::new(move || nav::open_related_of(entry.clone()))
+    });
+    // Only the one in charge of the profile gets to change it, and to save.
+    if !profile::restricted() {
+        if !entry.url.is_empty() {
+            for name in crate::collections::savable() {
+                add("folder-symbolic", &format!("Save to “{name}”"), {
+                    let entry = entry.clone();
+                    Box::new(move || nav::save_video(entry.clone(), name.clone()))
+                });
+            }
+        }
+        add(
+            "system-users-symbolic",
+            if profile::lists_video(&entry.id) {
+                "Remove from the restricted mode"
+            } else {
+                "Add to the restricted mode"
+            },
+            {
+                let entry = entry.clone();
+                Box::new(move || nav::toggle_video_allowed(entry.clone()))
+            },
+        );
     }
 }
 
@@ -528,7 +683,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     let subs_toggle = gtk::ToggleButton::builder()
         .cursor(&crate::ui::pointer())
-        .icon_name("starred-symbolic")
+        .icon_name("accessories-dictionary-symbolic")
         .tooltip_text("Subscriptions and collections")
         .build();
     header.pack_start(&subs_toggle);

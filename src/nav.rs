@@ -768,6 +768,29 @@ fn update_allow_buttons() {
     library::show_save_button(savable);
 }
 
+/// Adds the video to the restricted mode, or takes it out of it. True when it was added.
+fn toggle_video(entry: Entry) -> Result<bool, String> {
+    let id = entry.id.clone();
+    if profile::lists_video(&id) {
+        profile::update(Box::new(move |p: &mut profile::Profile| {
+            p.videos.retain(|v| v.id != id)
+        }))
+        .map(|_| false)
+    } else {
+        profile::add(Item::Video(entry))
+    }
+}
+
+/// Adds a video of a list to the restricted mode, or takes it out of it.
+pub fn toggle_video_allowed(entry: Entry) {
+    match toggle_video(entry) {
+        Ok(true) => toast("Added to the restricted mode"),
+        Ok(false) => toast("Removed from the restricted mode"),
+        Err(error) => toast(&format!("Could not save the profile: {error}")),
+    }
+    update_allow_buttons();
+}
+
 /// Adds the page on screen to the restricted mode, or takes it out of it.
 pub fn toggle_allowed() {
     let toggle = |allowed: bool, item: Item, remove: Box<dyn FnOnce(&mut profile::Profile)>| {
@@ -795,14 +818,7 @@ pub fn toggle_allowed() {
             }),
             Box::new(move |p| p.playlists.retain(|p| p.id != id)),
         ),
-        Page::Video(entry) => {
-            let id = entry.id.clone();
-            toggle(
-                profile::lists_video(&entry.id),
-                Item::Video(entry),
-                Box::new(move |p| p.videos.retain(|v| v.id != id)),
-            )
-        }
+        Page::Video(entry) => toggle_video(entry),
         Page::Collection(name) => toggle(
             profile::allows_collection(&name),
             Item::Collection(name.clone()),
@@ -1094,6 +1110,36 @@ pub fn open_related() {
     if let Page::Video(entry) = current() {
         navigate(Page::Related(entry));
     }
+}
+
+pub fn open_related_of(entry: Entry) {
+    navigate(Page::Related(entry));
+}
+
+/// Takes the video out of the history.
+pub fn mark_unwatched(entry: &Entry) {
+    match history::remove(&entry.id) {
+        Ok(()) => {
+            toast("Marked as not watched");
+            ui::refresh_watched();
+        }
+        Err(error) => toast(&format!("Could not write the history: {error}")),
+    }
+}
+
+/// Adds the video to the history without playing it.
+pub fn mark_watched(entry: &Entry) {
+    if entry.url.is_empty() {
+        return;
+    }
+    if let Err(error) = history::record(entry) {
+        toast(&format!("Could not write the history: {error}"));
+        return;
+    }
+    suggestions::watched(&entry.id);
+    remove_suggestion(&entry.id);
+    toast("Marked as watched");
+    ui::refresh_watched();
 }
 
 pub fn open_video(entry: Entry) {
@@ -1405,7 +1451,7 @@ pub fn save_current(collection: Option<String>) {
 
 /// Moves the video out of the cache into the collection. A video that isn't downloaded yet is
 /// saved as soon as it is.
-fn save_video(entry: Entry, collection: String) {
+pub fn save_video(entry: Entry, collection: String) {
     crate::log::info!("saving {} to the collection {collection}", entry.id);
     if profile::restricted() || entry.url.is_empty() {
         return;
@@ -2996,6 +3042,46 @@ fn history_more() {
             move |_| play_now(entry.clone())
         });
         row.add_suffix(&play);
+        let delete = gtk::Button::builder()
+            .cursor(&crate::ui::pointer())
+            .icon_name("edit-delete-symbolic")
+            .tooltip_text("Remove from the history")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        delete.connect_clicked({
+            let id = entry.id.clone();
+            let row = row.clone();
+            let list = list.clone();
+            move |_| {
+                if let Err(error) = history::remove(&id) {
+                    toast(&format!("Could not write the history: {error}"));
+                    return;
+                }
+                ui::refresh_watched();
+                // The place to read on from is before the rows shown, it doesn't move.
+                list.remove(&row);
+                if list.first_child().is_none() {
+                    let ui = ui::get();
+                    if let Some(heading) = list.prev_sibling() {
+                        ui.history_box.remove(&heading);
+                    }
+                    ui.history_box.remove(&list);
+                    if ui.history_current.borrow().as_ref() == Some(&list) {
+                        *ui.history_current.borrow_mut() = None;
+                        with(|state| state.history_day = None);
+                    }
+                    if ui.history_box.first_child().is_none() {
+                        if with(|state| state.history_done) {
+                            ui.history_empty.set_visible(true);
+                        } else {
+                            history_more();
+                        }
+                    }
+                }
+            }
+        });
+        row.add_suffix(&delete);
         row.connect_activated(move |_| open_video(entry.clone()));
         list.append(&row);
     }
