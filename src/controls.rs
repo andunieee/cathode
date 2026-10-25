@@ -212,15 +212,19 @@ impl Widgets {
 // Rows
 
 fn row(title: &str, subtitle: &str, icon: &str) -> adw::ActionRow {
-    let row = adw::ActionRow::builder()
+    let row = plain_row(title, subtitle);
+    row.add_prefix(&gtk::Image::from_icon_name(icon));
+    row
+}
+
+fn plain_row(title: &str, subtitle: &str) -> adw::ActionRow {
+    adw::ActionRow::builder()
         .title(title)
         .subtitle(subtitle)
         .use_markup(false)
         .activatable(true)
         .cursor(&crate::ui::pointer())
-        .build();
-    row.add_prefix(&gtk::Image::from_icon_name(icon));
-    row
+        .build()
 }
 
 fn remove_button(on_remove: impl Fn() + 'static) -> gtk::Button {
@@ -236,7 +240,10 @@ fn remove_button(on_remove: impl Fn() + 'static) -> gtk::Button {
 }
 
 fn channel_row(channel: &ChannelRef, removable: bool) -> adw::ActionRow {
-    let row = row(&channel.name, "Channel", "avatar-default-symbolic");
+    let row = plain_row(&channel.name, "Channel");
+    let avatar = adw::Avatar::new(32, Some(&channel.name), true);
+    nav::channel_avatar(&channel.id, &avatar);
+    row.add_prefix(&avatar);
     row.connect_activated({
         let channel = channel.clone();
         move |_| nav::open_channel(&channel.id, &channel.name)
