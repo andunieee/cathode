@@ -229,11 +229,84 @@ fn general() -> adw::PreferencesPage {
     page
 }
 
+const APP_ID: &str = "io.github.andunieee.Cathode";
+const WEBSITE: &str = "https://github.com/andunieee/cathode";
+
+fn about_dialog() -> adw::AboutDialog {
+    adw::AboutDialog::builder()
+        .application_icon(APP_ID)
+        .application_name("Cathode")
+        .developer_name("George V")
+        .developers(["George V"])
+        .version(env!("CARGO_PKG_VERSION"))
+        .comments("Searches YouTube, downloads videos with yt-dlp and plays them in a built-in mpv player.")
+        .website(WEBSITE)
+        .issue_url(format!("{WEBSITE}/issues"))
+        .license_type(gtk::License::Gpl30Only)
+        .copyright("© George V")
+        .build()
+}
+
+fn link_row(title: &str, uri: String) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(&uri)
+        .activatable(true)
+        .build();
+    row.add_suffix(&gtk::Image::from_icon_name("adw-external-link-symbolic"));
+    row.connect_activated(move |row| {
+        let launcher = gtk::UriLauncher::new(&uri);
+        launcher.launch(
+            row.root().and_downcast_ref::<gtk::Window>(),
+            gtk::gio::Cancellable::NONE,
+            |_| {},
+        );
+    });
+    row
+}
+
+fn about() -> adw::PreferencesPage {
+    let header = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    header.set_margin_top(24);
+    header.set_margin_bottom(12);
+    let icon = gtk::Image::from_icon_name(APP_ID);
+    icon.set_pixel_size(128);
+    icon.add_css_class("icon-dropshadow");
+    let name = gtk::Label::new(Some("Cathode"));
+    name.add_css_class("title-1");
+    let version = gtk::Label::new(Some(env!("CARGO_PKG_VERSION")));
+    version.add_css_class("dim-label");
+    version.set_selectable(true);
+    header.append(&icon);
+    header.append(&name);
+    header.append(&version);
+    let top = adw::PreferencesGroup::new();
+    top.add(&header);
+
+    let details = adw::ActionRow::builder()
+        .title("About Cathode")
+        .activatable(true)
+        .build();
+    details.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    details.connect_activated(|row| about_dialog().present(Some(row)));
+
+    let links = adw::PreferencesGroup::new();
+    links.add(&details);
+    links.add(&link_row("Website", WEBSITE.to_string()));
+    links.add(&link_row("Report an issue", format!("{WEBSITE}/issues")));
+
+    let page = adw::PreferencesPage::new();
+    page.add(&top);
+    page.add(&links);
+    page
+}
+
 /// The page, with `parental` as the parental control one.
 pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     let stack = gtk::Stack::new();
     stack.add_named(&general(), Some("general"));
     stack.add_named(parental, Some("parental"));
+    stack.add_named(&about(), Some("about"));
 
     let sidebar = gtk::ListBox::builder()
         .css_classes(["navigation-sidebar"])
@@ -242,6 +315,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     for (name, title, icon) in [
         ("general", "General", "preferences-system-symbolic"),
         ("parental", "Restricted Mode", "system-users-symbolic"),
+        ("about", "About", "help-about-symbolic"),
     ] {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         content.set_margin_top(8);
