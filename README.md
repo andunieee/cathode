@@ -72,23 +72,74 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Settings for download quality, sponsor segment skipping, speed limit, proxy and browser cookies for age-restricted videos
 
 # Installation
-## One-liners
-Each one downloads the latest release.
+Grab the files from the [latest release](https://github.com/andunieee/cathode/releases/latest), or use the commands below, which all download the latest one.
 
-**Windows** (PowerShell), downloads and runs the installer, which adds a Start menu entry and an uninstaller and registers the `cathode://` links:
+<details>
+<summary>Linux</summary>
+
+**Debian / Ubuntu** (Debian 13+, Ubuntu 25.04+), `.deb`:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.deb')" -o /tmp/cathode.deb && sudo apt install /tmp/cathode.deb
+```
+
+**Fedora and other RPM distros**, `.rpm` (needs [RPM Fusion](https://rpmfusion.org) enabled for `mpv-libs`):
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.rpm')" -o /tmp/cathode.rpm && sudo dnf install /tmp/cathode.rpm
+```
+
+**AppImage**, saves it to `~/.local/bin` and runs it with `--install-desktop-entry`, which adds Cathode to the application menu and registers `cathode://` links for your user:
+```
+mkdir -p ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.AppImage')" -o ~/.local/bin/cathode.AppImage && chmod +x ~/.local/bin/cathode.AppImage && ~/.local/bin/cathode.AppImage --install-desktop-entry
+```
+It needs FUSE (otherwise run it with `--appimage-extract-and-run`) and glibc 2.41+.
+
+**Plain binary** (`.tar.gz`), for when you already have GTK 4.10+, libadwaita 1.7+ and libmpv installed. Same `--install-desktop-entry` flag:
+```
+mkdir -p ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*linux-x86_64[^"]*\.tar\.gz')" | tar -xz -C ~/.local/bin cathode && ~/.local/bin/cathode --install-desktop-entry
+```
+
+**With cargo**, builds from source (see [Building from source](#building-from-source) for the dependencies):
+```
+cargo install --git https://github.com/andunieee/cathode
+cathode --install-desktop-entry
+```
+
+There is also a `.flatpak` on the releases page: `flatpak install cathode-*.flatpak`.
+</details>
+
+<details>
+<summary>Windows</summary>
+
+**Manually**: download the `windows-x64-setup-` `.exe` from the releases page and run it. It adds a Start menu entry and an uninstaller and registers the `cathode://` links.
+
+**One-liner** (PowerShell), does the same: downloads the installer and runs it.
 ```
 $u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-setup-v'; iwr $u -OutFile $env:TEMP\cathode-setup.exe; Start-Process $env:TEMP\cathode-setup.exe
 ```
 
-**Linux** (AppImage), saves it to `~/.local/bin` and runs it with `--install-desktop-entry`, which adds Cathode to the application menu and registers `cathode://` links for your user:
+**Portable** (PowerShell), no installer: downloads the `.zip`, unzips it to `%LOCALAPPDATA%\Cathode` and you start it with `cathode.bat`. No Start menu entry and no `cathode://` links.
 ```
-mkdir -p ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.AppImage')" -o ~/.local/bin/cathode.AppImage && chmod +x ~/.local/bin/cathode.AppImage && ~/.local/bin/cathode.AppImage --install-desktop-entry
+$u=((irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-v.*\.zip$')[0]; iwr $u -OutFile $env:TEMP\cathode.zip; Expand-Archive -Force $env:TEMP\cathode.zip $env:LOCALAPPDATA\Cathode; & $env:LOCALAPPDATA\Cathode\cathode.bat
 ```
+</details>
 
-**macOS** (Apple Silicon):
+<details>
+<summary>macOS</summary>
+
+Apple Silicon only, and the app is unsigned.
+
+**Manually**: download the `macos-arm64` `.zip`, double-click it in Finder to unzip, and drag `cathode.app` to `Applications`. On first launch right-click it and choose Open.
+
+**One-liner** (Terminal), downloads and unzips it into `/Applications`. `ditto` is the archive tool that comes with macOS, and it keeps the app bundle intact where a plain `unzip` can break it:
 ```
 curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*macos-arm64[^"]*\.zip')" -o /tmp/cathode.zip && ditto -x -k /tmp/cathode.zip /Applications
 ```
+
+If macOS refuses to open it because it is from an unidentified developer, run:
+```
+xattr -d com.apple.quarantine /Applications/cathode.app
+```
+</details>
 
 ## Releases
 Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` and a `-setup-` installer for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
