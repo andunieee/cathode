@@ -75,9 +75,14 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ## One-liners
 Each one downloads the latest release.
 
-**Linux** (Flatpak):
+**Windows** (PowerShell), downloads and runs the installer, which adds a Start menu entry and an uninstaller and registers the `cathode://` links:
 ```
-curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.flatpak')" -o /tmp/cathode.flatpak && flatpak install --user -y /tmp/cathode.flatpak
+$u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-setup-v'; iwr $u -OutFile $env:TEMP\cathode-setup.exe; Start-Process $env:TEMP\cathode-setup.exe
+```
+
+**Linux** (AppImage), saves it to `~/.local/bin` and runs it with `--install-desktop-entry`, which adds Cathode to the application menu and registers `cathode://` links for your user:
+```
+mkdir -p ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.AppImage')" -o ~/.local/bin/cathode.AppImage && chmod +x ~/.local/bin/cathode.AppImage && ~/.local/bin/cathode.AppImage --install-desktop-entry
 ```
 
 **macOS** (Apple Silicon):
@@ -85,17 +90,8 @@ curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/late
 curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*macos-arm64[^"]*\.zip')" -o /tmp/cathode.zip && ditto -x -k /tmp/cathode.zip /Applications
 ```
 
-**Windows** (PowerShell), unzips to `%LOCALAPPDATA%\Cathode`, launch `cathode.bat`:
-```
-$u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-v'; iwr $u -OutFile $env:TEMP\cathode.zip; Expand-Archive -Force $env:TEMP\cathode.zip $env:LOCALAPPDATA\Cathode
-```
-
-**Windows installer**: `cathode-windows-x64-setup-v*.exe` from the releases page adds a Start menu entry and an uninstaller, and registers the `cathode://` links.
-
-**Linux, outside a package** (tarball, AppImage): `cathode --install-desktop-entry` adds Cathode to the application menu and registers `cathode://` links for your user.
-
 ## Releases
-Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
+Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` and a `-setup-` installer for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
 
 ## Building from source
 ### Dependencies
