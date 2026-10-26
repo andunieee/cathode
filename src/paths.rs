@@ -30,14 +30,24 @@ fn folder() -> String {
     }
 }
 
+/// In a Flatpak the `XDG_*_HOME` variables point into `~/.var/app/<id>`. The sandbox has access to
+/// the home folder, so the real directories are used, the same ones the unpackaged app uses.
+fn base(sandboxed: impl Fn(PathBuf) -> PathBuf, native: Option<PathBuf>) -> Option<PathBuf> {
+    if cfg!(target_os = "linux") && std::path::Path::new("/.flatpak-info").exists() {
+        dirs::home_dir().map(sandboxed)
+    } else {
+        native
+    }
+}
+
 pub fn config() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join(folder())
+    base(|home| home.join(".config"), dirs::config_dir()).unwrap_or_else(|| PathBuf::from(".")).join(folder())
 }
 
 pub fn data() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join(folder())
+    base(|home| home.join(".local/share"), dirs::data_dir()).unwrap_or_else(|| PathBuf::from(".")).join(folder())
 }
 
 pub fn cache() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join(folder())
+    base(|home| home.join(".cache"), dirs::cache_dir()).unwrap_or_else(std::env::temp_dir).join(folder())
 }
