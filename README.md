@@ -128,6 +128,11 @@ $u=((irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.
 
 Apple Silicon only, and the app is unsigned.
 
+**Homebrew**, installs from the [tap](https://github.com/andunieee/homebrew-cathode) and clears the quarantine flag for you:
+```
+brew install --cask andunieee/cathode/cathode
+```
+
 **Manually**: download the `macos-arm64` `.zip`, double-click it in Finder to unzip, and drag `cathode.app` to `Applications`. On first launch right-click it and choose Open.
 
 **One-liner** (Terminal), downloads and unzips it into `/Applications`. `ditto` is the archive tool that comes with macOS, and it keeps the app bundle intact where a plain `unzip` can break it:
