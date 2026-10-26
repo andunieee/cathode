@@ -141,6 +141,15 @@ fn open_targets(targets: &[String]) {
 }
 
 fn main() -> glib::ExitCode {
+    // The AppImage's GTK plugin forces `GTK_THEME=Adwaita:light|dark`, which swaps libadwaita's
+    // stylesheet for GTK's legacy one (no padding, wrong widgets). Drop it, libadwaita follows the
+    // system's light/dark preference by itself.
+    if std::env::var_os("APPIMAGE").is_some()
+        && matches!(std::env::var("GTK_THEME").as_deref(), Ok("Adwaita:light" | "Adwaita:dark"))
+    {
+        // SAFETY: nothing else is running yet.
+        unsafe { std::env::remove_var("GTK_THEME") };
+    }
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--install-desktop-entry") {
         #[cfg(target_os = "linux")]
