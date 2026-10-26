@@ -12,6 +12,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#Output}
 OutputBaseFilename=cathode-windows-x64-setup-v{#Version}
+SetupIconFile=cathode.ico
 UninstallDisplayIcon={app}\bin\cathode.exe
 Compression=lzma2
 SolidCompression=yes

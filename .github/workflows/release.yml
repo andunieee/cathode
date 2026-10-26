@@ -408,6 +408,9 @@ jobs:
           cp /ucrt64/share/glib-2.0/schemas/*.xz bundle/share/glib-2.0/schemas/ 2>/dev/null || true
           cp -r /ucrt64/share/glib-2.0/schemas/gschemas.compiled bundle/share/glib-2.0/schemas/
           cp -r /ucrt64/share/icons/hicolor bundle/share/icons/
+          # The app icon by name (About page, window icon).
+          mkdir -p bundle/share/icons/hicolor/scalable/apps
+          cp assets/io.github.andunieee.Cathode.svg bundle/share/icons/hicolor/scalable/apps/
           (cd bundle && gdk-pixbuf-query-loaders lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll \
             > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache)
 

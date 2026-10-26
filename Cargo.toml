@@ -1,6 +1,6 @@
 [package]
 name = "cathode"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["George V <andunie@cassis.cash>"]
 edition = "2021"
 license = "GPL-3.0-only"
@@ -24,6 +24,9 @@ tar = "0.4.46"
 liblzma = "0.4.9"
 getrandom = "0.4"
 
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
 
 [package.metadata.deb]
 name = "cathode"
