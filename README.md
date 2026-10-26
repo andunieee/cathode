@@ -77,6 +77,11 @@ Grab the files from the [latest release](https://github.com/andunieee/cathode/re
 <details>
 <summary>Linux</summary>
 
+**Flatpak** (any distro), `.flatpak`, installs it for your user:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.flatpak')" -o /tmp/cathode.flatpak && flatpak install --user -y /tmp/cathode.flatpak
+```
+
 **Debian / Ubuntu** (Debian 13+, Ubuntu 25.04+), `.deb`:
 ```
 curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.deb')" -o /tmp/cathode.deb && sudo apt install /tmp/cathode.deb
@@ -103,21 +108,19 @@ mkdir -p ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/anduni
 cargo install --git https://github.com/andunieee/cathode
 cathode --install-desktop-entry
 ```
-
-There is also a `.flatpak` on the releases page: `flatpak install cathode-*.flatpak`.
 </details>
 
 <details>
 <summary>Windows</summary>
 
-**Manually**: download the `windows-x64-setup-` `.exe` from the releases page and run it. It adds a Start menu entry and an uninstaller and registers the `cathode://` links.
+**Manually**: download the `windows-x64-setup-` `.exe` from the [releases page](https://github.com/andunieee/cathode/releases) and run it. It adds a Start menu entry and an uninstaller and registers the `cathode://` links.
 
 **One-liner** (PowerShell), does the same: downloads the installer and runs it.
 ```
 $u=(irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-setup-v'; iwr $u -OutFile $env:TEMP\cathode-setup.exe; Start-Process $env:TEMP\cathode-setup.exe
 ```
 
-**Portable** (PowerShell), no installer: downloads the `.zip`, unzips it to `%LOCALAPPDATA%\Cathode` and you start it with `cathode.bat`. No Start menu entry and no `cathode://` links.
+**No installer** (PowerShell): downloads the `.zip`, unzips it to `%LOCALAPPDATA%\Cathode` and you start it with `cathode.bat`. No Start menu entry and no `cathode://` links.
 ```
 $u=((irm https://api.github.com/repos/andunieee/cathode/releases/latest).assets.browser_download_url -match 'windows-x64-v.*\.zip$')[0]; iwr $u -OutFile $env:TEMP\cathode.zip; Expand-Archive -Force $env:TEMP\cathode.zip $env:LOCALAPPDATA\Cathode; & $env:LOCALAPPDATA\Cathode\cathode.bat
 ```
