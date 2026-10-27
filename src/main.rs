@@ -18,6 +18,8 @@ mod paths;
 mod player;
 mod preferences;
 mod profile;
+mod remote;
+mod remote_app;
 mod settings;
 mod state;
 mod subscriptions;
@@ -68,6 +70,7 @@ fn start(app: &adw::Application, started: &Cell<bool>) {
         glib::MainContext::default().invoke(move || nav::handle(response));
     });
     nav::init(requests);
+    remote::init();
 
     ui.window.present();
 }

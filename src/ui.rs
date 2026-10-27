@@ -17,7 +17,7 @@ use crate::profile;
 use crate::state::CaptionMode;
 
 /// Playback speeds on offer, 1.0 being the first selected.
-const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+pub const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 /// The index of the normal speed in `SPEEDS`.
 pub const NORMAL_SPEED: u32 = 2;
 

@@ -7,6 +7,7 @@ use adw::prelude::*;
 use crate::extension;
 use crate::fetch::Request;
 use crate::nav;
+use crate::remote;
 use crate::settings::{self, BROWSERS, QUALITIES};
 
 const COOKIES_SUBTITLE: &str =
@@ -229,6 +230,98 @@ fn general() -> adw::PreferencesPage {
     page
 }
 
+/// The page with the switch of the phone remote and the way to pair a phone.
+fn remote_page() -> adw::PreferencesPage {
+    let switch = adw::SwitchRow::builder()
+        .title("Phone remote")
+        .subtitle("Play, pause, search and manage the queue from a phone with a hyperb browser")
+        .active(remote::enabled())
+        .build();
+    let pair_button = gtk::Button::builder()
+        .label("Show QR code")
+        .valign(gtk::Align::Center)
+        .sensitive(remote::enabled())
+        .build();
+    pair_button.connect_clicked(|button| pairing_dialog().present(Some(button)));
+    switch.connect_active_notify({
+        let pair_button = pair_button.clone();
+        move |row| {
+            remote::set_enabled(row.is_active());
+            pair_button.set_sensitive(row.is_active());
+        }
+    });
+    let pair = adw::ActionRow::builder()
+        .title("Pair a phone")
+        .subtitle("Scan the code with the camera of the phone, then open the link in hyperb")
+        .build();
+    pair.add_suffix(&pair_button);
+
+    let group = adw::PreferencesGroup::builder().title("Remote").build();
+    group.add(&switch);
+    group.add(&pair);
+    let page = adw::PreferencesPage::new();
+    page.add(&group);
+    page
+}
+
+fn pairing_dialog() -> adw::Dialog {
+    let picture = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Contain)
+        .width_request(300)
+        .height_request(300)
+        .build();
+    let address = gtk::Label::builder()
+        .selectable(true)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::Char)
+        .css_classes(["caption", "monospace"])
+        .max_width_chars(40)
+        .build();
+    let show = {
+        let (picture, address) = (picture.clone(), address.clone());
+        move || {
+            let text = remote::address();
+            picture.set_paintable(remote::qr_code(&text).as_ref());
+            address.set_text(&text);
+        }
+    };
+    show();
+
+    let reset = gtk::Button::builder()
+        .label("Lock out the paired phones")
+        .halign(gtk::Align::Center)
+        .css_classes(["destructive-action"])
+        .build();
+    reset.connect_clicked(move |_| {
+        remote::reset();
+        show();
+    });
+    let note = gtk::Label::builder()
+        .label("Anyone with this address can control Cathode. Keep it to yourself, and lock the phones out if it gets around: a new code is made and the old one stops working.")
+        .wrap(true)
+        .max_width_chars(40)
+        .css_classes(["dim-label"])
+        .build();
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(24);
+    content.set_margin_start(24);
+    content.set_margin_end(24);
+    content.append(&picture);
+    content.append(&address);
+    content.append(&note);
+    content.append(&reset);
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&content));
+    adw::Dialog::builder()
+        .title("Pair a phone")
+        .child(&view)
+        .build()
+}
+
 const APP_ID: &str = "io.github.andunieee.Cathode";
 const WEBSITE: &str = "https://github.com/andunieee/cathode";
 
@@ -306,6 +399,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     let stack = gtk::Stack::new();
     stack.add_named(&general(), Some("general"));
     stack.add_named(parental, Some("parental"));
+    stack.add_named(&remote_page(), Some("remote"));
     stack.add_named(&about(), Some("about"));
 
     let sidebar = gtk::ListBox::builder()
@@ -315,6 +409,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     for (name, title, icon) in [
         ("general", "General", "preferences-system-symbolic"),
         ("parental", "Restricted Mode", "system-users-symbolic"),
+        ("remote", "Remote Control", "phone-symbolic"),
         ("about", "About", "help-about-symbolic"),
     ] {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);

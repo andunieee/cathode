@@ -665,7 +665,7 @@ fn local_path(id: &str) -> Option<PathBuf> {
 // The restricted mode
 
 /// Whether the video can be watched, given the restricted mode if it is on.
-fn video_allowed(entry: &Entry) -> bool {
+pub fn video_allowed(entry: &Entry) -> bool {
     !profile::restricted() || profile::allows_video(entry)
 }
 
@@ -2259,6 +2259,129 @@ fn play_next_in_queue() {
     }
 }
 
+// Remote control
+
+/// What the phone remote shows: the video in the player and the queue.
+pub fn remote_status() -> crate::remote::Status {
+    let ui = ui::get();
+    // Nothing in the player counts as paused: Play starts the queue.
+    let paused = ui.player.id().is_none() || ui.player.is_paused();
+    let (position, duration) = (ui.player.position(), ui.player.duration());
+    let (volume, speed) = (ui.volume_scale.value(), ui::speed_at(ui.speed.selected()).unwrap_or(1.0));
+    let (captions, caption) = {
+        let (tracks, selected) = &*ui.caption_tracks.borrow();
+        (
+            tracks.iter().map(|track| (track.id, track.label.clone())).collect(),
+            selected.unwrap_or(-1),
+        )
+    };
+    let size = with(|state| state.playing.as_ref().and_then(|entry| state.picked.get(&entry.id).copied()))
+        .unwrap_or(settings::get().max_height);
+    let feed = if profile::restricted() {
+        Vec::new()
+    } else {
+        subscriptions::feed().iter().take(30).map(crate::remote::hit).collect()
+    };
+    let listed = profile::read(|p| p.videos.iter().map(|video| video.id.clone()).collect());
+    with(|state| crate::remote::Status {
+        feed,
+        volume,
+        speed,
+        size,
+        captions,
+        caption,
+        restricted: profile::restricted(),
+        locked: profile::has_password(),
+        listed,
+        playing: state.playing.as_ref().map(|entry| entry.id.clone()),
+        title: state.playing.as_ref().map(|entry| entry.title.clone()).unwrap_or_default(),
+        channel: state.playing.as_ref().map(|entry| entry.channel.clone()).unwrap_or_default(),
+        paused,
+        position,
+        duration,
+        queue: state
+            .queue
+            .iter()
+            .map(|item| crate::remote::QueueRow {
+                id: item.entry.id.clone(),
+                title: item.entry.title.clone(),
+                channel: item.entry.channel.clone(),
+                state: match item.state {
+                    QueueState::Waiting => "waiting",
+                    QueueState::Downloading => "downloading",
+                    QueueState::Ready => "ready",
+                    QueueState::Failed(_) => "failed",
+                },
+            })
+            .collect(),
+    })
+}
+
+/// Sets the volume from 0 to 1, as the slider of the player does.
+pub fn remote_volume(volume: f64) {
+    ui::get().volume_scale.set_value(volume.clamp(0.0, 1.0));
+}
+
+pub fn remote_speed(speed: f64) {
+    let ui = ui::get();
+    if let Some(index) = ui::speed_index(speed) {
+        ui.speed.set_selected(index);
+    }
+}
+
+/// Shows a caption track by its id, or none with `-1`.
+pub fn remote_caption(id: i64) {
+    let row = ui::get()
+        .caption_tracks
+        .borrow()
+        .0
+        .iter()
+        .position(|track| track.id == id)
+        .map_or(0, |index| index + 1);
+    pick_caption(row);
+}
+
+/// Plays, resuming the video in the player or else starting the one that was left or the first
+/// of the queue.
+pub fn remote_play() {
+    let ui = ui::get();
+    if ui.player.id().is_some() {
+        if ui.player.is_paused() {
+            toggle_pause();
+        }
+        return;
+    }
+    let entry = with(|state| {
+        state
+            .playing
+            .clone()
+            .or_else(|| state.queue.first().map(|item| item.entry.clone()))
+    });
+    if let Some(entry) = entry {
+        play(entry);
+    }
+}
+
+pub fn remote_pause() {
+    if !ui::get().player.is_paused() {
+        toggle_pause();
+    }
+}
+
+/// Plays a video of the queue.
+pub fn queue_play(id: &str) {
+    let entry = with(|state| {
+        state
+            .queue
+            .iter()
+            .find(|item| item.entry.id == id)
+            .map(|item| item.entry.clone())
+    });
+    if let Some(entry) = entry {
+        play(entry);
+    }
+}
+
 // Queue
 
 pub fn queue_current() {
@@ -3452,6 +3575,10 @@ fn delete_from_cache(entries: &[(Entry, String)]) {
 // Responses
 
 pub fn handle(response: Response) {
+    // The searches of the phone remote are not for any page.
+    let Some(response) = crate::remote::intercept(response) else {
+        return;
+    };
     let ui = ui::get();
     if let Some(summary) = response.summary() {
         crate::log::info!("response: {summary}");
