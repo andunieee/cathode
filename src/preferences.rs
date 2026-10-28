@@ -259,9 +259,62 @@ fn remote_page() -> adw::PreferencesPage {
     let group = adw::PreferencesGroup::builder().title("Remote").build();
     group.add(&switch);
     group.add(&pair);
+
+    let devices = adw::PreferencesGroup::builder()
+        .title("Paired phones")
+        .description("Each phone is known by its own key. Unpairing one locks out only that phone.")
+        .build();
+    let rows = std::rc::Rc::new(RefCell::new(Vec::new()));
+    fill_devices(&devices, &rows);
+    let weak = devices.downgrade();
+    remote::connect_changed(move || {
+        let Some(devices) = weak.upgrade() else {
+            return false;
+        };
+        fill_devices(&devices, &rows);
+        true
+    });
+
     let page = adw::PreferencesPage::new();
     page.add(&group);
+    page.add(&devices);
     page
+}
+
+/// Puts the rows of the paired phones in `group`, in place of the ones in `rows`.
+fn fill_devices(group: &adw::PreferencesGroup, rows: &RefCell<Vec<adw::ActionRow>>) {
+    for row in rows.borrow_mut().drain(..) {
+        group.remove(&row);
+    }
+    let devices = remote::devices();
+    if devices.is_empty() {
+        let row = adw::ActionRow::builder()
+            .title("No phones paired yet")
+            .css_classes(["dim-label"])
+            .build();
+        group.add(&row);
+        rows.borrow_mut().push(row);
+    }
+    for device in devices {
+        let paired = gtk::glib::DateTime::from_unix_local(device.paired)
+            .and_then(|time| time.format("%x"))
+            .map(|date| format!("Paired on {date}"))
+            .unwrap_or_default();
+        let row = adw::ActionRow::builder()
+            .title(format!("Phone {}", &device.key[..8.min(device.key.len())]))
+            .subtitle(paired)
+            .build();
+        let unpair = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Unpair")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        unpair.connect_clicked(move |_| remote::unpair(&device.key));
+        row.add_suffix(&unpair);
+        group.add(&row);
+        rows.borrow_mut().push(row);
+    }
 }
 
 fn pairing_dialog() -> adw::Dialog {
@@ -277,27 +330,30 @@ fn pairing_dialog() -> adw::Dialog {
         .css_classes(["caption", "monospace"])
         .max_width_chars(40)
         .build();
-    let show = {
-        let (picture, address) = (picture.clone(), address.clone());
-        move || {
-            let text = remote::address();
-            picture.set_paintable(remote::qr_code(&text).as_ref());
-            address.set_text(&text);
-        }
+    let show = |picture: &gtk::Picture, address: &gtk::Label| {
+        let text = remote::address();
+        picture.set_paintable(remote::qr_code(&text).as_ref());
+        address.set_text(&text);
     };
-    show();
+    show(&picture, &address);
+    // The code changes once a phone pairs with it.
+    let (weak_picture, weak_address) = (picture.downgrade(), address.downgrade());
+    remote::connect_changed(move || {
+        let (Some(picture), Some(address)) = (weak_picture.upgrade(), weak_address.upgrade())
+        else {
+            return false;
+        };
+        show(&picture, &address);
+        true
+    });
 
     let reset = gtk::Button::builder()
-        .label("Lock out the paired phones")
+        .label("New code")
         .halign(gtk::Align::Center)
-        .css_classes(["destructive-action"])
         .build();
-    reset.connect_clicked(move |_| {
-        remote::reset();
-        show();
-    });
+    reset.connect_clicked(|_| remote::new_code());
     let note = gtk::Label::builder()
-        .label("Anyone with this address can control Cathode. Keep it to yourself, and lock the phones out if it gets around: a new code is made and the old one stops working.")
+        .label("The code pairs one phone, then a new one is shown. Make a new code if this one got around: the old one stops working, and the paired phones stay paired.")
         .wrap(true)
         .max_width_chars(40)
         .css_classes(["dim-label"])

@@ -2,7 +2,7 @@
 //! hypereffect app, so any hyperb browser can render it. The state lives in Cathode, the app
 //! only turns what the phone does into `Command`s and what Cathode reports into signals.
 
-use hypereffect::{cel, json, ui, Action, Handler, Map, Outbox, Value};
+use hypereffect::{cel, json, ui, Action, Handler, Outbox, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::settings::QUALITIES;
@@ -51,7 +51,18 @@ impl RemoteApp {
         }
     }
 
-    pub fn hello(&mut self, out: &mut Outbox, _signals: &Map<String, Value>, status: &Status) {
+    /// What a phone that is not paired gets instead of the page.
+    pub fn unpaired(out: &mut Outbox) {
+        out.element(ui::column("main"));
+        out.element(ui::text("title").parent("main").variant("h3").text("This phone is not paired"));
+        out.element(
+            ui::text("how")
+                .parent("main")
+                .text("Open Remote Control in the settings of Cathode and scan the QR code."),
+        );
+    }
+
+    pub fn hello(&mut self, out: &mut Outbox, status: &Status) {
         out.signal(json!({
             "playing": false,
             "paused": true,

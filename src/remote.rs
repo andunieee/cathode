@@ -1,22 +1,25 @@
 //! Controlling Cathode from a phone. With the remote turned on, Cathode answers over iroh to
-//! hyperb browsers, which show the page of `remote_app`. The address of the page carries a secret
-//! in its query, `hyperb://<endpoint id>/?k=<secret>`, and since a query is part of the ALPN a
-//! connection without it fails before anything is said. Phones get the address from a QR code.
+//! hyperb browsers, which show the page of `remote_app`. Only paired phones get the page, known by
+//! the key they connect with. A phone pairs with the address of the QR code,
+//! `hyperb://<endpoint id>/#k=<code>`, whose code comes in the params of its `hello`. A code
+//! pairs one phone and is never kept: a new one is made when it is used and each time the server
+//! starts, so only the keys of the phones are saved.
 //!
 //! The server lives on a thread of its own, the player and the queue on the main one. Commands go
 //! over to the main thread, and the state of the player comes back as a snapshot that is sent to
 //! the phones that are connected.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use hypereffect::{LineBuffer, Outbox, RendererMessage};
-use iroh::endpoint::{presets, Incoming};
+use iroh::endpoint::{presets, Incoming, RecvStream};
 use iroh::{Endpoint, SecretKey};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -36,6 +39,8 @@ const KEY_PREFIX: &str = "remote:";
 const RESULTS: usize = 10;
 /// Results to remember, for the phone to add them to the queue.
 const REMEMBERED: usize = 200;
+/// How long a phone has to say hello before it is let go.
+const HELLO_WAIT: Duration = Duration::from_secs(10);
 
 /// What the player and the queue are up to.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -135,8 +140,17 @@ struct Config {
     enabled: bool,
     /// The secret key of the iroh endpoint, in hex. Its public key is the address of Cathode.
     secret: String,
-    /// What the address of the page asks for, in hex. Changing it locks the phones out.
-    token: String,
+    /// The phones let in.
+    devices: Vec<Device>,
+}
+
+/// A paired phone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Device {
+    /// The public key the phone connects with, in hex.
+    pub key: String,
+    /// When it paired, in seconds since the epoch.
+    pub paired: i64,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -170,16 +184,8 @@ impl Config {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
-        let mut changed = false;
         if unhex(&config.secret).is_none() {
             config.secret = hex(&SecretKey::generate().to_bytes());
-            changed = true;
-        }
-        if config.token.is_empty() {
-            config.token = random_hex(16);
-            changed = true;
-        }
-        if changed {
             config.save();
         }
         config
@@ -208,25 +214,21 @@ impl Config {
         SecretKey::from_bytes(&unhex(&self.secret).expect("checked on load"))
     }
 
-    fn address(&self) -> String {
-        format!("hyperb://{}/?k={}", self.secret_key().public(), self.token)
+    fn keys(&self) -> HashSet<String> {
+        self.devices.iter().map(|device| device.key.clone()).collect()
     }
 }
 
 /// What the server threads and the main one both reach.
 struct Shared {
-    /// The ALPN phones have to offer.
-    alpn: Mutex<Vec<u8>>,
-    /// The ALPN changed.
-    changed: Notify,
+    /// The code of the address in the QR code, good for pairing one phone.
+    code: Mutex<String>,
+    /// The keys of the paired phones. A phone is let go as soon as its key is taken out.
+    devices: watch::Sender<HashSet<String>>,
     status: watch::Sender<Status>,
     /// How many phones are connected.
     sessions: AtomicUsize,
     stop: Notify,
-}
-
-fn alpn(token: &str) -> Vec<u8> {
-    format!("{ALPN}?k={token}").into_bytes()
 }
 
 struct Pending {
@@ -253,6 +255,8 @@ struct Local {
     /// The videos of the latest searches by id, in the order they came.
     found: HashMap<String, Entry>,
     found_order: Vec<String>,
+    /// What to call when the code or the paired phones change, until it returns `false`.
+    listeners: Vec<Box<dyn Fn() -> bool>>,
 }
 
 thread_local! {
@@ -293,37 +297,89 @@ pub fn set_enabled(enabled: bool) {
     }
 }
 
-/// The address of the page, for the QR code.
+/// The address that pairs a phone, for the QR code. Empty while the remote is off.
 pub fn address() -> String {
-    with(|local| local.config.as_ref().map(Config::address).unwrap_or_default())
+    with(|local| {
+        let (Some(config), Some(shared)) = (&local.config, &local.shared) else {
+            return String::new();
+        };
+        let code = shared.code.lock().unwrap();
+        format!("hyperb://{}/#k={code}", config.secret_key().public())
+    })
 }
 
-/// Makes a new secret. The phones that had the old address can't connect anymore.
-pub fn reset() {
-    let token = random_hex(16);
+/// Makes a new code, the old address does not pair anymore. Paired phones stay paired.
+pub fn new_code() {
+    if let Some(shared) = with(|local| local.shared.clone()) {
+        *shared.code.lock().unwrap() = random_hex(16);
+    }
+    changed();
+}
+
+/// The paired phones, the latest last.
+pub fn devices() -> Vec<Device> {
+    with(|local| local.config.as_ref().map(|config| config.devices.clone()).unwrap_or_default())
+}
+
+/// Forgets a phone, and lets it go if it is connected.
+pub fn unpair(key: &str) {
     with(|local| {
         if let Some(config) = &mut local.config {
-            config.token = token.clone();
+            config.devices.retain(|device| device.key != key);
             config.save();
         }
         if let Some(shared) = &local.shared {
-            *shared.alpn.lock().unwrap() = alpn(&token);
-            shared.changed.notify_one();
+            shared.devices.send_modify(|keys| {
+                keys.remove(key);
+            });
         }
     });
+    changed();
+}
+
+/// Calls `listener` when the code or the paired phones change, until it returns `false`.
+pub fn connect_changed(listener: impl Fn() -> bool + 'static) {
+    with(|local| local.listeners.push(Box::new(listener)));
+}
+
+fn changed() {
+    // The listeners are called out of `LOCAL`, they read it.
+    let mut listeners = with(|local| std::mem::take(&mut local.listeners));
+    listeners.retain(|listener| listener());
+    with(|local| {
+        listeners.append(&mut local.listeners);
+        local.listeners = listeners;
+    });
+}
+
+/// Saves a phone that just paired, on the main thread.
+fn paired(key: String) {
+    with(|local| {
+        let Some(config) = &mut local.config else {
+            return;
+        };
+        if !config.devices.iter().any(|device| device.key == key) {
+            config.devices.push(Device {
+                key,
+                paired: glib::real_time() / 1_000_000,
+            });
+            config.save();
+        }
+    });
+    changed();
 }
 
 fn start() {
     if with(|local| local.shared.is_some()) {
         return;
     }
-    let (secret, token) = with(|local| {
+    let (secret, keys) = with(|local| {
         let config = local.config.as_ref().expect("initialized");
-        (config.secret_key(), config.token.clone())
+        (config.secret_key(), config.keys())
     });
     let shared = Arc::new(Shared {
-        alpn: Mutex::new(alpn(&token)),
-        changed: Notify::new(),
+        code: Mutex::new(random_hex(16)),
+        devices: watch::channel(keys).0,
         status: watch::channel(Status::default()).0,
         sessions: AtomicUsize::new(0),
         stop: Notify::new(),
@@ -514,10 +570,9 @@ pub fn intercept(response: Response) -> Option<Response> {
 }
 
 async fn serve(secret: SecretKey, shared: Arc<Shared>) {
-    let alpns = |shared: &Shared| vec![shared.alpn.lock().unwrap().clone()];
     let endpoint = match Endpoint::builder(presets::N0)
         .secret_key(secret)
-        .alpns(alpns(&shared))
+        .alpns(vec![ALPN.as_bytes().to_vec()])
         .bind()
         .await
     {
@@ -531,7 +586,6 @@ async fn serve(secret: SecretKey, shared: Arc<Shared>) {
     loop {
         tokio::select! {
             _ = shared.stop.notified() => break,
-            _ = shared.changed.notified() => endpoint.set_alpns(alpns(&shared)),
             incoming = endpoint.accept() => match incoming {
                 Some(incoming) => {
                     let shared = shared.clone();
@@ -565,53 +619,108 @@ impl Drop for Connected {
     }
 }
 
+/// Lets a phone in if it is paired, or pairs it if it has the code, which can't be used again.
+fn admit(shared: &Shared, key: &str, params: &BTreeMap<String, String>) -> bool {
+    if shared.devices.borrow().contains(key) {
+        return true;
+    }
+    let mut code = shared.code.lock().unwrap();
+    if params.get("k") != Some(&*code) {
+        return false;
+    }
+    *code = random_hex(16);
+    drop(code);
+    shared.devices.send_modify(|keys| {
+        keys.insert(key.to_owned());
+    });
+    let key = key.to_owned();
+    glib::MainContext::default().invoke(move || paired(key));
+    true
+}
+
+/// Reads up to the `hello`, for its params and the lines that came after it.
+async fn hello(
+    recv: &mut RecvStream,
+    input: &mut LineBuffer,
+) -> Result<(BTreeMap<String, String>, Vec<String>), String> {
+    let mut buffer = [0u8; 4096];
+    loop {
+        let count = recv
+            .read(&mut buffer)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("closed before the hello")?;
+        let mut lines = input.push(&buffer[..count]).into_iter();
+        while let Some(line) = lines.next() {
+            if let Ok(RendererMessage::Hello { params }) = RendererMessage::parse(&line) {
+                return Ok((params, lines.collect()));
+            }
+        }
+    }
+}
+
 async fn session(incoming: Incoming, shared: Arc<Shared>) -> Result<(), String> {
     let connection = incoming
         .accept()
         .map_err(|e| e.to_string())?
         .await
         .map_err(|e| e.to_string())?;
-    // The handshake only takes the ALPN listed when it started, this is for the one that was
-    // replaced since.
-    if connection.alpn() != shared.alpn.lock().unwrap().as_slice() {
-        return Err("outdated address".into());
-    }
+    let key = connection.remote_id().to_string();
     let (mut send, mut recv) = connection.accept_bi().await.map_err(|e| e.to_string())?;
-    crate::log::info!("a phone connected: {}", connection.remote_id());
+    let mut input = LineBuffer::new();
+    let (params, rest) = tokio::time::timeout(HELLO_WAIT, hello(&mut recv, &mut input))
+        .await
+        .map_err(|_| "no hello")??;
+    let mut out = Outbox::new();
+    if !admit(&shared, &key, &params) {
+        crate::log::info!("a phone that is not paired was turned away: {key}");
+        RemoteApp::unpaired(&mut out);
+        let _ = send.write_all(out.take().as_bytes()).await;
+        let _ = send.finish();
+        // Gives the page the time to get there before the connection goes.
+        let _ = tokio::time::timeout(HELLO_WAIT, send.stopped()).await;
+        return Ok(());
+    }
+    crate::log::info!("a phone connected: {key}");
     let _connected = Connected::new(shared.clone());
 
     let (replies, mut results) = unbounded_channel();
     let mut app = RemoteApp::new(replies);
     let mut statuses = shared.status.subscribe();
-    let mut input = LineBuffer::new();
-    let mut out = Outbox::new();
+    let mut devices = shared.devices.subscribe();
+    let status = statuses.borrow_and_update().clone();
+    app.hello(&mut out, &status);
+    let mut lines = rest;
     let mut buffer = [0u8; 16 * 1024];
     loop {
-        tokio::select! {
-            read = recv.read(&mut buffer) => {
-                let Ok(Some(count)) = read else { break };
-                for line in input.push(&buffer[..count]) {
-                    match RendererMessage::parse(&line) {
-                        Ok(RendererMessage::Hello { signals }) => {
-                            let status = statuses.borrow_and_update().clone();
-                            app.hello(&mut out, &signals, &status);
-                        }
-                        Ok(RendererMessage::Action(action)) => app.action(&mut out, &action),
-                        Err(_) => {}
-                    }
-                }
+        for line in lines.drain(..) {
+            if let Ok(RendererMessage::Action(action)) = RendererMessage::parse(&line) {
+                app.action(&mut out, &action);
             }
-            Ok(()) = statuses.changed() => {
-                let status = statuses.borrow_and_update().clone();
-                app.status(&mut out, &status);
-            }
-            Some(reply) = results.recv() => app.reply(&mut out, reply),
         }
         let text = out.take();
         if !text.is_empty() {
             send.write_all(text.as_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
+        }
+        tokio::select! {
+            read = recv.read(&mut buffer) => {
+                let Ok(Some(count)) = read else { break };
+                lines = input.push(&buffer[..count]);
+            }
+            Ok(()) = statuses.changed() => {
+                let status = statuses.borrow_and_update().clone();
+                app.status(&mut out, &status);
+            }
+            Ok(()) = devices.changed() => {
+                if !devices.borrow_and_update().contains(&key) {
+                    crate::log::info!("a phone was unpaired: {key}");
+                    connection.close(0u32.into(), b"unpaired");
+                    return Ok(());
+                }
+            }
+            Some(reply) = results.recv() => app.reply(&mut out, reply),
         }
     }
     let _ = send.finish();
