@@ -100,7 +100,12 @@ enum QueueState {
 struct QueueItem {
     entry: Entry,
     state: QueueState,
+    /// Played up to the last seconds, so it is taken out of the queue once the player moves on.
+    played_through: bool,
 }
+
+/// How close to the end a video has to be played to count as played through.
+const PLAYED_THROUGH_MARGIN: f64 = 10.0;
 
 struct State {
     requests: Option<UnboundedSender<Request>>,
@@ -1177,6 +1182,7 @@ pub fn mark_watched(entry: &Entry) {
     remove_suggestion(&entry.id);
     toast("Marked as watched");
     ui::refresh_watched();
+    drop_watched(&entry.id);
 }
 
 pub fn open_video(entry: Entry) {
@@ -1575,10 +1581,14 @@ pub fn play(entry: Entry) {
     crate::log::info!("playing {} ({})", entry.id, entry.title);
     let ui = ui::get();
     set_sidebar_toggle(&ui.queue_toggle, true);
-    with(|state| state.playing = Some(entry.clone()));
+    let previous = with(|state| state.playing.replace(entry.clone()));
     caption_options_changed();
     show_player(&entry);
     refresh_queue();
+    // Moving on from a video played through leaves it watched.
+    if let Some(previous) = previous.filter(|previous| previous.id != entry.id) {
+        drop_played_through(&previous.id);
+    }
 
     // The chapters come with the details.
     let key = Page::Video(entry.clone()).key();
@@ -1655,6 +1665,7 @@ fn restore_session() {
             .map(|entry| QueueItem {
                 entry,
                 state: QueueState::Waiting,
+                played_through: false,
             })
             .collect();
         state.positions = saved.positions;
@@ -1758,7 +1769,11 @@ pub fn toggle_pause() {
 /// Closes the player entirely, unlike pausing.
 pub fn stop_player() {
     crate::log::info!("stopping the player");
+    let playing = playing_id();
     unload_player();
+    if let Some(id) = playing {
+        drop_played_through(&id);
+    }
     save_session();
 }
 
@@ -2217,6 +2232,13 @@ pub fn tick() {
     ));
     if let Some(id) = ui.player.id() {
         refresh_queue_status(&id);
+        if duration > 0.0 && position >= duration - PLAYED_THROUGH_MARGIN {
+            with(|state| {
+                if let Some(item) = state.queue.iter_mut().find(|item| item.entry.id == id) {
+                    item.played_through = true;
+                }
+            });
+        }
     }
     // Don't fight the user dragging the slider.
     if duration > 0.0 && !ui.seek.state_flags().contains(gtk::StateFlags::ACTIVE) {
@@ -2232,10 +2254,14 @@ pub fn tick() {
     refresh_captions();
 
     if ui.player.take_ended() {
-        if let Some(id) = ui.player.id() {
-            with(|state| state.positions.remove(&id));
+        let id = ui.player.id();
+        if let Some(id) = &id {
+            with(|state| state.positions.remove(id));
         }
         play_next_in_queue();
+        if let Some(id) = &id {
+            drop_watched(id);
+        }
     }
 }
 
@@ -2463,6 +2489,7 @@ fn enqueue(entry: Entry) -> bool {
         state.queue.push(QueueItem {
             entry,
             state: QueueState::Waiting,
+            played_through: false,
         });
         true
     });
@@ -2537,6 +2564,29 @@ fn queue_remove(id: &str) {
         send(Request::Cancel { id: id.to_string() });
     }
     pump_queue();
+}
+
+/// Takes the video out of the queue if it was played through.
+fn drop_played_through(id: &str) {
+    let played_through = with(|state| {
+        state
+            .queue
+            .iter()
+            .any(|item| item.entry.id == id && item.played_through)
+    });
+    if played_through {
+        drop_watched(id);
+    }
+}
+
+/// Takes a video that was just watched out of the queue, if the settings say so.
+fn drop_watched(id: &str) {
+    if !settings::get().remove_played_from_queue {
+        return;
+    }
+    if with(|state| state.queue.iter().any(|item| item.entry.id == id)) {
+        queue_remove(id);
+    }
 }
 
 pub const CLEAR_QUEUE_LABEL: &str = "Clear queue";
@@ -2650,11 +2700,7 @@ fn refresh_queue_status(id: &str) {
     while let Some(row) = child {
         if row.widget_name() == id {
             if let Some(row) = row.downcast_ref::<adw::ActionRow>() {
-                let subtitle = if playing.as_deref() == Some(id) {
-                    format!("Playing · {status}")
-                } else {
-                    status
-                };
+                let subtitle = queue_subtitle(id, status, playing.as_deref());
                 // The clock calls this all the time, most of them change nothing.
                 if row.subtitle().as_deref() != Some(subtitle.as_str()) {
                     row.set_subtitle(&subtitle);
@@ -2666,12 +2712,23 @@ fn refresh_queue_status(id: &str) {
     }
 }
 
+/// The subtitle of a row of the queue: its status, after whether it is playing or was watched.
+fn queue_subtitle(id: &str, status: String, playing: Option<&str>) -> String {
+    if playing == Some(id) {
+        format!("Playing · {status}")
+    } else if history::is_watched(id) {
+        format!("Watched · {status}")
+    } else {
+        status
+    }
+}
+
 /// The video chosen to play, which may still be downloading, unlike the one loaded in the player.
 fn playing_id() -> Option<String> {
     with(|state| state.playing.as_ref().map(|entry| entry.id.clone()))
 }
 
-fn refresh_queue() {
+pub fn refresh_queue() {
     sync_queue_buttons();
     let ui = ui::get();
     while let Some(row) = ui.queue_list.first_child() {
@@ -2702,11 +2759,7 @@ fn refresh_queue() {
 
         let row = adw::ActionRow::builder()
             .title(&entry.title)
-            .subtitle(if is_playing {
-                format!("Playing · {status}")
-            } else {
-                status
-            })
+            .subtitle(queue_subtitle(&entry.id, status, playing.as_deref()))
             .title_lines(2)
             .use_markup(false)
             .activatable(true)
@@ -2733,6 +2786,8 @@ fn refresh_queue() {
 
         if is_playing {
             row.add_css_class("queue-playing");
+        } else if history::is_watched(&entry.id) {
+            row.add_css_class("dim-label");
         }
 
         let remove = gtk::Button::builder()

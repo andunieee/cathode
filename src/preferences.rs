@@ -118,6 +118,18 @@ fn general() -> adw::PreferencesPage {
         save(|s| s.skip_sponsors = active);
     });
 
+    let remove_played = adw::SwitchRow::builder()
+        .title("Remove played videos from the queue")
+        .subtitle("Once played to the end, otherwise they stay in it dimmed")
+        .active(current.remove_played_from_queue)
+        .build();
+    remove_played.connect_active_notify(|row| {
+        let active = row.is_active();
+        save(|s| s.remove_played_from_queue = active);
+    });
+    let queue = adw::PreferencesGroup::builder().title("Queue").build();
+    queue.add(&remove_played);
+
     let rate = entry_row(
         "Download speed limit",
         "Like 500K or 2M per second, empty for no limit",
@@ -225,6 +237,7 @@ fn general() -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     page.add(&languages);
     page.add(&downloads);
+    page.add(&queue);
     page.add(&network);
     page.add(&browser);
     page

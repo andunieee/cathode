@@ -472,6 +472,7 @@ thread_local! {
 
 /// Shows again whether each video in the lists was watched.
 pub fn refresh_watched() {
+    nav::refresh_queue();
     CARDS.with_borrow_mut(|cards| {
         cards.retain(|card| {
             let (Some(title), Some(details), Some(picture), Some(entry)) = (
