@@ -24,7 +24,7 @@ tar = "0.4.46"
 liblzma = "0.4.9"
 getrandom = "0.4"
 iroh = "1.3"
-hypereffect = "0.3"
+hypereffect = "0.4"
 qrcode = { version = "0.14", default-features = false }
 
 

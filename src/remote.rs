@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
-use hypereffect::{LineBuffer, Outbox, RendererMessage};
+use hypereffect::{LineBuffer, Metadata, Outbox, RendererMessage};
 use iroh::endpoint::{presets, Incoming, RecvStream};
 use iroh::{Endpoint, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,8 @@ use crate::remote_app::RemoteApp;
 const ALPN: &str = "hyperb/0";
 /// The keys of the listings that are searches of the phone, so `nav` leaves them alone.
 const KEY_PREFIX: &str = "remote:";
+/// The icon of the app at 48px, a PNG of 255 colors made from the SVG, for the metadata.
+const ICON: &str = "data:image/png;base64,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";
 /// How many results a search sends back.
 const RESULTS: usize = 10;
 /// How many results a search of what the restricted mode allows sends back.
@@ -719,6 +721,11 @@ async fn session(incoming: Incoming, shared: Arc<Shared>) -> Result<(), String> 
         .await
         .map_err(|_| "no hello")??;
     let mut out = Outbox::new();
+    out.metadata(
+        Metadata::new()
+            .name(format!("Cathode ({})", glib::host_name()))
+            .icon(ICON),
+    );
     if !admit(&shared, &key, &params) {
         crate::log::info!("a phone that is not paired was turned away: {key}");
         RemoteApp::unpaired(&mut out);
