@@ -15,6 +15,10 @@ use crate::fetch::Entry;
 pub struct State {
     pub queue_sidebar_open: bool,
     pub subscriptions_sidebar_open: bool,
+    /// The share of the window the queue sidebar was dragged to, none until it is.
+    pub queue_sidebar_fraction: Option<f64>,
+    /// The same, for when it floats over the page.
+    pub queue_overlay_fraction: Option<f64>,
     /// Whether the restricted mode is on.
     pub restricted: bool,
     /// The collection the Save button saves to.

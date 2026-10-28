@@ -2184,6 +2184,7 @@ fn show_fullscreen(fullscreen: bool) {
         content.set_visible(!fullscreen);
     }
     ui.queue_header.set_visible(!fullscreen);
+    ui.queue_handle.set_visible(!fullscreen);
     ui.queue_scroll.set_visible(!fullscreen);
 }
 
@@ -2894,6 +2895,11 @@ fn restore_sidebars() {
     let saved = state::get();
     set_sidebar_toggle(&ui.queue_toggle, saved.queue_sidebar_open);
     set_sidebar_toggle(&ui.subs_toggle, saved.subscriptions_sidebar_open);
+    let [docked, floating] = ui.queue_fractions.get();
+    ui.queue_fractions.set([
+        saved.queue_sidebar_fraction.unwrap_or(docked),
+        saved.queue_overlay_fraction.unwrap_or(floating),
+    ]);
 
     let remember = |toggle: &gtk::ToggleButton, change: fn(&mut state::State, bool)| {
         toggle.connect_toggled(move |toggle| {

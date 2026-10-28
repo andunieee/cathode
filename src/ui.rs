@@ -114,6 +114,10 @@ pub struct Ui {
     /// The queue sidebar, which takes the whole window in fullscreen.
     pub queue_split: adw::OverlaySplitView,
     pub queue_header: adw::HeaderBar,
+    /// The left edge of the queue sidebar, dragged to resize it.
+    pub queue_handle: gtk::Box,
+    /// The queue sidebar's share of the window when docked, and when floating over the page.
+    pub queue_fractions: Rc<Cell<[f64; 2]>>,
     pub queue_scroll: gtk::ScrolledWindow,
     /// Keeps the player in proportion, in the queue sidebar.
     pub player_frame: gtk::Box,
@@ -655,6 +659,8 @@ fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
 
 /// The queue sidebar's width when the window is small, and what it's reserved in the layout.
 const QUEUE_MIN_WIDTH: f64 = 360.0;
+/// How much of the window the queue sidebar can be dragged to take.
+const QUEUE_MAX_FRACTION: f64 = 0.9;
 
 pub fn build(app: &adw::Application) -> Rc<Ui> {
     let window = adw::ApplicationWindow::builder()
@@ -1456,16 +1462,89 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     queue_content.append(&player_frame);
     queue_bar.set_content(Some(&queue_content));
 
+    let queue_handle = gtk::Box::builder()
+        .width_request(6)
+        .halign(gtk::Align::Start)
+        .cursor(&gtk::gdk::Cursor::from_name("col-resize", None).unwrap())
+        .build();
+    let queue_sidebar = gtk::Overlay::new();
+    queue_sidebar.set_child(Some(&queue_bar));
+    queue_sidebar.add_overlay(&queue_handle);
+
     let split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::End)
         .collapsed(false)
         .show_sidebar(false)
         .min_sidebar_width(QUEUE_MIN_WIDTH)
-        .max_sidebar_width(480.0)
+        .max_sidebar_width(QUEUE_MIN_WIDTH)
         .sidebar_width_fraction(0.25)
-        .sidebar(&queue_bar)
+        .sidebar(&queue_sidebar)
         .content(&toolbar)
         .build();
+
+    // Dragging the handle sets the sidebar's share of the window, so it scales with it, separately
+    // for when it is docked and when it floats. The drag is followed on the split view: the handle
+    // itself moves as the sidebar grows.
+    let queue_fractions = Rc::new(Cell::new([0.25; 2]));
+    let resize = gtk::GestureDrag::new();
+    resize.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let start_width = Rc::new(Cell::new(0.0));
+    resize.connect_drag_begin({
+        let handle = queue_handle.clone();
+        let sidebar = queue_sidebar.clone();
+        let start_width = start_width.clone();
+        move |gesture, x, y| {
+            let Some(split) = gesture.widget() else {
+                return;
+            };
+            if split.pick(x, y, gtk::PickFlags::DEFAULT).as_ref() != Some(handle.upcast_ref()) {
+                gesture.set_state(gtk::EventSequenceState::Denied);
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            start_width.set(f64::from(sidebar.width()));
+        }
+    });
+    resize.connect_drag_update({
+        let split = split.clone();
+        let fractions = queue_fractions.clone();
+        let start_width = start_width.clone();
+        move |_, dx, _| {
+            let total = f64::from(split.width());
+            if total > 0.0 {
+                let floating = split.is_collapsed();
+                let limit = if floating {
+                    total * QUEUE_MAX_FRACTION
+                } else {
+                    split.max_sidebar_width()
+                };
+                let width =
+                    (start_width.get() - dx).clamp(QUEUE_MIN_WIDTH, limit.max(QUEUE_MIN_WIDTH));
+                let mut both = fractions.get();
+                both[floating as usize] = width / total;
+                fractions.set(both);
+                // A floating sidebar ignores the fraction and takes its maximum width.
+                if floating {
+                    split.set_max_sidebar_width(width);
+                } else {
+                    split.set_sidebar_width_fraction(width / total);
+                }
+            }
+        }
+    });
+    resize.connect_drag_end({
+        let fractions = queue_fractions.clone();
+        move |_, _, _| {
+            let [docked, floating] = fractions.get();
+            if let Err(error) = crate::state::update(|state| {
+                state.queue_sidebar_fraction = Some(docked);
+                state.queue_overlay_fraction = Some(floating);
+            }) {
+                crate::log::warning!("Cannot write the state: {error}");
+            }
+        }
+    });
+    split.add_controller(resize);
     queue_toggle
         .bind_property("active", &split, "show-sidebar")
         .bidirectional()
@@ -1552,6 +1631,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         let split = split.clone();
         let subs_split = subs_split.clone();
         let toolbar = toolbar.clone();
+        let fractions = queue_fractions.clone();
         move || {
             let width = f64::from(window.width());
             let content_min = f64::from(toolbar.measure(gtk::Orientation::Horizontal, -1).0);
@@ -1570,6 +1650,24 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
                 let shown = split.shows_sidebar();
                 split.set_collapsed(overflow);
                 split.set_show_sidebar(shown);
+            }
+            // The queue sidebar can be widened as far as the main content allows, or over most of
+            // the page when it floats. Not in fullscreen, where it already takes the whole window.
+            if toolbar.is_visible() {
+                let fraction = fractions.get()[overflow as usize];
+                let limit = (width * QUEUE_MAX_FRACTION).max(QUEUE_MIN_WIDTH);
+                // A floating sidebar ignores the fraction and takes its maximum width.
+                let max = if overflow {
+                    (width * fraction).clamp(QUEUE_MIN_WIDTH, limit)
+                } else {
+                    (width - content_min - subs).clamp(QUEUE_MIN_WIDTH, limit)
+                };
+                if split.max_sidebar_width() != max {
+                    split.set_max_sidebar_width(max);
+                }
+                if split.sidebar_width_fraction() != fraction {
+                    split.set_sidebar_width_fraction(fraction);
+                }
             }
         }
     };
@@ -1693,6 +1791,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         library,
         queue_split: split,
         queue_header,
+        queue_handle,
+        queue_fractions,
         queue_scroll,
         player_frame,
         player,
