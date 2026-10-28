@@ -318,14 +318,6 @@ pub fn address() -> String {
     })
 }
 
-/// Makes a new code, the old address does not pair anymore. Paired phones stay paired.
-pub fn new_code() {
-    if let Some(shared) = with(|local| local.shared.clone()) {
-        *shared.code.lock().unwrap() = random_hex(16);
-    }
-    changed();
-}
-
 /// The paired phones, the latest last.
 pub fn devices() -> Vec<Device> {
     with(|local| local.config.as_ref().map(|config| config.devices.clone()).unwrap_or_default())

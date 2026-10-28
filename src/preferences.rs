@@ -85,8 +85,23 @@ fn entry_row(
         .show_apply_button(true)
         .tooltip_text(subtitle)
         .build();
+    // The apply button is internal to the row, give it the hand cursor too.
+    point_buttons(&row);
     row.connect_apply(move |row| on_apply(row.text().trim().to_string()));
     row
+}
+
+/// Sets the hand cursor on every button inside `widget`, the ones libadwaita keeps to itself
+/// included.
+fn point_buttons(widget: &impl IsA<gtk::Widget>) {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.is::<gtk::Button>() {
+            current.set_cursor(Some(&crate::ui::pointer()));
+        }
+        point_buttons(&current);
+        child = current.next_sibling();
+    }
 }
 
 fn general() -> adw::PreferencesPage {
@@ -95,6 +110,7 @@ fn general() -> adw::PreferencesPage {
     let quality = adw::ComboRow::builder()
         .title("Maximum quality")
         .subtitle("The best video resolution to download")
+        .cursor(&crate::ui::pointer())
         .model(&gtk::StringList::new(&QUALITIES.map(|(_, label)| label)))
         .selected(
             QUALITIES
@@ -111,6 +127,7 @@ fn general() -> adw::PreferencesPage {
     let sponsors = adw::SwitchRow::builder()
         .title("Skip sponsor segments")
         .subtitle("Jumps over the sponsored parts while playing (SponsorBlock)")
+        .cursor(&crate::ui::pointer())
         .active(current.skip_sponsors)
         .build();
     sponsors.connect_active_notify(|row| {
@@ -121,6 +138,7 @@ fn general() -> adw::PreferencesPage {
     let remove_played = adw::SwitchRow::builder()
         .title("Remove played videos from the queue")
         .subtitle("Once mostly played, otherwise they stay in it dimmed")
+        .cursor(&crate::ui::pointer())
         .active(current.remove_played_from_queue)
         .build();
     remove_played.connect_active_notify(|row| {
@@ -162,6 +180,7 @@ fn general() -> adw::PreferencesPage {
     let cookies = adw::ComboRow::builder()
         .title("Cookies from browser")
         .subtitle(COOKIES_SUBTITLE)
+        .cursor(&crate::ui::pointer())
         .model(&gtk::StringList::new(&browsers))
         .selected(saved_position())
         .build();
@@ -208,6 +227,7 @@ fn general() -> adw::PreferencesPage {
 
     let browser_button = gtk::Button::builder()
         .label("Set up")
+        .cursor(&crate::ui::pointer())
         .valign(gtk::Align::Center)
         .build();
     browser_button.connect_clicked(|button| match extension::install() {
@@ -248,10 +268,12 @@ fn remote_page() -> adw::PreferencesPage {
     let switch = adw::SwitchRow::builder()
         .title("Phone remote")
         .subtitle("Play, pause, search and manage the queue from a phone with a hyperb browser")
+        .cursor(&crate::ui::pointer())
         .active(remote::enabled())
         .build();
     let pair_button = gtk::Button::builder()
         .label("Show QR code")
+        .cursor(&crate::ui::pointer())
         .valign(gtk::Align::Center)
         .sensitive(remote::enabled())
         .build();
@@ -320,6 +342,7 @@ fn fill_devices(group: &adw::PreferencesGroup, rows: &RefCell<Vec<adw::ActionRow
         let unpair = gtk::Button::builder()
             .icon_name("user-trash-symbolic")
             .tooltip_text("Unpair")
+            .cursor(&crate::ui::pointer())
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .build();
@@ -360,13 +383,8 @@ fn pairing_dialog() -> adw::Dialog {
         true
     });
 
-    let reset = gtk::Button::builder()
-        .label("New code")
-        .halign(gtk::Align::Center)
-        .build();
-    reset.connect_clicked(|_| remote::new_code());
     let note = gtk::Label::builder()
-        .label("The code pairs one phone, then a new one is shown. Make a new code if this one got around: the old one stops working, and the paired phones stay paired.")
+        .label("The code pairs one phone, then a new one is shown. The old one stops working, and the paired phones stay paired.")
         .wrap(true)
         .max_width_chars(40)
         .css_classes(["dim-label"])
@@ -380,7 +398,6 @@ fn pairing_dialog() -> adw::Dialog {
     content.append(&picture);
     content.append(&address);
     content.append(&note);
-    content.append(&reset);
 
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
@@ -414,6 +431,7 @@ fn link_row(title: &str, uri: String) -> adw::ActionRow {
         .title(title)
         .subtitle(&uri)
         .activatable(true)
+        .cursor(&crate::ui::pointer())
         .build();
     row.add_suffix(&gtk::Image::from_icon_name("adw-external-link-symbolic"));
     row.connect_activated(move |row| {
@@ -448,6 +466,7 @@ fn about() -> adw::PreferencesPage {
     let details = adw::ActionRow::builder()
         .title("About Cathode")
         .activatable(true)
+        .cursor(&crate::ui::pointer())
         .build();
     details.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     details.connect_activated(|row| about_dialog().present(Some(row)));
@@ -486,7 +505,10 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
         content.set_margin_bottom(8);
         content.append(&gtk::Image::from_icon_name(icon));
         content.append(&gtk::Label::new(Some(title)));
-        let row = gtk::ListBoxRow::builder().child(&content).build();
+        let row = gtk::ListBoxRow::builder()
+            .child(&content)
+            .cursor(&crate::ui::pointer())
+            .build();
         row.set_widget_name(name);
         sidebar.append(&row);
     }
