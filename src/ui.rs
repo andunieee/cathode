@@ -128,6 +128,12 @@ pub struct Ui {
     /// A quick message at the top of the video, like the volume after changing it.
     pub player_message: gtk::Label,
     pub player_message_timer: RefCell<Option<glib::SourceId>>,
+    /// The bar under the video, faded out when the mouse hasn't moved over it for a while.
+    pub player_controls: gtk::Box,
+    /// Tells whether the pointer is on the bar, which keeps it shown.
+    pub player_controls_hover: gtk::EventControllerMotion,
+    pub player_controls_timer: RefCell<Option<glib::SourceId>>,
+    pub player_settings: gtk::MenuButton,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
     /// Paints the sponsor segments over the seek bar.
@@ -1373,6 +1379,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons_row.append(&fullscreen);
     let player_controls = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_controls.add_css_class("osd");
+    player_controls.add_css_class("player-controls");
     player_controls.set_halign(gtk::Align::Fill);
     player_controls.set_valign(gtk::Align::End);
     player_controls.set_margin_bottom(8);
@@ -1389,11 +1396,24 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     });
     player.area.add_controller(click);
 
+    let player_controls_hover = gtk::EventControllerMotion::new();
+    player_controls.add_controller(player_controls_hover.clone());
+    // Moving the mouse over the video brings the bar back. Only real moves count: GTK also
+    // reports the pointer where it already was, when what's under it changes.
+    let motion = gtk::EventControllerMotion::new();
+    let last_position = Cell::new((f64::NAN, f64::NAN));
+    motion.connect_motion(move |_, x, y| {
+        if last_position.replace((x, y)) != (x, y) {
+            nav::show_player_controls();
+        }
+    });
+
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&player.area));
     overlay.add_overlay(&player_status);
     overlay.add_overlay(&player_message);
     overlay.add_overlay(&player_controls);
+    overlay.add_controller(motion);
     // Not a `gtk::AspectFrame`: that one lays its child out at the wrong place in GTK 4.20.
     let player_frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_frame.append(&overlay);
@@ -1809,6 +1829,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         player_status,
         player_message,
         player_message_timer: RefCell::new(None),
+        player_controls,
+        player_controls_hover,
+        player_controls_timer: RefCell::new(None),
+        player_settings,
         play_button,
         seek,
         seek_marks,

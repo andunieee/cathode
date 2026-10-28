@@ -262,6 +262,45 @@ pub fn player_message(message: &str) {
     *ui.player_message_timer.borrow_mut() = Some(timer);
 }
 
+/// Shows the bar under the video and the mouse pointer, and hides them again after a while without
+/// the mouse moving.
+pub fn show_player_controls() {
+    let ui = ui::get();
+    ui.player_controls.remove_css_class("faded");
+    ui.player_controls.set_can_target(true);
+    ui.player_frame.set_cursor(None);
+    if let Some(timer) = ui.player_controls_timer.borrow_mut().take() {
+        timer.remove();
+    }
+    let timer = glib::timeout_add_seconds_local_once(2, || {
+        let ui = ui::get();
+        ui.player_controls_timer.borrow_mut().take();
+        // Kept while paused, while the pointer is on it, and while one of its menus is open.
+        let menus = [
+            &ui.volume,
+            &ui.captions_button,
+            &ui.chapters_button,
+            &ui.player_settings,
+        ];
+        // The dropdown doesn't say whether it's open, but its list is a popover among its children.
+        let speed_open = std::iter::successors(ui.speed.first_child(), |child| child.next_sibling())
+            .any(|child| child.is::<gtk::Popover>() && child.is_visible());
+        if ui.player.is_paused()
+            || ui.player_controls_hover.contains_pointer()
+            || menus.iter().any(|menu| menu.is_active())
+            || speed_open
+        {
+            return;
+        }
+        ui.player_controls.add_css_class("faded");
+        // Clicks go to the video, not to the invisible buttons.
+        ui.player_controls.set_can_target(false);
+        // The mouse pointer goes away with it, over the video only.
+        ui.player_frame.set_cursor_from_name(Some("none"));
+    });
+    *ui.player_controls_timer.borrow_mut() = Some(timer);
+}
+
 /// "3:21  ·  1.2M views"
 pub fn details(entry: &Entry) -> String {
     let mut details = Vec::new();
@@ -1805,6 +1844,7 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     if paused {
         ui.player.set_paused(true);
     }
+    show_player_controls();
     with(|state| {
         if state.pending_seek.as_ref().map(|(id, _)| id) != Some(&entry.id) {
             state.chapter_stop = None;
@@ -1849,6 +1889,7 @@ pub fn toggle_pause() {
         crate::log::info!("paused: {}", ui.player.is_paused());
         save_session();
         tick();
+        show_player_controls();
     }
 }
 
