@@ -197,12 +197,9 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
             || widget.is::<gtk::DropDown>()
             || widget.is::<gtk::Popover>()
     });
-    let activates = focus.as_ref().is_some_and(|widget| {
-        widget.is::<gtk::Button>() || widget.is::<gtk::Scale>() || widget.is::<gtk::DropDown>()
-    });
 
+    // The spacebar pauses wherever the focus is, the focused widget can be pressed with enter.
     match key {
-        gdk::Key::space if activates => return false,
         gdk::Key::space | gdk::Key::p | gdk::Key::P => nav::toggle_pause(),
         gdk::Key::f | gdk::Key::F => nav::toggle_fullscreen(),
         gdk::Key::m | gdk::Key::M => nav::toggle_mute(),
@@ -1266,8 +1263,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
     stop_button.connect_clicked(|_| nav::stop_player());
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
-    // Kept from taking the focus, or the spacebar would press it again instead of pausing.
-    fullscreen.set_focus_on_click(false);
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
     // The settings of the player
