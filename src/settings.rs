@@ -41,7 +41,7 @@ pub struct Settings {
     pub skip_sponsors: bool,
     /// Hides the seek bar of the player.
     pub hide_progress_bar: bool,
-    /// Takes the videos played to the end out of the queue, instead of leaving them dimmed.
+    /// Takes the videos played through out of the queue, instead of leaving them dimmed.
     pub remove_played_from_queue: bool,
     /// The language the titles of the listings and the subtitles are wanted in, like `en` or
     /// `pt-BR`. Empty for what YouTube gives by default.

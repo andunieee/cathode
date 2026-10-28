@@ -120,7 +120,7 @@ fn general() -> adw::PreferencesPage {
 
     let remove_played = adw::SwitchRow::builder()
         .title("Remove played videos from the queue")
-        .subtitle("Once played to the end, otherwise they stay in it dimmed")
+        .subtitle("Once mostly played, otherwise they stay in it dimmed")
         .active(current.remove_played_from_queue)
         .build();
     remove_played.connect_active_notify(|row| {

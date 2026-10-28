@@ -100,12 +100,12 @@ enum QueueState {
 struct QueueItem {
     entry: Entry,
     state: QueueState,
-    /// Played up to the last seconds, so it is taken out of the queue once the player moves on.
+    /// Played past [`WATCHED_FRACTION`], so it is taken out of the queue once the player moves on.
     played_through: bool,
 }
 
-/// How close to the end a video has to be played to count as played through.
-const PLAYED_THROUGH_MARGIN: f64 = 10.0;
+/// How much of a video has to be played for it to count as watched.
+const WATCHED_FRACTION: f64 = 0.9;
 
 struct State {
     requests: Option<UnboundedSender<Request>>,
@@ -141,6 +141,9 @@ struct State {
     progress: HashMap<String, f64>,
     /// The video in the player, which may still be downloading.
     playing: Option<Entry>,
+    /// The video in the player once it was played past [`WATCHED_FRACTION`], so it is only
+    /// recorded as watched once.
+    watched_through: Option<String>,
     /// Video the player is waiting for to be downloaded.
     awaiting_play: Option<String>,
     /// The video to load paused, when restoring the last session.
@@ -200,6 +203,7 @@ thread_local! {
         switching: None,
         progress: HashMap::new(),
         playing: None,
+        watched_through: None,
         awaiting_play: None,
         start_paused: None,
         pending_saves: HashMap::new(),
@@ -1581,7 +1585,10 @@ pub fn play(entry: Entry) {
     crate::log::info!("playing {} ({})", entry.id, entry.title);
     let ui = ui::get();
     set_sidebar_toggle(&ui.queue_toggle, true);
-    let previous = with(|state| state.playing.replace(entry.clone()));
+    let previous = with(|state| {
+        state.watched_through = None;
+        state.playing.replace(entry.clone())
+    });
     caption_options_changed();
     show_player(&entry);
     refresh_queue();
@@ -1733,15 +1740,6 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
                 id: entry.id.clone(),
             });
         }
-    }
-    // Files from the command line aren't YouTube videos.
-    if !entry.url.is_empty() {
-        if let Err(error) = history::record(entry) {
-            crate::log::warning!("Cannot write the history: {error}");
-        }
-        suggestions::watched(&entry.id);
-        remove_suggestion(&entry.id);
-        suggest_next();
     }
     ui.player_status.set_visible(false);
     ui.play_button.set_icon_name(if paused {
@@ -2232,12 +2230,8 @@ pub fn tick() {
     ));
     if let Some(id) = ui.player.id() {
         refresh_queue_status(&id);
-        if duration > 0.0 && position >= duration - PLAYED_THROUGH_MARGIN {
-            with(|state| {
-                if let Some(item) = state.queue.iter_mut().find(|item| item.entry.id == id) {
-                    item.played_through = true;
-                }
-            });
+        if duration > 0.0 && position >= duration * WATCHED_FRACTION {
+            watched_through(&id);
         }
     }
     // Don't fight the user dragging the slider.
@@ -2564,6 +2558,32 @@ fn queue_remove(id: &str) {
         send(Request::Cancel { id: id.to_string() });
     }
     pump_queue();
+}
+
+/// The video in the player was played far enough to count as watched.
+fn watched_through(id: &str) {
+    let entry = with(|state| {
+        if state.watched_through.as_deref() == Some(id) {
+            return None;
+        }
+        state.watched_through = Some(id.to_string());
+        if let Some(item) = state.queue.iter_mut().find(|item| item.entry.id == id) {
+            item.played_through = true;
+        }
+        state.playing.clone().filter(|entry| entry.id == id)
+    });
+    // Files from the command line aren't YouTube videos.
+    let Some(entry) = entry.filter(|entry| !entry.url.is_empty()) else {
+        return;
+    };
+    crate::log::info!("{} was watched", entry.id);
+    if let Err(error) = history::record(&entry) {
+        crate::log::warning!("Cannot write the history: {error}");
+    }
+    suggestions::watched(&entry.id);
+    remove_suggestion(&entry.id);
+    suggest_next();
+    ui::refresh_watched();
 }
 
 /// Takes the video out of the queue if it was played through.
