@@ -13,7 +13,8 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Search YouTube, with thumbnails, and the matching channels shown above the videos
 - Titles in lists in the default language you choose, instead of YouTube's English ones
 - Sort by relevance or date, and filter the results
-- Paste a YouTube link to open the video directly
+- Paste a YouTube link to open the video directly, or a YouTube channel or playlist link
+- Right-click a video in any list to play it, queue it, mark it as watched or not, see related videos, save it or allow it in restricted mode
 
 ## Video pages
 ![A video page](assets/video.jpg)
@@ -25,12 +26,26 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ## Queue and player
 ![The queue and the player](assets/player.jpg)
 
-- A queue next to the player on every page, with downloads in progress shown in it
-- Playback moves on to the next video by itself
+- A queue next to the player on every page, with downloads in progress and where you left off each video shown in it
+- Drag the edge of the queue to make it wider or narrower
+- Playback moves on to the next video by itself, and videos played to the end leave the queue (or stay in it, dimmed, if you turn that off in the settings)
 - Drag videos to reorder the queue
 - Picks up where you left off when you reopen the app
-- Seekbar, playback speed, volume and fullscreen
+- Seekbar, playback speed, volume and fullscreen, with the controls and the mouse pointer hidden after 2 seconds without moving the mouse over the video
 - Subtitles in your default language and in the language of the video, automatic captions included, switched in the player settings, with the CC button or with `C`
+- Works offline, as long as you have downloaded the videos first (which happens automatically as soon as they're added to the queue)
+
+## Remote control
+<img src="assets/remote.jpg" alt="The remote control in hyperb on a phone" width="270" align="right">
+
+- Control Cathode from your phone with an [iroh](https://iroh.computer)-powered [hyperb](https://github.com/andunieee/hyperb) interface: no accounts needed and super secure, works over the internet or offline in the same network
+- Turn it on in Settings → Remote Control and scan the QR code with hyperb. Each code pairs one phone, and paired phones are listed there and can be unpaired one by one
+- What is playing, with play/pause, stop, previous and next, volume, speed, video quality, captions and chapters
+- The queue, to jump to any video in it
+- Search YouTube and add videos to the queue, or add them from your subscriptions feed
+- Turn the restricted mode on or off (with its password, if it has one), and search what it allows
+
+<br clear="right">
 
 ## Links from the browser
 - Cathode handles `cathode://play/?url=<YouTube link>` links, and opens a running window instead of a new one
@@ -49,6 +64,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ![The library sidebar](assets/library.jpg)
 
 - Subscribe to channels without an account, and see their latest videos on the home page
+- A Suggestions tab on the home page, ranking the videos YouTube suggests next to the ones you watched, which you can dismiss one by one
 - Keep videos you like in collections, or import a folder of videos you already have
 
 ## Downloads
@@ -68,7 +84,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ## And also
 - `cathode --profile NAME` runs a separate Cathode with its own settings, history, downloads and cache, which can be open alongside the default one
 - Back and forward navigation, with Alt+Left/Right and the mouse buttons
-- Watch history
+- Watch history, with watched videos dimmed in the lists once 90% of them was played, and a right-click to mark them as watched or not
 - Settings for download quality, sponsor segment skipping, speed limit, proxy and browser cookies for age-restricted videos
 
 # Installation
