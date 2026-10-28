@@ -1260,6 +1260,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
     stop_button.connect_clicked(|_| nav::stop_player());
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
+    // Kept from taking the focus, or the spacebar would press it again instead of pausing.
+    fullscreen.set_focus_on_click(false);
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
     // The settings of the player

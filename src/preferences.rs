@@ -336,7 +336,7 @@ fn fill_devices(group: &adw::PreferencesGroup, rows: &RefCell<Vec<adw::ActionRow
             .map(|date| format!("Paired on {date}"))
             .unwrap_or_default();
         let row = adw::ActionRow::builder()
-            .title(format!("Phone {}", &device.key[..8.min(device.key.len())]))
+            .title(format!("Device {}", &device.key[..8.min(device.key.len())]))
             .subtitle(paired)
             .build();
         let unpair = gtk::Button::builder()
