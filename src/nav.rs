@@ -9,6 +9,7 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::allowed;
 use crate::cache;
 use crate::collections;
 use crate::controls;
@@ -56,6 +57,10 @@ enum Page {
     Cache,
     History,
     Collection(String),
+    /// A search of what the restricted mode allows.
+    Allowed {
+        query: String,
+    },
 }
 
 impl Page {
@@ -78,6 +83,7 @@ impl Page {
             Page::Cache => "cache".to_string(),
             Page::History => "history".to_string(),
             Page::Collection(name) => format!("collection:{name}"),
+            Page::Allowed { query } => format!("a:{query}"),
         }
     }
 }
@@ -160,6 +166,8 @@ struct State {
     sidebar_widths: Option<(f64, f64)>,
     /// Where to pause, when the playback started from a chapter.
     chapter_stop: Option<f64>,
+    /// The search of what the restricted mode allows that is running, and the key of its page.
+    allowed_search: Option<(u64, String)>,
     /// The sponsor segments of the videos looked up, `(start, end)` in seconds. Videos without
     /// any are there too, with an empty list.
     segments: HashMap<String, Vec<(f64, f64)>>,
@@ -185,6 +193,7 @@ thread_local! {
         pending_seek: None,
         positions: HashMap::new(),
         chapter_stop: None,
+        allowed_search: None,
         segments: HashMap::new(),
         segment_lookups: HashSet::new(),
         sidebar_widths: None,
@@ -685,7 +694,7 @@ fn page_allowed(page: &Page) -> bool {
     }
 
     match page {
-        Page::Home => true,
+        Page::Home | Page::Allowed { .. } => true,
         Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache | Page::History => {
             false
         }
@@ -988,6 +997,12 @@ fn show() {
             ui.stack.set_visible_child_name("collection");
             library::show_collection(&name);
         }
+        Page::Allowed { query } => {
+            ui.channel_header.set_visible(false);
+            ui.channel_link.set(None);
+            ui.allowed_entry.set_text(&query);
+            show_allowed(key, &query);
+        }
     }
 
     update_allow_buttons();
@@ -1005,7 +1020,10 @@ fn navigate(page: Page) {
         let key = page.key();
         if state.history[state.index].key() == key {
             // Repeating a search refreshes it, anything else is already on screen.
-            let reload = matches!(page, Page::Search { .. } | Page::Cache | Page::History);
+            let reload = matches!(
+                page,
+                Page::Search { .. } | Page::Allowed { .. } | Page::Cache | Page::History
+            );
             if reload {
                 state.listings.remove(&key);
             }
@@ -1124,6 +1142,76 @@ fn youtube_link(query: &str) -> Option<Input> {
     (lower.contains("youtube.com/") || lower.contains("youtu.be/"))
         .then(|| crate::profile::parse_input(query))
         .flatten()
+}
+
+/// Searches what the restricted mode allows.
+pub fn search_allowed(query: &str) {
+    let query = query.trim();
+    if !query.is_empty() {
+        navigate(Page::Allowed {
+            query: query.to_string(),
+        });
+    }
+}
+
+/// Shows the results of a search of what the restricted mode allows, as they are found.
+fn show_allowed(key: String, query: &str) {
+    let ui = ui::get();
+    ui.stack.set_visible_child_name("results");
+    ui.store.remove_all();
+    show_channel_results(&[]);
+
+    let cached = with(|state| state.listings.get(&key).map(|listing| listing.entries.clone()));
+    if let Some(entries) = cached {
+        append_entries(&ui, &entries);
+        update_results_status(&key);
+        return;
+    }
+
+    // Only one search runs, one left behind would never be done.
+    if let Some((id, old)) = with(|state| state.allowed_search.take()) {
+        allowed::cancel(id);
+        with(|state| {
+            if state.listings.get(&old).is_some_and(|listing| !listing.done) {
+                state.listings.remove(&old);
+            }
+        });
+    }
+    with(|state| {
+        state.listings.insert(
+            key.clone(),
+            Listing {
+                entries: Vec::new(),
+                channels: Vec::new(),
+                done: false,
+            },
+        )
+    });
+    update_results_status(&key);
+    let sink_key = key.clone();
+    let id = allowed::start(
+        query,
+        Box::new(move |entries, done| {
+            let key = &sink_key;
+            with(|state| {
+                if let Some(listing) = state.listings.get_mut(key) {
+                    listing.entries.extend(entries.iter().cloned());
+                    listing.done = done;
+                }
+                if done && state.allowed_search.as_ref().is_some_and(|(_, k)| k == key) {
+                    state.allowed_search = None;
+                }
+            });
+            if current().key() == *key {
+                append_entries(&ui::get(), &entries);
+                update_results_status(key);
+            }
+        }),
+    );
+    // A search that found everything at once is done already.
+    if !with(|state| state.listings.get(&key).is_some_and(|listing| listing.done)) {
+        with(|state| state.allowed_search = Some((id, key)));
+    }
 }
 
 pub fn search_channel(query: &str) {
@@ -2303,7 +2391,14 @@ pub fn remote_status() -> crate::remote::Status {
     } else {
         subscriptions::feed().iter().take(30).map(crate::remote::hit).collect()
     };
-    let listed = profile::read(|p| p.videos.iter().map(|video| video.id.clone()).collect());
+    let chapters = ui
+        .player
+        .id()
+        .map(|id| chapters_of(&id))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|chapter| (chapter.title, chapter.start))
+        .collect();
     with(|state| crate::remote::Status {
         feed,
         volume,
@@ -2311,9 +2406,9 @@ pub fn remote_status() -> crate::remote::Status {
         size,
         captions,
         caption,
+        chapters,
         restricted: profile::restricted(),
         locked: profile::has_password(),
-        listed,
         playing: state.playing.as_ref().map(|entry| entry.id.clone()),
         title: state.playing.as_ref().map(|entry| entry.title.clone()).unwrap_or_default(),
         channel: state.playing.as_ref().map(|entry| entry.channel.clone()).unwrap_or_default(),
@@ -3658,6 +3753,10 @@ fn delete_from_cache(entries: &[(Entry, String)]) {
 pub fn handle(response: Response) {
     // The searches of the phone remote are not for any page.
     let Some(response) = crate::remote::intercept(response) else {
+        return;
+    };
+    // Nor are the listings of the searches of what the restricted mode allows.
+    let Some(response) = crate::allowed::intercept(response) else {
         return;
     };
     let ui = ui::get();

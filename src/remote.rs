@@ -26,6 +26,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::{watch, Notify};
 
 use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source};
+use crate::allowed;
 use crate::nav;
 use crate::profile;
 use crate::subscriptions;
@@ -37,6 +38,8 @@ const ALPN: &str = "hyperb/0";
 const KEY_PREFIX: &str = "remote:";
 /// How many results a search sends back.
 const RESULTS: usize = 10;
+/// How many results a search of what the restricted mode allows sends back.
+const ALLOWED_RESULTS: usize = 50;
 /// Results to remember, for the phone to add them to the queue.
 const REMEMBERED: usize = 200;
 /// How long a phone has to say hello before it is let go.
@@ -64,12 +67,12 @@ pub struct Status {
     pub captions: Vec<(i64, String)>,
     /// The id of the caption track shown, `-1` when there is none.
     pub caption: i64,
+    /// The chapters of the video, by title and start.
+    pub chapters: Vec<(String, f64)>,
     /// Whether the restricted mode is on.
     pub restricted: bool,
     /// Whether a password guards the restricted mode.
     pub locked: bool,
-    /// The ids of the videos added to the restricted mode.
-    pub listed: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,10 +94,14 @@ pub struct Hit {
 
 /// What a phone is told besides the status.
 pub enum Reply {
-    /// The results of a search, for the page of the search or the one of the restricted mode.
-    Results {
-        manage: bool,
-        result: Result<Vec<Hit>, String>,
+    /// The results of a search.
+    Results(Result<Vec<Hit>, String>),
+    /// More results of the search of what the restricted mode allows numbered `search`, and
+    /// whether that was all of them.
+    Allowed {
+        search: u64,
+        hits: Vec<Hit>,
+        done: bool,
     },
     /// Something the phone asked could not be done.
     Failed(String),
@@ -111,8 +118,12 @@ pub enum Command {
     Add(String),
     Search {
         query: String,
-        /// The search is for adding videos to the restricted mode, not for the queue.
-        manage: bool,
+        reply: UnboundedSender<Reply>,
+    },
+    /// Searches what the restricted mode allows. `search` is echoed back in the replies.
+    SearchAllowed {
+        query: String,
+        search: u64,
         reply: UnboundedSender<Reply>,
     },
     /// The volume from 0 to 1.
@@ -122,14 +133,14 @@ pub enum Command {
     Size(u32),
     /// Shows a caption track, `-1` for none.
     Caption(i64),
+    /// Plays a chapter of the video, by its index.
+    Chapter(usize),
     /// Turns the restricted mode on or off.
     SetRestricted {
         on: bool,
         password: String,
         reply: UnboundedSender<Reply>,
     },
-    /// Adds a video of the last searches to the restricted mode, or takes it out of it.
-    Allow(String),
     /// Sends the status again, a phone just connected.
     Refresh,
 }
@@ -233,16 +244,12 @@ struct Shared {
 
 struct Pending {
     reply: UnboundedSender<Reply>,
-    manage: bool,
     hits: Vec<Hit>,
 }
 
 impl Pending {
     fn finish(self, result: Result<Vec<Hit>, String>) {
-        let _ = self.reply.send(Reply::Results {
-            manage: self.manage,
-            result,
-        });
+        let _ = self.reply.send(Reply::Results(result));
     }
 }
 
@@ -252,6 +259,9 @@ struct Local {
     shared: Option<Arc<Shared>>,
     searches: HashMap<String, Pending>,
     searched: u64,
+    /// The search of what the restricted mode allows running for each phone, by the sender of its
+    /// replies.
+    allowed: Vec<(UnboundedSender<Reply>, u64)>,
     /// The videos of the latest searches by id, in the order they came.
     found: HashMap<String, Entry>,
     found_order: Vec<String>,
@@ -449,14 +459,7 @@ fn run(command: Command) {
         Command::Speed(speed) => nav::remote_speed(speed),
         Command::Size(height) => nav::set_size(height),
         Command::Caption(id) => nav::remote_caption(id),
-        Command::Allow(id) => {
-            if profile::restricted() {
-                return;
-            }
-            if let Some(entry) = with(|local| local.found.get(&id).cloned()) {
-                nav::toggle_video_allowed(entry);
-            }
-        }
+        Command::Chapter(index) => nav::play_playing_chapter(index),
         Command::SetRestricted {
             on,
             password,
@@ -470,7 +473,6 @@ fn run(command: Command) {
         }
         Command::Search {
             query,
-            manage,
             reply,
         } => {
             let key = with(|local| {
@@ -480,7 +482,6 @@ fn run(command: Command) {
                     key.clone(),
                     Pending {
                         reply,
-                        manage,
                         hits: Vec::new(),
                     },
                 );
@@ -494,6 +495,51 @@ fn run(command: Command) {
                     filter: SearchFilter::None,
                 },
             });
+        }
+        Command::SearchAllowed {
+            query,
+            search,
+            reply,
+        } => {
+            // A phone sees the results of its latest search only.
+            let before: Vec<u64> = with(|local| {
+                let (same, others) = std::mem::take(&mut local.allowed)
+                    .into_iter()
+                    .partition(|(sender, _)| sender.same_channel(&reply));
+                local.allowed = others;
+                same.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+            });
+            for id in before {
+                allowed::cancel(id);
+            }
+            let sender = reply.clone();
+            let mut sent = 0;
+            let id = allowed::start(
+                &query,
+                Box::new(move |entries, done| {
+                    if sent >= ALLOWED_RESULTS {
+                        return;
+                    }
+                    let hits: Vec<Hit> = with(|local| {
+                        entries
+                            .into_iter()
+                            .take(ALLOWED_RESULTS - sent)
+                            .map(|entry| {
+                                let hit = hit(&entry);
+                                remember(local, entry);
+                                hit
+                            })
+                            .collect()
+                    });
+                    sent += hits.len();
+                    let _ = sender.send(Reply::Allowed {
+                        search,
+                        hits,
+                        done: done || sent >= ALLOWED_RESULTS,
+                    });
+                }),
+            );
+            with(|local| local.allowed.push((reply, id)));
         }
         Command::Refresh => {}
     }
@@ -517,6 +563,17 @@ pub fn hit(entry: &Entry) -> Hit {
     }
 }
 
+/// Keeps a video the phone was shown, for it to add it to the queue.
+fn remember(local: &mut Local, entry: Entry) {
+    if local.found.insert(entry.id.clone(), entry.clone()).is_none() {
+        local.found_order.push(entry.id);
+    }
+    while local.found_order.len() > REMEMBERED {
+        let old = local.found_order.remove(0);
+        local.found.remove(&old);
+    }
+}
+
 /// Takes the responses to the searches of the phones, hands back the others.
 pub fn intercept(response: Response) -> Option<Response> {
     let key = match &response {
@@ -533,6 +590,7 @@ pub fn intercept(response: Response) -> Option<Response> {
             let Some(pending) = local.searches.get_mut(&key) else {
                 return;
             };
+            let mut shown = Vec::new();
             for entry in entries {
                 if pending.hits.len() >= RESULTS {
                     break;
@@ -541,13 +599,10 @@ pub fn intercept(response: Response) -> Option<Response> {
                     continue;
                 }
                 pending.hits.push(hit(&entry));
-                if local.found.insert(entry.id.clone(), entry.clone()).is_none() {
-                    local.found_order.push(entry.id);
-                }
+                shown.push(entry);
             }
-            while local.found_order.len() > REMEMBERED {
-                let old = local.found_order.remove(0);
-                local.found.remove(&old);
+            for entry in shown {
+                remember(local, entry);
             }
             if local.searches[&key].hits.len() >= RESULTS {
                 let pending = local.searches.remove(&key).unwrap();

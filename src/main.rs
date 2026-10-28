@@ -1,6 +1,7 @@
 // No console window behind the GUI on Windows.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod allowed;
 mod cache;
 mod collections;
 mod controls;

@@ -46,6 +46,8 @@ pub struct Ui {
     pub settings_button: gtk::Button,
     pub title_stack: gtk::Stack,
     pub search_entry: gtk::SearchEntry,
+    /// Searches what the restricted mode allows, in its place.
+    pub allowed_entry: gtk::SearchEntry,
     pub sort: gtk::DropDown,
     pub filter: gtk::DropDown,
     pub stack: gtk::Stack,
@@ -728,10 +730,15 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             .build(),
         Some("search"),
     );
+    let allowed_entry = gtk::SearchEntry::builder()
+        .placeholder_text("Search the allowed videos")
+        .hexpand(true)
+        .build();
+    allowed_entry.connect_activate(|entry| nav::search_allowed(&entry.text()));
     title_stack.add_named(
-        &gtk::Label::builder()
-            .label("Restricted mode")
-            .css_classes(["heading"])
+        &adw::Clamp::builder()
+            .maximum_size(640)
+            .child(&allowed_entry)
             .build(),
         Some("restricted"),
     );
@@ -1742,6 +1749,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         controls_button,
         settings_button,
         search_entry,
+        allowed_entry,
         sort,
         filter,
         stack,

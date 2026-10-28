@@ -15,14 +15,19 @@ pub struct RemoteApp {
     restricted: bool,
     /// The caption tracks the select of the page was made from.
     captions: Vec<(i64, String)>,
+    /// The chapters the rows of the chapters card were made from.
+    chapters: Vec<(String, f64)>,
     /// What the rows of the queue on the page were made from, one line for each.
     queue: Vec<String>,
     /// The ids of the results on the page.
     results: Vec<String>,
     /// The videos of the feed on the page.
     feed: Vec<Hit>,
-    /// The ids of the results on the tab of the restricted mode.
-    managed: Vec<String>,
+    /// The ids of the results of the search of what the restricted mode allows.
+    allowed: Vec<String>,
+    /// The number of the latest search of what the restricted mode allows, older ones' results
+    /// are dropped.
+    allowed_search: u64,
 }
 
 /// A string for an expression.
@@ -44,7 +49,9 @@ impl RemoteApp {
             replies,
             restricted: false,
             captions: Vec::new(),
-            managed: Vec::new(),
+            chapters: Vec::new(),
+            allowed: Vec::new(),
+            allowed_search: 0,
             feed: Vec::new(),
             queue: Vec::new(),
             results: Vec::new(),
@@ -79,13 +86,15 @@ impl RemoteApp {
             "speed": "1",
             "size": "0",
             "caption": "-1",
+            "chaptered": false,
+            "chapter": -1,
             "restricted": false,
             "locked": false,
-            "listed": [],
             "password": "",
-            "manage_query": "",
-            "manage_searching": false,
-            "manage_error": "",
+            "restrict_error": "",
+            "allowed_query": "",
+            "allowed_searching": false,
+            "allowed_error": "",
         }));
         out.element(ui::column("main"));
 
@@ -134,6 +143,45 @@ impl RemoteApp {
             }
         }
 
+        out.element(
+            ui::card("chapters")
+                .parent("main")
+                .gap("small")
+                .visible(cel("s.chaptered")),
+        );
+        out.element(ui::text("chapters_title").parent("chapters").variant("h3").text("Chapters"));
+        out.element(ui::list("chapter_list").parent("chapters"));
+
+        out.element(ui::card("player").parent("main").gap("small"));
+        out.element(
+            ui::slider("volume")
+                .parent("player")
+                .label("Volume")
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .bind("volume")
+                .on_change(Handler::action("volume")),
+        );
+        out.element(
+            ui::select("speed")
+                .parent("player")
+                .label("Speed")
+                .bind("speed")
+                .options(json!(SPEEDS.map(|speed| json!({"value": speed.to_string(), "label": format!("{speed}×")}))))
+                .on_change(Handler::action("speed")),
+        );
+        out.element(
+            ui::select("size")
+                .parent("player")
+                .label("Video quality")
+                .bind("size")
+                .disabled(cel("!s.playing"))
+                .options(json!(QUALITIES.map(|(height, name)| json!({"value": height.to_string(), "label": name}))))
+                .on_change(Handler::action("size")),
+        );
+        self.captions_select(out, &status.captions);
+
         out.element(ui::tabs("tabs").parent("main"));
         out.element(ui::tab("queue_tab").parent("tabs").label("Queue"));
         out.element(
@@ -141,7 +189,7 @@ impl RemoteApp {
                 .parent("queue_tab")
                 .empty("The queue is empty"),
         );
-        out.element(ui::tab("search_tab").parent("tabs").label("Search"));
+        out.element(ui::tab("search_tab").parent("tabs").label("Search").visible(cel("!s.restricted")));
         out.element(
             ui::input("query")
                 .parent("search_tab")
@@ -172,42 +220,12 @@ impl RemoteApp {
         );
         out.element(ui::list("results").parent("search_tab"));
 
-        out.element(ui::tab("feed_tab").parent("tabs").label("Feed"));
+        out.element(ui::tab("feed_tab").parent("tabs").label("Feed").visible(cel("!s.restricted")));
         out.element(
             ui::list("feed")
                 .parent("feed_tab")
                 .empty("Nothing from the subscriptions"),
         );
-
-        out.element(ui::tab("player_tab").parent("tabs").label("Player"));
-        out.element(
-            ui::slider("volume")
-                .parent("player_tab")
-                .label("Volume")
-                .min(0.0)
-                .max(100.0)
-                .step(1.0)
-                .bind("volume")
-                .on_change(Handler::action("volume")),
-        );
-        out.element(
-            ui::select("speed")
-                .parent("player_tab")
-                .label("Speed")
-                .bind("speed")
-                .options(json!(SPEEDS.map(|speed| json!({"value": speed.to_string(), "label": format!("{speed}×")}))))
-                .on_change(Handler::action("speed")),
-        );
-        out.element(
-            ui::select("size")
-                .parent("player_tab")
-                .label("Video quality")
-                .bind("size")
-                .disabled(cel("!s.playing"))
-                .options(json!(QUALITIES.map(|(height, name)| json!({"value": height.to_string(), "label": name}))))
-                .on_change(Handler::action("size")),
-        );
-        self.captions_select(out, &status.captions);
 
         out.element(ui::tab("restricted_tab").parent("tabs").label("Restricted"));
         out.element(
@@ -227,41 +245,46 @@ impl RemoteApp {
                 .visible(cel("s.locked")),
         );
         out.element(
-            ui::notice("manage_error")
+            ui::notice("restrict_error")
                 .parent("restricted_tab")
                 .variant("failure")
-                .visible(cel("s.manage_error != ''"))
-                .text(cel("s.manage_error")),
+                .visible(cel("s.restrict_error != ''"))
+                .text(cel("s.restrict_error")),
         );
         out.element(
-            ui::notice("manage_locked")
+            ui::input("allowed_query")
                 .parent("restricted_tab")
+                .bind("allowed_query")
+                .placeholder("Search the allowed videos")
                 .visible(cel("s.restricted"))
-                .text("Turn the restricted mode off to add videos to it"),
+                .on_submit(Handler::action("allowed_search")),
         );
         out.element(
-            ui::input("manage_query")
-                .parent("restricted_tab")
-                .bind("manage_query")
-                .placeholder("Search videos to add")
-                .disabled(cel("s.restricted"))
-                .on_submit(Handler::action("manage_search")),
-        );
-        out.element(
-            ui::button("manage_search")
+            ui::button("allowed_search")
                 .parent("restricted_tab")
                 .label("Search")
                 .variant("primary")
-                .disabled(cel("s.restricted || s.manage_searching || s.manage_query == ''"))
-                .on_press(Handler::action("manage_search")),
+                .visible(cel("s.restricted"))
+                .disabled(cel("s.allowed_query == ''"))
+                .on_press(Handler::action("allowed_search")),
         );
         out.element(
-            ui::progress("manage_searching")
+            ui::progress("allowed_searching")
                 .parent("restricted_tab")
                 .variant("spinner")
-                .visible(cel("s.manage_searching")),
+                .visible(cel("s.restricted && s.allowed_searching")),
         );
-        out.element(ui::list("managed").parent("restricted_tab"));
+        out.element(
+            ui::notice("allowed_error")
+                .parent("restricted_tab")
+                .visible(cel("s.restricted && s.allowed_error != ''"))
+                .text(cel("s.allowed_error")),
+        );
+        out.element(
+            ui::list("allowed")
+                .parent("restricted_tab")
+                .visible(cel("s.restricted")),
+        );
 
         self.status(out, status);
     }
@@ -281,6 +304,11 @@ impl RemoteApp {
             "add" => {
                 if let Some(id) = id() {
                     remote::command(Command::Add(id));
+                }
+            }
+            "chapter" => {
+                if let Some(index) = action.payload.as_ref().and_then(Value::as_u64) {
+                    remote::command(Command::Chapter(index as usize));
                 }
             }
             "volume" => {
@@ -325,30 +353,29 @@ impl RemoteApp {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
-                out.signal(json!({"manage_error": "", "password": ""}));
+                out.signal(json!({"restrict_error": "", "password": ""}));
                 remote::command(Command::SetRestricted {
                     on,
                     password,
                     reply: self.replies.clone(),
                 });
             }
-            "allow" => {
-                if let Some(id) = id() {
-                    remote::command(Command::Allow(id));
-                }
-            }
-            "manage_search" => {
+            "allowed_search" => {
                 let query = action
-                    .signal("manage_query")
+                    .signal("allowed_query")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .trim()
                     .to_owned();
                 if !query.is_empty() {
-                    out.signal(json!({"manage_searching": true, "manage_error": ""}));
-                    remote::command(Command::Search {
+                    for id in self.allowed.drain(..) {
+                        out.remove(format!("a_{id}"));
+                    }
+                    self.allowed_search += 1;
+                    out.signal(json!({"allowed_searching": true, "allowed_error": ""}));
+                    remote::command(Command::SearchAllowed {
                         query,
-                        manage: true,
+                        search: self.allowed_search,
                         reply: self.replies.clone(),
                     });
                 }
@@ -364,7 +391,6 @@ impl RemoteApp {
                     out.signal(json!({"searching": true, "error": ""}));
                     remote::command(Command::Search {
                         query,
-                        manage: false,
                         reply: self.replies.clone(),
                     });
                 }
@@ -393,13 +419,48 @@ impl RemoteApp {
             "speed": status.speed.to_string(),
             "size": status.size.to_string(),
             "caption": status.caption.to_string(),
+            "chaptered": !status.chapters.is_empty(),
+            // The chapter playing is the last one started.
+            "chapter": status.chapters.iter().rposition(|(_, start)| *start <= status.position).map_or(-1, |index| index as i64),
             "restricted": status.restricted,
             "locked": status.locked,
-            "listed": status.listed,
         }));
         self.restricted = status.restricted;
         if status.captions != self.captions {
             self.captions_select(out, &status.captions);
+        }
+
+        if status.chapters != self.chapters {
+            for index in 0..self.chapters.len() {
+                out.remove(format!("c_{index}"));
+            }
+            for (index, (title, start)) in status.chapters.iter().enumerate() {
+                let item = format!("c_{index}");
+                out.element(ui::row(item.as_str()).parent("chapter_list").justify("between"));
+                out.element(
+                    ui::column(format!("{item}_text"))
+                        .parent(item.as_str())
+                        .gap("none"),
+                );
+                out.element(
+                    ui::text(format!("{item}_title"))
+                        .parent(format!("{item}_text"))
+                        .text(title.as_str()),
+                );
+                out.element(
+                    ui::text(format!("{item}_start"))
+                        .parent(format!("{item}_text"))
+                        .variant("caption")
+                        .text(clock(*start)),
+                );
+                out.element(
+                    ui::button(format!("{item}_play"))
+                        .parent(item.as_str())
+                        .label(cel(format!("s.chapter == {index} ? 'Playing' : 'Play'")))
+                        .on_press(Handler::action("chapter").payload(index as i64)),
+                );
+            }
+            self.chapters = status.chapters.clone();
         }
 
         if status.feed != self.feed {
@@ -407,7 +468,7 @@ impl RemoteApp {
                 out.remove(format!("f_{}", hit.id));
             }
             for hit in &status.feed {
-                hit_row(out, "f", "feed", hit, false);
+                hit_row(out, "f", "feed", hit);
             }
             self.feed = status.feed.clone();
         }
@@ -470,7 +531,7 @@ impl RemoteApp {
             .collect();
         out.element(
             ui::select("caption")
-                .parent("player_tab")
+                .parent("player")
                 .label("Subtitles")
                 .bind("caption")
                 .visible(!captions.is_empty())
@@ -482,45 +543,54 @@ impl RemoteApp {
 
     pub fn reply(&mut self, out: &mut Outbox, reply: Reply) {
         match reply {
-            Reply::Results { manage, result } => self.results(out, manage, result),
+            Reply::Results(result) => self.results(out, result),
+            Reply::Allowed { search, hits, done } => {
+                if search != self.allowed_search {
+                    return;
+                }
+                for hit in hits {
+                    hit_row(out, "a", "allowed", &hit);
+                    self.allowed.push(hit.id);
+                }
+                if done {
+                    out.signal(json!({
+                        "allowed_searching": false,
+                        "allowed_error": if self.allowed.is_empty() { "Nothing found" } else { "" },
+                    }));
+                }
+            }
             Reply::Failed(error) => out.signal(json!({
-                "manage_error": error,
+                "restrict_error": error,
                 "restricted": self.restricted,
             })),
         }
     }
 
-    fn results(&mut self, out: &mut Outbox, manage: bool, result: Result<Vec<Hit>, String>) {
-        let (searching, error, list, prefix) = if manage {
-            ("manage_searching", "manage_error", "managed", "m")
-        } else {
-            ("searching", "error", "results", "r")
-        };
-        out.signal(json!({ searching: false }));
-        let shown = if manage { &mut self.managed } else { &mut self.results };
-        for id in shown.drain(..) {
-            out.remove(format!("{prefix}_{id}"));
+    fn results(&mut self, out: &mut Outbox, result: Result<Vec<Hit>, String>) {
+        out.signal(json!({"searching": false}));
+        for id in self.results.drain(..) {
+            out.remove(format!("r_{id}"));
         }
         let hits = match result {
             Ok(hits) if hits.is_empty() => {
-                out.signal(json!({ error: "Nothing found" }));
+                out.signal(json!({"error": "Nothing found"}));
                 return;
             }
             Ok(hits) => hits,
             Err(message) => {
-                out.signal(json!({ error: message }));
+                out.signal(json!({"error": message}));
                 return;
             }
         };
         for hit in hits {
-            hit_row(out, prefix, list, &hit, manage);
-            shown.push(hit.id);
+            hit_row(out, "r", "results", &hit);
+            self.results.push(hit.id);
         }
     }
 }
 
-/// A row of a list of videos, with the button to queue it or to add it to the restricted mode.
-fn hit_row(out: &mut Outbox, prefix: &str, list: &str, hit: &Hit, manage: bool) {
+/// A row of a list of videos, with the button to queue it.
+fn hit_row(out: &mut Outbox, prefix: &str, list: &str, hit: &Hit) {
     let item = format!("{prefix}_{}", hit.id);
     out.element(ui::row(item.as_str()).parent(list).justify("between"));
     out.element(
@@ -540,20 +610,13 @@ fn hit_row(out: &mut Outbox, prefix: &str, list: &str, hit: &Hit, manage: bool) 
             .text(hit.details.as_str()),
     );
     let id = quote(&hit.id);
-    let button = if manage {
-        ui::button(format!("{item}_add"))
-            .parent(item.as_str())
-            .label(cel(format!("{id} in s.listed ? 'Remove' : 'Add'")))
-            .disabled(cel("s.restricted"))
-            .on_press(Handler::action("allow").payload(hit.id.as_str()))
-    } else {
+    out.element(
         ui::button(format!("{item}_add"))
             .parent(item.as_str())
             .label(cel(format!("{id} in s.queued ? 'Queued' : 'Add'")))
             .disabled(cel(format!("{id} in s.queued")))
-            .on_press(Handler::action("add").payload(hit.id.as_str()))
-    };
-    out.element(button);
+            .on_press(Handler::action("add").payload(hit.id.as_str())),
+    );
 }
 
 /// The ids in signatures made by `status`.
