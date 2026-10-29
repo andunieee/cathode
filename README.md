@@ -103,6 +103,11 @@ curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/late
 curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.deb')" -o /tmp/cathode.deb && sudo apt install /tmp/cathode.deb
 ```
 
+**Arch Linux**, from the [AUR](https://aur.archlinux.org/packages/cathode-bin) with your AUR helper:
+```
+yay -S cathode-bin
+```
+
 **Fedora and other RPM distros**, `.rpm` (needs [RPM Fusion](https://rpmfusion.org) enabled for `mpv-libs`):
 ```
 curl -fL "$(curl -s https://api.github.com/repos/andunieee/cathode/releases/latest | grep -o 'https://[^"]*\.rpm')" -o /tmp/cathode.rpm && sudo dnf install /tmp/cathode.rpm
@@ -166,7 +171,7 @@ xattr -d com.apple.quarantine /Applications/cathode.app
 </details>
 
 ## Releases
-Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` and a `-setup-` installer for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS.
+Every `v*` tag publishes, on GitHub Releases: `.flatpak`, `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, with [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` and `.tar.gz` for Linux, a `.zip` and a `-setup-` installer for Windows and a `.zip` with `cathode.app` for Apple Silicon macOS. It also updates the `cathode-bin` package on the AUR and the Homebrew cask.
 
 ## Building from source
 ### Dependencies

@@ -5,6 +5,7 @@ name: Release
 #             .rpm (Fedora, needs RPM Fusion's mpv-libs) and a .flatpak bundle
 #   windows : x86_64 .zip   (UCRT64 GTK4 + libmpv runtime, launch via cathode.bat)
 #   macos   : arm64  .zip   (cathode.app with bundled Homebrew libraries)
+# then updates the Homebrew cask and the cathode-bin AUR package.
 #
 # GTK4 cannot be linked statically upstream, so every bundle simply ships
 # all runtime libraries next to the binary. yt-dlp is not bundled: the app
@@ -510,3 +511,53 @@ jobs:
           git add Casks/cathode.rb
           git commit -m "cathode ${VERSION}" || exit 0
           git push
+
+  # Pushes an updated PKGBUILD for cathode-bin to the AUR, repackaging the release .deb.
+  # The action regenerates .SRCINFO in an Arch container and pushes via SSH. Needs an
+  # AUR_SSH_PRIVATE_KEY secret whose public key is added to the AUR account.
+  aur:
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stage the PKGBUILD
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          curl -fsSL -o cathode.deb \
+            "https://github.com/${{ github.repository }}/releases/download/${TAG}/cathode-linux-amd64-${TAG}.deb"
+          SHA=$(sha256sum cathode.deb | cut -d' ' -f1)
+          mkdir -p aur
+          cat > aur/PKGBUILD <<PKGEOF
+          # Maintainer: George V <andunie@cassis.cash>
+          pkgname=cathode-bin
+          pkgver=${VERSION}
+          pkgrel=1
+          pkgdesc="YouTube client for the desktop, built on yt-dlp and mpv"
+          arch=('x86_64')
+          url="https://github.com/andunieee/cathode"
+          license=('GPL-3.0-only')
+          provides=('cathode')
+          conflicts=('cathode')
+          depends=('gtk4' 'libadwaita' 'mpv')
+          source=("cathode-\${pkgver}.deb::https://github.com/andunieee/cathode/releases/download/v\${pkgver}/cathode-linux-amd64-v\${pkgver}.deb")
+          sha256sums=('${SHA}')
+
+          package() {
+            # the .deb already lays out /usr/bin, the .desktop, the metainfo and the icon
+            bsdtar -xf "\${srcdir}/data.tar."* -C "\${pkgdir}"
+          }
+          PKGEOF
+          cat aur/PKGBUILD
+
+      - name: Publish to the AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        with:
+          pkgname: cathode-bin
+          pkgbuild: aur/PKGBUILD
+          commit_username: George V
+          commit_email: andunie@cassis.cash
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "upgpkg: cathode-bin ${{ github.ref_name }}-1"
