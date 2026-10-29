@@ -104,28 +104,6 @@ pub fn is_watched(id: &str) -> bool {
         .contains(id)
 }
 
-/// The first entry after the first `index` lines of the file, with its line number, counted from
-/// 1 on the oldest. Lines that can't be read are skipped, but they count.
-pub fn after(index: usize) -> Option<(usize, Entry)> {
-    let file = std::fs::File::open(path()).ok()?;
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .enumerate()
-        .skip(index)
-        .find_map(|(number, line)| {
-            let watched = serde_json::from_str::<Watched>(&line).ok()?;
-            Some((number + 1, watched.entry))
-        })
-}
-
-/// How many lines the file has.
-pub fn count() -> usize {
-    std::fs::File::open(path())
-        .map(|file| BufReader::new(file).lines().map_while(Result::ok).count())
-        .unwrap_or(0)
-}
-
 fn read_ids() -> HashSet<String> {
     #[derive(Deserialize)]
     struct Line {

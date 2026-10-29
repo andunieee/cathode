@@ -30,7 +30,7 @@ use crate::ui::{self, CacheRow, Ui};
 const HISTORY_PAGE: usize = 10;
 /// How often the subscriptions are checked for new videos.
 const FEED_REFRESH_SECONDS: u32 = 30 * 60;
-/// How long to wait between asking for the suggestions of two videos of the history.
+/// How long to wait between asking for the suggestions of two videos.
 const SUGGESTION_WAIT_SECONDS: u32 = 30;
 
 #[derive(Clone)]
@@ -3208,17 +3208,14 @@ fn show_feed() {
     feed_tab_changed();
 }
 
-/// Asks for the suggestions of the next video of the history, if it's time. The answer
+/// Asks for the suggestions of the next video of the round, if it's time. The answer
 /// schedules the next one, so this only has to be called to start or restart the chain.
 fn suggest_next() {
     if profile::restricted() {
         return;
     }
-    if let Some((index, entry)) = suggestions::begin(&subscriptions::feed()) {
-        send(Request::Suggest {
-            index,
-            id: entry.id,
-        });
+    if let Some(entry) = suggestions::begin() {
+        send(Request::Suggest { id: entry.id });
     }
     update_feed_status();
 }
@@ -3261,7 +3258,7 @@ fn update_feed_status() {
     if ui.feed_tabs.visible_child_name().as_deref() == Some("suggestions") {
         let (done, total) = suggestions::progress();
         let text = if done < total {
-            format!("Looking at the suggestions of your history… {done} of {total}")
+            format!("Looking for new suggestions… {done} of {total}")
         } else {
             String::new()
         };
@@ -3941,8 +3938,8 @@ pub fn handle(response: Response) {
             }
             suggest_next();
         }
-        Response::Suggested { index, id, result } => {
-            if let Err(error) = suggestions::finish(index, &id, result) {
+        Response::Suggested { id, result } => {
+            if let Err(error) = suggestions::finish(&id, result) {
                 crate::log::warning!("Cannot get the suggestions of {id}: {error}");
             }
             glib::timeout_add_seconds_local_once(SUGGESTION_WAIT_SECONDS, || {

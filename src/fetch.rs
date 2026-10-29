@@ -294,10 +294,8 @@ pub enum Request {
         /// The language of the channel if it is known, otherwise it is looked for.
         language: Option<String>,
     },
-    /// What YouTube suggests to watch after a video of the history, for the suggestions of the
-    /// home page. `index` is echoed back.
+    /// What YouTube suggests to watch after a video, for the suggestions of the home page.
     Suggest {
-        index: usize,
         id: String,
     },
     /// The sponsor segments of a video, from SponsorBlock.
@@ -326,7 +324,7 @@ impl Request {
             Request::Avatar { id } => format!("avatar of {id}"),
             Request::Resolve { .. } => "resolve a link".to_string(),
             Request::Latest { channel_id, .. } => format!("latest videos of {channel_id}"),
-            Request::Suggest { id, .. } => format!("suggestions after {id}"),
+            Request::Suggest { id } => format!("suggestions after {id}"),
             Request::Segments { id } => format!("sponsor segments of {id}"),
             Request::CheckCookies { browser } => format!("check the cookies of {browser}"),
         }
@@ -423,7 +421,6 @@ pub enum Response {
         open: bool,
     },
     Suggested {
-        index: usize,
         id: String,
         result: Result<Vec<Entry>, String>,
     },
@@ -573,14 +570,14 @@ async fn run(
                     });
                 });
             }
-            Request::Suggest { index, id } => {
+            Request::Suggest { id } => {
                 tokio::spawn(async move {
                     let result = match related(&id).await {
                         // A video can have none, which isn't worth asking about again.
                         Err(error) if error == NO_SUGGESTIONS => Ok(Vec::new()),
                         result => result,
                     };
-                    on_response(Response::Suggested { index, id, result });
+                    on_response(Response::Suggested { id, result });
                 });
             }
             Request::Resolve { input, open } => {

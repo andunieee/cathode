@@ -64,7 +64,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ![The library sidebar](assets/library.jpg)
 
 - Subscribe to channels without an account, and see their latest videos on the home page
-- A Suggestions tab on the home page, ranking the videos YouTube suggests next to the ones you watched, which you can dismiss one by one
+- A Suggestions tab on the home page, refreshed every two days from what YouTube suggests next to random picks of your recent history and your subscriptions, which you can dismiss one by one
 - Keep videos you like in collections, or import a folder of videos you already have
 
 ## Downloads
