@@ -149,6 +149,12 @@ fn pick(mut entries: Vec<Entry>, count: usize) -> Vec<Entry> {
     entries
 }
 
+/// Whether a suggested video is worth showing: not watched yet, and not of a channel the user is
+/// subscribed to, whose videos are in the feed already.
+fn wanted(entry: &Entry) -> bool {
+    !history::is_watched(&entry.id) && !subscriptions::is_subscribed(&entry.channel_id)
+}
+
 /// Starts a round if the last one is two days old, unless the feed is still loading.
 fn start_round(state: &mut State) {
     let now = now();
@@ -220,7 +226,7 @@ pub fn finish(id: &str, result: Result<Vec<Entry>, String>) -> Result<(), String
         }
         let merged = result.as_ref().map(|entries| {
             for (place, entry) in entries.iter().enumerate() {
-                if history::is_watched(&entry.id) || dismissed.contains(&entry.id) {
+                if !wanted(entry) || dismissed.contains(&entry.id) {
                     continue;
                 }
                 round
@@ -271,7 +277,7 @@ pub fn cooled_down() {
     with(|state| state.cooling_down = false);
 }
 
-/// The unwatched videos suggested, the ones suggested next to the most videos first, then the
+/// The unwatched videos suggested that aren't of a subscription, the ones suggested next to the most videos first, then the
 /// ones suggested highest. Until a round is done, the one going on.
 pub fn ranked() -> Vec<Entry> {
     with(|state| {
@@ -282,7 +288,7 @@ pub fn ranked() -> Vec<Entry> {
         };
         let mut videos: Vec<&Suggested> = videos
             .values()
-            .filter(|video| !history::is_watched(&video.entry.id))
+            .filter(|video| wanted(&video.entry))
             .collect();
         videos.sort_by(|a, b| {
             b.count
