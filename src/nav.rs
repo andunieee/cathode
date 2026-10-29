@@ -512,10 +512,11 @@ fn show_video(entry: &Entry) {
     // A file has no page on YouTube.
     ui.video_link
         .set(Some(entry.url.as_str()).filter(|url| !url.is_empty()));
-    ui.video_channel.set_label(&entry.channel);
-    ui.video_channel.set_visible(!entry.channel_id.is_empty());
+    let (channel_id, channel) = channel_of(entry);
+    ui.video_channel.set_label(&channel);
+    ui.video_channel.set_visible(!channel_id.is_empty());
     ui.video_channel
-        .set_sensitive(!profile::restricted() || profile::allows_channel(&entry.channel_id));
+        .set_sensitive(!profile::restricted() || profile::allows_channel(&channel_id));
 
     let mut meta = Vec::new();
     if history::is_watched(&entry.id) {
@@ -586,6 +587,21 @@ fn show_video(entry: &Entry) {
         } else {
             1.0
         });
+}
+
+/// The channel of a video, from its details when the entry does not know it (cached files,
+/// some listings).
+fn channel_of(entry: &Entry) -> (String, String) {
+    if !entry.channel_id.is_empty() {
+        return (entry.channel_id.clone(), entry.channel.clone());
+    }
+    with(|state| {
+        state
+            .infos
+            .get(&Page::Video(entry.clone()).key())
+            .map(|info| (info.entry.channel_id.clone(), info.entry.channel.clone()))
+            .unwrap_or_default()
+    })
 }
 
 fn clear_rows(list: &gtk::ListBox) {
@@ -1275,7 +1291,8 @@ pub fn open_channel(id: &str, name: &str) {
 
 pub fn open_current_channel() {
     if let Page::Video(entry) = current() {
-        open_channel(&entry.channel_id, &entry.channel);
+        let (id, name) = channel_of(&entry);
+        open_channel(&id, &name);
     }
 }
 
