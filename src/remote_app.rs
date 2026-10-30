@@ -7,7 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::remote::{self, Command, Hit, Reply, Status};
 use crate::settings::QUALITIES;
-use crate::ui::SPEEDS;
+use crate::ui::speed_options;
 
 pub struct RemoteApp {
     replies: UnboundedSender<Reply>,
@@ -15,6 +15,8 @@ pub struct RemoteApp {
     restricted: bool,
     /// The caption tracks the select of the page was made from.
     captions: Vec<(i64, String)>,
+    /// The speeds the speed select of the page was made from.
+    speeds: Vec<f64>,
     /// The chapters the rows of the chapters card were made from.
     chapters: Vec<(String, f64)>,
     /// What the rows of the queue on the page were made from, one line for each.
@@ -49,6 +51,7 @@ impl RemoteApp {
             replies,
             restricted: false,
             captions: Vec::new(),
+            speeds: Vec::new(),
             chapters: Vec::new(),
             allowed: Vec::new(),
             allowed_search: 0,
@@ -173,16 +176,7 @@ impl RemoteApp {
                 .bind("volume")
                 .on_change(Handler::action("volume")),
         );
-        out.element(
-            ui::select("speed")
-                .parent("player")
-                .label("Speed")
-                .bind("speed")
-                .options(json!(SPEEDS.map(
-                    |speed| json!({"value": speed.to_string(), "label": format!("{speed}×")})
-                )))
-                .on_change(Handler::action("speed")),
-        );
+        self.speed_select(out, status.speed);
         out.element(
             ui::select("size")
                 .parent("player")
@@ -459,6 +453,9 @@ impl RemoteApp {
         if status.captions != self.captions {
             self.captions_select(out, &status.captions);
         }
+        if speed_options(status.speed) != self.speeds {
+            self.speed_select(out, status.speed);
+        }
 
         if status.chapters != self.chapters {
             for index in 0..self.chapters.len() {
@@ -555,6 +552,22 @@ impl RemoteApp {
             );
         }
         self.queue = signature;
+    }
+
+    /// The select of the speed, which has the one playing when it is not one of the usual ones.
+    fn speed_select(&mut self, out: &mut Outbox, speed: f64) {
+        let speeds = speed_options(speed);
+        out.element(
+            ui::select("speed")
+                .parent("player")
+                .label("Speed")
+                .bind("speed")
+                .options(json!(speeds.iter().map(
+                    |speed| json!({"value": speed.to_string(), "label": format!("{speed}×")})
+                ).collect::<Vec<_>>()))
+                .on_change(Handler::action("speed")),
+        );
+        self.speeds = speeds;
     }
 
     /// The select of the subtitles, which only has the tracks of the video playing.

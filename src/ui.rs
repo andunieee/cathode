@@ -18,8 +18,10 @@ use crate::state::CaptionMode;
 
 /// Playback speeds on offer, 1.0 being the first selected.
 pub const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
-/// The index of the normal speed in `SPEEDS`.
-pub const NORMAL_SPEED: u32 = 2;
+/// The slowest and the fastest playback speeds the keys reach, in steps of `SPEED_STEP`.
+pub const MIN_SPEED: f64 = 0.25;
+pub const MAX_SPEED: f64 = 10.0;
+pub const SPEED_STEP: f64 = 0.25;
 
 /// Duration of the video, and the `(start, end)` of its sponsor segments in seconds.
 pub type SponsorSpans = Rc<RefCell<(f64, Vec<(f64, f64)>)>>;
@@ -149,6 +151,8 @@ pub struct Ui {
     pub size_status: gtk::Label,
     pub seek_row: gtk::Box,
     pub speed: gtk::DropDown,
+    /// The speeds in the speed menu: `SPEEDS`, and the one playing when it is not among them.
+    pub speeds: RefCell<Vec<f64>>,
     pub volume: gtk::MenuButton,
     pub volume_scale: gtk::Scale,
     /// Skip buttons, which show when the progress bar is hidden, and whether each one is only
@@ -166,14 +170,46 @@ thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 
-/// The index of this playback speed in the list, if it is there.
-pub fn speed_index(speed: f64) -> Option<u32> {
-    SPEEDS.iter().position(|&s| s == speed).map(|i| i as u32)
+/// The speeds a speed menu offers while this one is playing: `SPEEDS`, with this one in its
+/// place when it is not among them.
+pub fn speed_options(speed: f64) -> Vec<f64> {
+    let mut options = SPEEDS.to_vec();
+    if !options.contains(&speed) {
+        let index = options.partition_point(|&option| option < speed);
+        options.insert(index, speed);
+    }
+    options
 }
 
-/// The playback speed at this index of the speed list.
-pub fn speed_at(index: u32) -> Option<f64> {
-    SPEEDS.get(index as usize).copied()
+fn speed_model(options: &[f64]) -> gtk::StringList {
+    let labels: Vec<String> = options.iter().map(|speed| format!("{speed}×")).collect();
+    gtk::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// The playback speed selected in the speed menu.
+pub fn current_speed() -> f64 {
+    let ui = get();
+    let speeds = ui.speeds.borrow();
+    speeds
+        .get(ui.speed.selected() as usize)
+        .copied()
+        .unwrap_or(1.0)
+}
+
+/// Plays at this speed and selects it in the speed menu, which gets an entry for it when it is
+/// not one of `SPEEDS`.
+pub fn select_speed(speed: f64) {
+    let ui = get();
+    let options = speed_options(speed);
+    ui.syncing.set(true);
+    if *ui.speeds.borrow() != options {
+        ui.speed.set_model(Some(&speed_model(&options)));
+    }
+    let index = options.iter().position(|&option| option == speed).unwrap();
+    ui.speed.set_selected(index as u32);
+    *ui.speeds.borrow_mut() = options;
+    ui.syncing.set(false);
+    nav::set_speed(speed);
 }
 
 /// Handles the keys of the player, which follow the ones of mpv. Returns whether it was one.
@@ -1181,19 +1217,22 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     seek_overlay.add_overlay(&seek_marks);
     let time_label = gtk::Label::new(Some("0:00 / 0:00"));
     time_label.add_css_class("numeric");
-    let speed = gtk::DropDown::from_strings(
-        &SPEEDS
-            .map(|speed| format!("{speed}×"))
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-    );
+    let speed = gtk::DropDown::builder()
+        .model(&speed_model(&SPEEDS))
+        .build();
     speed.set_cursor(Some(&crate::ui::pointer()));
     speed.set_selected(SPEEDS.iter().position(|&speed| speed == 1.0).unwrap() as u32);
     speed.set_tooltip_text(Some("Playback speed"));
-    speed.connect_selected_notify(|speed| {
-        if let Some(&speed) = SPEEDS.get(speed.selected() as usize) {
-            nav::set_speed(speed);
+    speed.connect_selected_notify(|_| {
+        if get().syncing.get() {
+            return;
+        }
+        // Picking one of `SPEEDS` drops the entry of a speed that is not among them, which
+        // waits for the menu to be done with its selection.
+        let speed = current_speed();
+        nav::set_speed(speed);
+        if *get().speeds.borrow() != speed_options(speed) {
+            glib::idle_add_local_once(move || select_speed(speed));
         }
     });
     let volume_scale = gtk::Scale::with_range(gtk::Orientation::Vertical, 0.0, 1.0, 0.01);
@@ -1840,6 +1879,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         size_status,
         seek_row,
         speed,
+        speeds: RefCell::new(SPEEDS.to_vec()),
         volume,
         volume_scale,
         skip_buttons,

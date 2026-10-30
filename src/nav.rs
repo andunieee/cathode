@@ -1985,9 +1985,8 @@ fn restore_playback() {
     if let Some(volume) = saved.volume {
         ui.volume_scale.set_value(volume.clamp(0.0, 1.0));
     }
-    let index = saved.speed.and_then(ui::speed_index);
-    if let Some(index) = index {
-        ui.speed.set_selected(index);
+    if let Some(speed) = saved.speed {
+        ui::select_speed(speed.clamp(ui::MIN_SPEED, ui::MAX_SPEED));
     }
     sync_caption_mode(saved.caption_mode);
     apply_caption_mode(None);
@@ -2197,27 +2196,19 @@ pub fn change_volume(delta: f64) {
     ));
 }
 
-/// Picks the next or the previous of the playback speeds on offer.
+/// Makes the playback faster or slower by a step, whatever the speeds on offer.
 pub fn step_speed(direction: i32) {
-    let ui = ui::get();
-    let last = ui
-        .speed
-        .model()
-        .map_or(0, |model| model.n_items())
-        .saturating_sub(1);
-    let selected = (ui.speed.selected() as i64 + direction as i64).clamp(0, last as i64);
-    ui.speed.set_selected(selected as u32);
+    let steps = (ui::current_speed() / ui::SPEED_STEP).round() + direction as f64;
+    ui::select_speed((steps * ui::SPEED_STEP).clamp(ui::MIN_SPEED, ui::MAX_SPEED));
     show_speed();
 }
 
 fn show_speed() {
-    if let Some(speed) = ui::speed_at(ui::get().speed.selected()) {
-        player_message(&format!("Speed: {speed}×"));
-    }
+    player_message(&format!("Speed: {}×", ui::current_speed()));
 }
 
 pub fn reset_speed() {
-    ui::get().speed.set_selected(ui::NORMAL_SPEED);
+    ui::select_speed(1.0);
     show_speed();
 }
 
@@ -2444,10 +2435,7 @@ pub fn remote_status() -> crate::remote::Status {
     // Nothing in the player counts as paused: Play starts the queue.
     let paused = ui.player.id().is_none() || ui.player.is_paused();
     let (position, duration) = (ui.player.position(), ui.player.duration());
-    let (volume, speed) = (
-        ui.volume_scale.value(),
-        ui::speed_at(ui.speed.selected()).unwrap_or(1.0),
-    );
+    let (volume, speed) = (ui.volume_scale.value(), ui::current_speed());
     let (captions, caption) = {
         let (tracks, selected) = &*ui.caption_tracks.borrow();
         (
@@ -2530,10 +2518,7 @@ pub fn remote_volume(volume: f64) {
 }
 
 pub fn remote_speed(speed: f64) {
-    let ui = ui::get();
-    if let Some(index) = ui::speed_index(speed) {
-        ui.speed.set_selected(index);
-    }
+    ui::select_speed(speed.clamp(ui::MIN_SPEED, ui::MAX_SPEED));
 }
 
 /// Shows a caption track by its id, or none with `-1`.
