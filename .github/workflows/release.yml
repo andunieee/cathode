@@ -5,7 +5,7 @@ name: Release
 #             .rpm (Fedora, needs RPM Fusion's mpv-libs) and a .flatpak bundle
 #   windows : x86_64 .zip   (UCRT64 GTK4 + libmpv runtime, launch via cathode.bat)
 #   macos   : arm64  .zip   (cathode.app with bundled Homebrew libraries)
-# then updates the Homebrew cask and the cathode-bin AUR package.
+# then updates the Homebrew cask (and the cathode-bin AUR package, currently disabled).
 #
 # GTK4 cannot be linked statically upstream, so every bundle simply ships
 # all runtime libraries next to the binary. yt-dlp is not bundled: the app
@@ -549,7 +549,7 @@ jobs:
   # AUR_SSH_PRIVATE_KEY secret whose public key is added to the AUR account.
   aur:
     needs: [release]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: false # disabled for now; was: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Stage the PKGBUILD
