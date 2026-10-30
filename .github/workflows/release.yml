@@ -26,7 +26,8 @@ concurrency:
 
 jobs:
   # libadwaita >= 1.7 is required (adw::WrapBox), which Ubuntu 24.04 (1.5) doesn't have,
-  # so the Linux builds run in Debian 13 (libadwaita 1.7, glibc 2.41).
+  # so the Linux builds run in Debian 13 (libadwaita 1.7, glibc 2.41). The AppImage bundles
+  # that glibc for older hosts.
   linux:
     name: linux (x86_64)
     runs-on: ubuntu-24.04
@@ -111,9 +112,37 @@ jobs:
             patchelf --set-rpath '$ORIGIN:$ORIGIN/../..' "$dir"/*
           done
           ls -lR AppDir/usr/lib/fallback
+          # glibc (with its dynamic loader) and libstdc++, for hosts with older ones: the
+          # AppImage has to start on the oldest supported Ubuntu LTS too. They get their own
+          # directories, as everything else has a $ORIGIN RUNPATH and would pick them up with
+          # the host's loader; packaging/appimage/exec.sh decides at launch whether to use them.
+          mkdir -p AppDir/usr/lib/glibc AppDir/usr/lib/libstdc++
+          dpkg -L libc6 | grep -E '^(/usr)?/lib/x86_64-linux-gnu/[^/]+\.so[.0-9]*$' | xargs cp -L -t AppDir/usr/lib/glibc/
+          getconf GNU_LIBC_VERSION | cut -d' ' -f2 > AppDir/usr/lib/glibc/version
+          stdcxx="$(readlink -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6)"
+          cp "$stdcxx" AppDir/usr/lib/libstdc++/
+          ln -s "${stdcxx##*/}" AppDir/usr/lib/libstdc++/libstdc++.so.6
+          cp -L /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 AppDir/usr/lib/libstdc++/
+          # Hosts that old also have older copies of the libraries the excludelist leaves to them
+          # (Ubuntu 22.04's harfbuzz is too old for pango): ship those for exec.sh to use along
+          # with glibc, all but the GL drivers' (which must be the host's) and pipewire/jack.
+          mkdir -p AppDir/usr/lib/excluded
+          { echo AppDir/usr/bin/cathode; find AppDir/usr/lib -type f -name '*.so*' -not -path '*/glibc/*' -not -path '*/libstdc++/*' -not -path '*/excluded/*'; } \
+            | xargs -n1 ldd 2>/dev/null | awk '$2 == "=>" && $3 ~ /^\// {print $1, $3}' | sort -u \
+            | while read -r name path; do
+              case "$name" in
+                libGL.so.*|libEGL.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libgbm.so.*|libvulkan.so.*) continue ;;
+                libpipewire-0.3.so.*|libjack.so.*|libstdc++.so.*|libgcc_s.so.*) continue ;;
+              esac
+              [ -e "AppDir/usr/lib/glibc/$name" ] || [ -e "AppDir/usr/lib/$name" ] || cp -L "$path" AppDir/usr/lib/excluded/
+            done
+          ls -l AppDir/usr/lib/glibc AppDir/usr/lib/libstdc++ AppDir/usr/lib/excluded
+          [ -x AppDir/usr/lib/glibc/ld-linux-x86-64.so.2 ] || { echo "no dynamic loader in the bundle"; exit 1; }
+          [ -e AppDir/usr/lib/excluded/libharfbuzz.so.0 ] || { echo "no harfbuzz in usr/lib/excluded"; exit 1; }
           # Without --output, linuxdeploy leaves AppRun a symlink to the binary: write the
           # wrapper that sources the hooks (the gtk plugin's and ours) as it would.
           install -m0644 packaging/appimage/fallback-libs.sh AppDir/apprun-hooks/
+          install -m0644 packaging/appimage/exec.sh AppDir/apprun-exec.sh
           rm AppDir/AppRun
           ln -sf usr/bin/cathode AppDir/AppRun.wrapped
           {
@@ -121,7 +150,7 @@ jobs:
             for hook in AppDir/apprun-hooks/*.sh; do
               printf 'source "$this_dir"/apprun-hooks/"%s"\n' "${hook##*/}"
             done
-            printf '\nexec "$this_dir"/AppRun.wrapped "$@"\n'
+            printf '\nsource "$this_dir"/apprun-exec.sh\n'
           } > AppDir/AppRun
           chmod 0755 AppDir/AppRun
           cat AppDir/AppRun
@@ -483,7 +512,7 @@ jobs:
           cat > "$NOTES" <<'EOF'
           Portable bundles — all runtime libraries included (GTK4 cannot be linked statically upstream).
 
-          - **linux**: `.flatpak` (`flatpak install cathode-*.flatpak`), `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, needs [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise, and glibc 2.41+), or `.tar.gz` (requires system GTK4 4.10+/libadwaita 1.7+/libmpv).
+          - **linux**: `.flatpak` (`flatpak install cathode-*.flatpak`), `.deb` (Debian 13+, Ubuntu 25.04+), `.rpm` (Fedora, needs [RPM Fusion](https://rpmfusion.org) for `mpv-libs`), `.AppImage` (needs FUSE; run with `--appimage-extract-and-run` otherwise), or `.tar.gz` (requires system GTK4 4.10+/libadwaita 1.7+/libmpv).
           - **macos**: Apple Silicon (arm64) only, unsigned — first launch: right-click > Open, or `xattr -d com.apple.quarantine cathode.app`.
           - **windows**: run the `-setup-` installer, or extract the `.zip` and run `cathode.bat`.
           yt-dlp is managed by the app at runtime, not bundled.
