@@ -40,8 +40,21 @@ use std::rc::Rc;
 fn detach() -> bool {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
+    // In an AppImage our executable lives in a mount (or an extracted directory) that the
+    // AppImage runtime removes as soon as we exit, so re-run the AppImage itself, which gets its
+    // own. When extracted, both runtimes would share the same directory and ours would still
+    // delete it under the new one: stay in the foreground then.
+    let exe = match std::env::var_os("APPIMAGE") {
+        Some(_)
+            if std::env::var("APPDIR").is_ok_and(|dir| dir.contains("/appimage_extracted_")) =>
+        {
+            return false;
+        }
+        Some(appimage) => appimage.into(),
+        None => match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(_) => return false,
+        },
     };
     Command::new(exe)
         .args(std::env::args().skip(1))
