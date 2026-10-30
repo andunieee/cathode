@@ -101,7 +101,8 @@ fn point_pixbuf_at_bundle() {
     {
         let cache = root.join("lib/gdk-pixbuf-2.0/2.10.0/loaders.cache");
         if cache.exists() {
-            std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache);
+            // SAFETY: nothing else is running yet.
+            unsafe { std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache) };
         }
     }
 }
@@ -176,16 +177,18 @@ fn main() -> glib::ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--install-desktop-entry") {
         #[cfg(target_os = "linux")]
-        if let Err(error) = desktop::install() {
-            eprintln!("Could not install the desktop entry: {error}");
-            return glib::ExitCode::FAILURE;
-        }
+        return match desktop::install() {
+            Ok(()) => glib::ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("Could not install the desktop entry: {error}");
+                glib::ExitCode::FAILURE
+            }
+        };
         #[cfg(not(target_os = "linux"))]
         {
             eprintln!("--install-desktop-entry only works on Linux");
             return glib::ExitCode::FAILURE;
         }
-        return glib::ExitCode::SUCCESS;
     }
     let arguments = match parse_arguments(&args[1..]) {
         Ok(arguments) => arguments,
