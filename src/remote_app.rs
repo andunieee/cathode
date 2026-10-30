@@ -2,12 +2,12 @@
 //! hypereffect app, so any hyperb browser can render it. The state lives in Cathode, the app
 //! only turns what the phone does into `Command`s and what Cathode reports into signals.
 
-use hypereffect::{cel, json, ui, Action, Handler, Outbox, Value};
+use hypereffect::{Action, Handler, Outbox, Value, cel, json, ui};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::remote::{self, Command, Hit, Reply, Status};
 use crate::settings::QUALITIES;
 use crate::ui::SPEEDS;
-use crate::remote::{self, Command, Hit, Reply, Status};
 
 pub struct RemoteApp {
     replies: UnboundedSender<Reply>,
@@ -61,7 +61,12 @@ impl RemoteApp {
     /// What a phone that is not paired gets instead of the page.
     pub fn unpaired(out: &mut Outbox) {
         out.element(ui::column("main"));
-        out.element(ui::text("title").parent("main").variant("h3").text("This phone is not paired"));
+        out.element(
+            ui::text("title")
+                .parent("main")
+                .variant("h3")
+                .text("This phone is not paired"),
+        );
         out.element(
             ui::text("how")
                 .parent("main")
@@ -149,7 +154,12 @@ impl RemoteApp {
                 .gap("small")
                 .visible(cel("s.chaptered")),
         );
-        out.element(ui::text("chapters_title").parent("chapters").variant("h3").text("Chapters"));
+        out.element(
+            ui::text("chapters_title")
+                .parent("chapters")
+                .variant("h3")
+                .text("Chapters"),
+        );
         out.element(ui::list("chapter_list").parent("chapters"));
 
         out.element(ui::card("player").parent("main").gap("small"));
@@ -168,7 +178,9 @@ impl RemoteApp {
                 .parent("player")
                 .label("Speed")
                 .bind("speed")
-                .options(json!(SPEEDS.map(|speed| json!({"value": speed.to_string(), "label": format!("{speed}×")}))))
+                .options(json!(SPEEDS.map(
+                    |speed| json!({"value": speed.to_string(), "label": format!("{speed}×")})
+                )))
                 .on_change(Handler::action("speed")),
         );
         out.element(
@@ -177,7 +189,9 @@ impl RemoteApp {
                 .label("Video quality")
                 .bind("size")
                 .disabled(cel("!s.playing"))
-                .options(json!(QUALITIES.map(|(height, name)| json!({"value": height.to_string(), "label": name}))))
+                .options(json!(QUALITIES.map(
+                    |(height, name)| json!({"value": height.to_string(), "label": name})
+                )))
                 .on_change(Handler::action("size")),
         );
         self.captions_select(out, &status.captions);
@@ -189,7 +203,12 @@ impl RemoteApp {
                 .parent("queue_tab")
                 .empty("The queue is empty"),
         );
-        out.element(ui::tab("search_tab").parent("tabs").label("Search").visible(cel("!s.restricted")));
+        out.element(
+            ui::tab("search_tab")
+                .parent("tabs")
+                .label("Search")
+                .visible(cel("!s.restricted")),
+        );
         out.element(
             ui::input("query")
                 .parent("search_tab")
@@ -220,7 +239,12 @@ impl RemoteApp {
         );
         out.element(ui::list("results").parent("search_tab"));
 
-        out.element(ui::tab("feed_tab").parent("tabs").label("Feed").visible(cel("!s.restricted")));
+        out.element(
+            ui::tab("feed_tab")
+                .parent("tabs")
+                .label("Feed")
+                .visible(cel("!s.restricted")),
+        );
         out.element(
             ui::list("feed")
                 .parent("feed_tab")
@@ -290,7 +314,13 @@ impl RemoteApp {
     }
 
     pub fn action(&mut self, out: &mut Outbox, action: &Action) {
-        let id = || action.payload.as_ref().and_then(Value::as_str).map(str::to_owned);
+        let id = || {
+            action
+                .payload
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
         match action.name.as_str() {
             "toggle" => remote::command(Command::Toggle),
             "stop" => remote::command(Command::Stop),
@@ -436,7 +466,11 @@ impl RemoteApp {
             }
             for (index, (title, start)) in status.chapters.iter().enumerate() {
                 let item = format!("c_{index}");
-                out.element(ui::row(item.as_str()).parent("chapter_list").justify("between"));
+                out.element(
+                    ui::row(item.as_str())
+                        .parent("chapter_list")
+                        .justify("between"),
+                );
                 out.element(
                     ui::column(format!("{item}_text"))
                         .parent(item.as_str())
@@ -512,7 +546,10 @@ impl RemoteApp {
             out.element(
                 ui::button(format!("{item}_play"))
                     .parent(item.as_str())
-                    .label(cel(format!("s.current == {} ? 'Playing' : 'Play'", quote(&row.id))))
+                    .label(cel(format!(
+                        "s.current == {} ? 'Playing' : 'Play'",
+                        quote(&row.id)
+                    )))
                     .disabled(cel(format!("s.current == {}", quote(&row.id))))
                     .on_press(Handler::action("jump").payload(row.id.as_str())),
             );

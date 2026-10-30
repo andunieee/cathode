@@ -432,10 +432,10 @@ fn changed() {
     refresh();
     let ui = ui::get();
     let shown = ui.library.shown.borrow().clone();
-    if let Some(name) = shown {
-        if ui.stack.visible_child_name().as_deref() == Some("collection") {
-            show_collection(&name);
-        }
+    if let Some(name) = shown
+        && ui.stack.visible_child_name().as_deref() == Some("collection")
+    {
+        show_collection(&name);
     }
 }
 

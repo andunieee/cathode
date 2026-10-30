@@ -1,7 +1,7 @@
 //! libmpv rendering into a `GtkGLArea`.
 
 use std::cell::{Cell, RefCell};
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{CString, c_char, c_void};
 use std::mem::transmute;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -210,7 +210,9 @@ impl Player {
                             area.queue_render();
                         }
                     }
-                    Err(error) => crate::log::error!("Failed creating the mpv render context: {error}"),
+                    Err(error) => {
+                        crate::log::error!("Failed creating the mpv render context: {error}")
+                    }
                 }
             }
         });
@@ -256,12 +258,7 @@ impl Player {
                 };
                 if let Some(render) = player.render.borrow().as_ref() {
                     let _ = render.update();
-                    let _ = render.render::<*mut c_void>(
-                        fbo,
-                        width,
-                        height,
-                        true,
-                    );
+                    let _ = render.render::<*mut c_void>(fbo, width, height, true);
                     // The first frame of a file comes after the loading, and nothing redraws
                     // while paused: keep drawing until the video has a position for a while.
                     if player.id().is_none() || player.mpv.get_property::<f64>("time-pos").is_ok() {
@@ -277,10 +274,11 @@ impl Player {
         player.area.add_tick_callback({
             let player = Rc::downgrade(&player);
             move |area, _clock| {
-                if let Some(player) = player.upgrade() {
-                    if area.is_mapped() && (!player.is_paused() || player.settling.get() > 0) {
-                        area.queue_render();
-                    }
+                if let Some(player) = player.upgrade()
+                    && area.is_mapped()
+                    && (!player.is_paused() || player.settling.get() > 0)
+                {
+                    area.queue_render();
                 }
                 glib::ControlFlow::Continue
             }
@@ -405,12 +403,12 @@ impl Player {
                 .collect::<Vec<_>>()
         );
         // With no language to go by, any track is better than none.
-        if self.captions.get() && self.preferred_languages.borrow().is_empty() {
-            if let (tracks, None) = self.caption_tracks() {
-                if let Some(track) = tracks.first() {
-                    let _ = self.mpv.set_property("sid", track.id);
-                }
-            }
+        if self.captions.get()
+            && self.preferred_languages.borrow().is_empty()
+            && let (tracks, None) = self.caption_tracks()
+            && let Some(track) = tracks.first()
+        {
+            let _ = self.mpv.set_property("sid", track.id);
         }
     }
 

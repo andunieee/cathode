@@ -38,15 +38,24 @@ pub fn install() -> Result<(), String> {
     std::fs::create_dir_all(&applications).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&icons).map_err(|e| e.to_string())?;
 
-    let entry = ENTRY.replace("Exec=cathode %U", &format!("Exec={} %U", quote(&executable()?)));
+    let entry = ENTRY.replace(
+        "Exec=cathode %U",
+        &format!("Exec={} %U", quote(&executable()?)),
+    );
     let entry_path = applications.join(format!("{ID}.desktop"));
     std::fs::write(&entry_path, entry).map_err(|e| e.to_string())?;
     std::fs::write(icons.join(format!("{ID}.svg")), ICON).map_err(|e| e.to_string())?;
 
     // Best effort: the entry works without these, just not right away.
-    let _ = Command::new("update-desktop-database").arg(&applications).status();
+    let _ = Command::new("update-desktop-database")
+        .arg(&applications)
+        .status();
     let _ = Command::new("xdg-mime")
-        .args(["default", &format!("{ID}.desktop"), "x-scheme-handler/cathode"])
+        .args([
+            "default",
+            &format!("{ID}.desktop"),
+            "x-scheme-handler/cathode",
+        ])
         .status();
     let _ = Command::new("gtk-update-icon-cache")
         .args(["-q", "-t"])

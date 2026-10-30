@@ -4,14 +4,22 @@
 use std::path::PathBuf;
 
 const FILES: [(&str, &str); 3] = [
-    ("manifest.json", include_str!("../packaging/extension/manifest.json")),
-    ("background.js", include_str!("../packaging/extension/background.js")),
-    ("content.js", include_str!("../packaging/extension/content.js")),
+    (
+        "manifest.json",
+        include_str!("../packaging/extension/manifest.json"),
+    ),
+    (
+        "background.js",
+        include_str!("../packaging/extension/background.js"),
+    ),
+    (
+        "content.js",
+        include_str!("../packaging/extension/content.js"),
+    ),
 ];
 
 pub fn directory() -> PathBuf {
-    crate::paths::data()
-        .join("extension")
+    crate::paths::data().join("extension")
 }
 
 /// Writes the extension, replacing an older copy, and returns its folder.

@@ -58,8 +58,7 @@ fn with<R>(f: impl FnOnce(&mut Vec<Collection>) -> R) -> R {
 }
 
 fn directory() -> PathBuf {
-    crate::paths::config()
-        .join("collections")
+    crate::paths::config().join("collections")
 }
 
 /// Where the videos saved to a collection without a directory of its own go.
@@ -136,10 +135,8 @@ pub fn init() {
     sort(&mut list);
     with(|slot| *slot = list);
 
-    if first_run {
-        if let Err(error) = create(DEFAULT_NAME, Some(default_directory(DEFAULT_NAME))) {
-            crate::log::warning!("Cannot create the default collection: {error}");
-        }
+    if first_run && let Err(error) = create(DEFAULT_NAME, Some(default_directory(DEFAULT_NAME))) {
+        crate::log::warning!("Cannot create the default collection: {error}");
     }
 }
 

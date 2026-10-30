@@ -4,12 +4,12 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::{Notify, Semaphore};
 
 use crate::profile::{ChannelRef, Input, Item, PlaylistRef};
@@ -740,8 +740,8 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
     // yt-dlp only prints a listing once it has all of it, which takes a while for a long
     // channel. A short one comes first so there is something to look at in the meantime.
     let mut seen = HashSet::new();
-    if limit > SEARCH_MAX_RESULTS {
-        if let Err(error) = stream_listing(
+    if limit > SEARCH_MAX_RESULTS
+        && let Err(error) = stream_listing(
             &key,
             &url,
             FIRST_PAGE,
@@ -750,9 +750,8 @@ async fn listing(key: String, source: Source, on_response: &impl Fn(Response)) {
             language.clone(),
         )
         .await
-        {
-            return finish(Some(error));
-        }
+    {
+        return finish(Some(error));
     }
     finish(
         stream_listing(&key, &url, limit, &mut seen, on_response, language)
@@ -922,10 +921,11 @@ fn parse_lockup(lockup: &Value) -> Option<Entry> {
         .find_map(|badge| badge["thumbnailBadgeViewModel"]["text"].as_str())
         .and_then(parse_clock)?;
 
-    let channel_id = metadata["image"]["decoratedAvatarViewModel"]["rendererContext"]
-        ["commandContext"]["onTap"]["innertubeCommand"]["browseEndpoint"]["browseId"]
-        .as_str()
-        .unwrap_or_default();
+    let channel_id =
+        metadata["image"]["decoratedAvatarViewModel"]["rendererContext"]["commandContext"]["onTap"]
+            ["innertubeCommand"]["browseEndpoint"]["browseId"]
+            .as_str()
+            .unwrap_or_default();
 
     let stats = rows.iter().find(|row| row.len() == 2);
 
@@ -1138,10 +1138,10 @@ async fn stream_listing(
                     channels: vec![channel],
                 });
             }
-        } else if let Some(entry) = value.as_ref().and_then(parse_entry) {
-            if seen.insert(entry.id.clone()) {
-                batch.push(entry);
-            }
+        } else if let Some(entry) = value.as_ref().and_then(parse_entry)
+            && seen.insert(entry.id.clone())
+        {
+            batch.push(entry);
         }
     }
 
@@ -1214,10 +1214,11 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
         return None;
     }
 
-    if let Some(availability) = entry["availability"].as_str() {
-        if availability != "public" && availability != "unlisted" {
-            return None;
-        }
+    if let Some(availability) = entry["availability"].as_str()
+        && availability != "public"
+        && availability != "unlisted"
+    {
+        return None;
     }
 
     // Ongoing and upcoming live streams have no duration.
@@ -1687,7 +1688,9 @@ async fn avatar(id: &str) -> Result<Thumbnail, String> {
     if id.starts_with(RUMBLE_PREFIX) {
         return Err("Rumble channels have no avatar here".to_string());
     }
-    let file = cache_dir().join("avatars").join(format!("{}.jpg", bare_id(id)));
+    let file = cache_dir()
+        .join("avatars")
+        .join(format!("{}.jpg", bare_id(id)));
     let bytes = match std::fs::read(&file) {
         Ok(bytes) => bytes,
         Err(_) => {

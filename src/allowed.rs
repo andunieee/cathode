@@ -52,7 +52,10 @@ fn with<R>(f: impl FnOnce(&mut Local) -> R) -> R {
 }
 
 fn words(text: &str) -> Vec<String> {
-    text.to_lowercase().split_whitespace().map(str::to_owned).collect()
+    text.to_lowercase()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
 }
 
 fn matches(words: &[String], title: &str) -> bool {
@@ -113,7 +116,14 @@ pub fn start(query: &str, sink: Sink) -> u64 {
             .retain(|_, listing| listing.done.is_none_or(|done| done.elapsed() < KEEP));
         let sources = playlists
             .iter()
-            .map(|playlist| (playlist_key(&playlist.id), Source::Playlist { id: playlist.id.clone() }))
+            .map(|playlist| {
+                (
+                    playlist_key(&playlist.id),
+                    Source::Playlist {
+                        id: playlist.id.clone(),
+                    },
+                )
+            })
             .chain(channels.iter().map(|channel| {
                 (
                     channel_key(&channel.id, &query),

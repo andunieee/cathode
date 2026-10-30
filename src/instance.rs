@@ -136,7 +136,11 @@ impl Primary {
     pub fn listen(self, on_targets: impl Fn(Vec<String>) + Send + 'static) {
         std::thread::spawn(move || {
             // Keeps the lock for as long as this thread, so the whole process.
-            let Primary { listener, token, _lock } = self;
+            let Primary {
+                listener,
+                token,
+                _lock,
+            } = self;
             for stream in listener.incoming().flatten() {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
                 let mut line = String::new();

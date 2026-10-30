@@ -8,12 +8,15 @@ static PROFILE: OnceLock<Option<String>> = OnceLock::new();
 
 /// Sets the profile for the whole run. Only letters, digits, `-` and `_` are accepted.
 pub fn set_profile(name: Option<String>) -> Result<(), String> {
-    if let Some(name) = &name {
-        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(format!(
-                "invalid profile name {name:?}: use only letters, digits, - and _"
-            ));
-        }
+    if let Some(name) = &name
+        && (name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    {
+        return Err(format!(
+            "invalid profile name {name:?}: use only letters, digits, - and _"
+        ));
     }
     let _ = PROFILE.set(name);
     Ok(())
@@ -41,13 +44,19 @@ fn base(sandboxed: impl Fn(PathBuf) -> PathBuf, native: Option<PathBuf>) -> Opti
 }
 
 pub fn config() -> PathBuf {
-    base(|home| home.join(".config"), dirs::config_dir()).unwrap_or_else(|| PathBuf::from(".")).join(folder())
+    base(|home| home.join(".config"), dirs::config_dir())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(folder())
 }
 
 pub fn data() -> PathBuf {
-    base(|home| home.join(".local/share"), dirs::data_dir()).unwrap_or_else(|| PathBuf::from(".")).join(folder())
+    base(|home| home.join(".local/share"), dirs::data_dir())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(folder())
 }
 
 pub fn cache() -> PathBuf {
-    base(|home| home.join(".cache"), dirs::cache_dir()).unwrap_or_else(std::env::temp_dir).join(folder())
+    base(|home| home.join(".cache"), dirs::cache_dir())
+        .unwrap_or_else(std::env::temp_dir)
+        .join(folder())
 }

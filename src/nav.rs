@@ -283,8 +283,9 @@ pub fn show_player_controls() {
             &ui.player_settings,
         ];
         // The dropdown doesn't say whether it's open, but its list is a popover among its children.
-        let speed_open = std::iter::successors(ui.speed.first_child(), |child| child.next_sibling())
-            .any(|child| child.is::<gtk::Popover>() && child.is_visible());
+        let speed_open =
+            std::iter::successors(ui.speed.first_child(), |child| child.next_sibling())
+                .any(|child| child.is::<gtk::Popover>() && child.is_visible());
         if ui.player.is_paused()
             || ui.player_controls_hover.contains_pointer()
             || menus.iter().any(|menu| menu.is_active())
@@ -1216,7 +1217,12 @@ fn show_allowed(key: String, query: &str) {
     ui.store.remove_all();
     show_channel_results(&[]);
 
-    let cached = with(|state| state.listings.get(&key).map(|listing| listing.entries.clone()));
+    let cached = with(|state| {
+        state
+            .listings
+            .get(&key)
+            .map(|listing| listing.entries.clone())
+    });
     if let Some(entries) = cached {
         append_entries(&ui, &entries);
         update_results_status(&key);
@@ -1227,7 +1233,11 @@ fn show_allowed(key: String, query: &str) {
     if let Some((id, old)) = with(|state| state.allowed_search.take()) {
         allowed::cancel(id);
         with(|state| {
-            if state.listings.get(&old).is_some_and(|listing| !listing.done) {
+            if state
+                .listings
+                .get(&old)
+                .is_some_and(|listing| !listing.done)
+            {
                 state.listings.remove(&old);
             }
         });
@@ -1812,7 +1822,7 @@ fn restore_session() {
         state.queue = saved
             .queue
             .into_iter()
-            .filter(|entry| video_allowed(entry))
+            .filter(video_allowed)
             .map(|entry| QueueItem {
                 entry,
                 state: QueueState::Waiting,
@@ -1827,7 +1837,7 @@ fn restore_session() {
         fetch_original_title(entry);
     }
 
-    if let Some(entry) = saved.playing.filter(|entry| video_allowed(entry)) {
+    if let Some(entry) = saved.playing.filter(video_allowed) {
         with(|state| state.start_paused = Some(entry.id.clone()));
         play(entry);
     }
@@ -1975,7 +1985,7 @@ fn restore_playback() {
     if let Some(volume) = saved.volume {
         ui.volume_scale.set_value(volume.clamp(0.0, 1.0));
     }
-    let index = saved.speed.and_then(|speed| ui::speed_index(speed));
+    let index = saved.speed.and_then(ui::speed_index);
     if let Some(index) = index {
         ui.speed.set_selected(index);
     }
@@ -2434,20 +2444,35 @@ pub fn remote_status() -> crate::remote::Status {
     // Nothing in the player counts as paused: Play starts the queue.
     let paused = ui.player.id().is_none() || ui.player.is_paused();
     let (position, duration) = (ui.player.position(), ui.player.duration());
-    let (volume, speed) = (ui.volume_scale.value(), ui::speed_at(ui.speed.selected()).unwrap_or(1.0));
+    let (volume, speed) = (
+        ui.volume_scale.value(),
+        ui::speed_at(ui.speed.selected()).unwrap_or(1.0),
+    );
     let (captions, caption) = {
         let (tracks, selected) = &*ui.caption_tracks.borrow();
         (
-            tracks.iter().map(|track| (track.id, track.label.clone())).collect(),
+            tracks
+                .iter()
+                .map(|track| (track.id, track.label.clone()))
+                .collect(),
             selected.unwrap_or(-1),
         )
     };
-    let size = with(|state| state.playing.as_ref().and_then(|entry| state.picked.get(&entry.id).copied()))
-        .unwrap_or(settings::get().max_height);
+    let size = with(|state| {
+        state
+            .playing
+            .as_ref()
+            .and_then(|entry| state.picked.get(&entry.id).copied())
+    })
+    .unwrap_or(settings::get().max_height);
     let feed = if profile::restricted() {
         Vec::new()
     } else {
-        subscriptions::feed().iter().take(30).map(crate::remote::hit).collect()
+        subscriptions::feed()
+            .iter()
+            .take(30)
+            .map(crate::remote::hit)
+            .collect()
     };
     let chapters = ui
         .player
@@ -2468,8 +2493,16 @@ pub fn remote_status() -> crate::remote::Status {
         restricted: profile::restricted(),
         locked: profile::has_password(),
         playing: state.playing.as_ref().map(|entry| entry.id.clone()),
-        title: state.playing.as_ref().map(|entry| entry.title.clone()).unwrap_or_default(),
-        channel: state.playing.as_ref().map(|entry| entry.channel.clone()).unwrap_or_default(),
+        title: state
+            .playing
+            .as_ref()
+            .map(|entry| entry.title.clone())
+            .unwrap_or_default(),
+        channel: state
+            .playing
+            .as_ref()
+            .map(|entry| entry.channel.clone())
+            .unwrap_or_default(),
         paused,
         position,
         duration,
@@ -2602,8 +2635,13 @@ pub fn track_queue_button(
 }
 
 pub fn sync_queue_buttons() {
-    let queued: Vec<String> =
-        with(|state| state.queue.iter().map(|item| item.entry.id.clone()).collect());
+    let queued: Vec<String> = with(|state| {
+        state
+            .queue
+            .iter()
+            .map(|item| item.entry.id.clone())
+            .collect()
+    });
     QUEUE_BUTTONS.with(|buttons| {
         buttons.borrow_mut().retain(|tracked| {
             let Some(button) = tracked.button.upgrade() else {
@@ -2841,7 +2879,10 @@ fn queue_status(state: &State, item: &QueueItem) -> String {
     // Where the video is left off, out of how long it is.
     let player = &ui::get().player;
     let (position, duration) = if player.id().as_deref() == Some(&item.entry.id) {
-        (player.position(), Some(player.duration()).filter(|d| *d > 0.0))
+        (
+            player.position(),
+            Some(player.duration()).filter(|d| *d > 0.0),
+        )
     } else {
         (
             state.positions.get(&item.entry.id).copied().unwrap_or(0.0),
@@ -3056,10 +3097,10 @@ fn restore_sidebars() {
 
     let remember = |toggle: &gtk::ToggleButton, change: fn(&mut state::State, bool)| {
         toggle.connect_toggled(move |toggle| {
-            if !ui::get().syncing.get() {
-                if let Err(error) = state::update(|state| change(state, toggle.is_active())) {
-                    crate::log::warning!("Cannot write the state: {error}");
-                }
+            if !ui::get().syncing.get()
+                && let Err(error) = state::update(|state| change(state, toggle.is_active()))
+            {
+                crate::log::warning!("Cannot write the state: {error}");
             }
         });
     };
@@ -3907,20 +3948,18 @@ pub fn handle(response: Response) {
                     let playing = ui.player.id().is_some_and(|id| format!("v:{id}") == key);
                     let entry = info.entry.clone();
                     with(|state| state.infos.insert(key, info));
-                    if on_page {
-                        if let Page::Video(shown) = current() {
-                            // A pasted link only knew the id, the details know the rest.
-                            let shown = if shown.title.is_empty() {
-                                with(|state| {
-                                    let index = state.index;
-                                    state.history[index] = Page::Video(entry.clone());
-                                });
-                                entry
-                            } else {
-                                shown
-                            };
-                            show_video(&shown);
-                        }
+                    if on_page && let Page::Video(shown) = current() {
+                        // A pasted link only knew the id, the details know the rest.
+                        let shown = if shown.title.is_empty() {
+                            with(|state| {
+                                let index = state.index;
+                                state.history[index] = Page::Video(entry.clone());
+                            });
+                            entry
+                        } else {
+                            shown
+                        };
+                        show_video(&shown);
                     }
                     if playing {
                         show_player_chapters();
@@ -4193,10 +4232,10 @@ pub fn handle(response: Response) {
                 }
             }
 
-            if let Err(error) = &result {
-                if error != "Cancelled" {
-                    toast(&format!("Download failed: {error}"));
-                }
+            if let Err(error) = &result
+                && error != "Cancelled"
+            {
+                toast(&format!("Download failed: {error}"));
             }
 
             pump_queue();

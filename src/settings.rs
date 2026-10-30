@@ -66,8 +66,7 @@ impl Default for Settings {
 static SETTINGS: RwLock<Option<Settings>> = RwLock::new(None);
 
 fn path() -> PathBuf {
-    crate::paths::config()
-        .join("settings.json")
+    crate::paths::config().join("settings.json")
 }
 
 fn load() -> Settings {

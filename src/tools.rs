@@ -135,31 +135,59 @@ impl Tool {
             )],
             // No GitHub builds for the Mac, these are the ones linked from ffmpeg.org.
             (Tool::Ffmpeg, "macos", "aarch64") => vec![
-                mirror("https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"),
-                mirror("https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip"),
+                mirror(
+                    "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip",
+                ),
+                mirror(
+                    "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip",
+                ),
             ],
             (Tool::Ffmpeg, "macos", "x86_64") => vec![
-                mirror("https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip"),
-                mirror("https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffprobe.zip"),
+                mirror(
+                    "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip",
+                ),
+                mirror(
+                    "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffprobe.zip",
+                ),
             ],
 
             (Tool::Deno, "linux", "x86_64") => {
-                vec![github("denoland/deno", "deno-x86_64-unknown-linux-gnu.zip", Zip)]
+                vec![github(
+                    "denoland/deno",
+                    "deno-x86_64-unknown-linux-gnu.zip",
+                    Zip,
+                )]
             }
             (Tool::Deno, "linux", "aarch64") => {
-                vec![github("denoland/deno", "deno-aarch64-unknown-linux-gnu.zip", Zip)]
+                vec![github(
+                    "denoland/deno",
+                    "deno-aarch64-unknown-linux-gnu.zip",
+                    Zip,
+                )]
             }
             (Tool::Deno, "windows", "x86_64") => {
-                vec![github("denoland/deno", "deno-x86_64-pc-windows-msvc.zip", Zip)]
+                vec![github(
+                    "denoland/deno",
+                    "deno-x86_64-pc-windows-msvc.zip",
+                    Zip,
+                )]
             }
             (Tool::Deno, "windows", "aarch64") => {
-                vec![github("denoland/deno", "deno-aarch64-pc-windows-msvc.zip", Zip)]
+                vec![github(
+                    "denoland/deno",
+                    "deno-aarch64-pc-windows-msvc.zip",
+                    Zip,
+                )]
             }
             (Tool::Deno, "macos", "x86_64") => {
                 vec![github("denoland/deno", "deno-x86_64-apple-darwin.zip", Zip)]
             }
             (Tool::Deno, "macos", "aarch64") => {
-                vec![github("denoland/deno", "deno-aarch64-apple-darwin.zip", Zip)]
+                vec![github(
+                    "denoland/deno",
+                    "deno-aarch64-apple-darwin.zip",
+                    Zip,
+                )]
             }
             _ => return None,
         })
@@ -758,8 +786,7 @@ mod tests {
         }
         let package = Package {
             origin: Origin::Mirror {
-                url:
-                    "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip",
+                url: "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip",
             },
             archive: Archive::Zip,
         };

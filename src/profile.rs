@@ -82,7 +82,7 @@ impl Profile {
 
 thread_local! {
     /// The file could not be read, which keeps the restricted mode on.
-    static BROKEN: Cell<bool> = Cell::new(false);
+    static BROKEN: Cell<bool> = const { Cell::new(false) };
     static PROFILE: RefCell<Profile> = RefCell::new(Profile::default());
     /// Videos seen in the listings of allowed channels and playlists.
     static LISTED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());

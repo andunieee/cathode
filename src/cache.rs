@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::fetch::{bare_id, cache_dir, youtube_id, Entry};
+use crate::fetch::{Entry, bare_id, cache_dir, youtube_id};
 
 const INDEX_FILE: &str = "index.json";
 /// Downloaded videos that are not saved anywhere are deleted once they are this old.
@@ -189,7 +189,7 @@ pub fn scan() -> Vec<CachedVideo> {
         })
         .collect();
 
-    videos.sort_by(|a, b| b.modified.cmp(&a.modified));
+    videos.sort_by_key(|b| std::cmp::Reverse(b.modified));
     videos
 }
 

@@ -95,7 +95,10 @@ fn point_pixbuf_at_bundle() {
     if std::env::var_os("GDK_PIXBUF_MODULE_FILE").is_some() {
         return;
     }
-    if let Some(root) = std::env::current_exe().ok().and_then(|exe| exe.parent()?.parent().map(|p| p.to_path_buf())) {
+    if let Some(root) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent()?.parent().map(|p| p.to_path_buf()))
+    {
         let cache = root.join("lib/gdk-pixbuf-2.0/2.10.0/loaders.cache");
         if cache.exists() {
             std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache);
@@ -162,7 +165,10 @@ fn main() -> glib::ExitCode {
     // stylesheet for GTK's legacy one (no padding, wrong widgets). Drop it, libadwaita follows the
     // system's light/dark preference by itself.
     if std::env::var_os("APPIMAGE").is_some()
-        && matches!(std::env::var("GTK_THEME").as_deref(), Ok("Adwaita:light" | "Adwaita:dark"))
+        && matches!(
+            std::env::var("GTK_THEME").as_deref(),
+            Ok("Adwaita:light" | "Adwaita:dark")
+        )
     {
         // SAFETY: nothing else is running yet.
         unsafe { std::env::remove_var("GTK_THEME") };
@@ -197,10 +203,8 @@ fn main() -> glib::ExitCode {
 
     // Cathode detaches from the terminal unless --foreground is given. If one is running
     // already, it is told what to open and this one is done.
-    if !arguments.foreground {
-        if instance::send(&arguments.targets) || detach() {
-            return glib::ExitCode::SUCCESS;
-        }
+    if !arguments.foreground && (instance::send(&arguments.targets) || detach()) {
+        return glib::ExitCode::SUCCESS;
     }
     log::init();
     log::info!("arguments: {:?}", &args[1..]);

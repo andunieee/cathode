@@ -26,8 +26,7 @@ pub struct Watched {
 }
 
 fn path() -> PathBuf {
-    crate::paths::data()
-        .join("history.jsonl")
+    crate::paths::data().join("history.jsonl")
 }
 
 /// Puts the video at the end of the history, unless it is there already.

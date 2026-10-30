@@ -11,8 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static FILE: Mutex<Option<File>> = Mutex::new(None);
 
 pub fn path() -> PathBuf {
-    crate::paths::data()
-        .join("cathode.log")
+    crate::paths::data().join("cathode.log")
 }
 
 /// Opens the log for this run, and has the panics written to it.

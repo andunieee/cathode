@@ -46,8 +46,7 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
 }
 
 fn path() -> PathBuf {
-    crate::paths::config()
-        .join("subscriptions.json")
+    crate::paths::config().join("subscriptions.json")
 }
 
 fn save(list: &[Subscription]) -> Result<(), String> {
@@ -181,7 +180,7 @@ pub fn feed() -> Vec<Entry> {
             .flatten()
             .cloned()
             .collect();
-        entries.sort_by(|a, b| b.published.cmp(&a.published));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.published));
         entries
     })
 }

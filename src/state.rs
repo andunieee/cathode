@@ -74,8 +74,7 @@ thread_local! {
 }
 
 fn path() -> PathBuf {
-    crate::paths::data()
-        .join("state.json")
+    crate::paths::data().join("state.json")
 }
 
 pub fn init() {

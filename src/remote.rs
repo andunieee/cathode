@@ -19,18 +19,18 @@ use std::time::Duration;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use hypereffect::{LineBuffer, Metadata, Outbox, RendererMessage};
-use iroh::endpoint::{presets, Incoming, RecvStream};
+use iroh::endpoint::{Incoming, RecvStream, presets};
 use iroh::{Endpoint, SecretKey};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-use tokio::sync::{watch, Notify};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::{Notify, watch};
 
-use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source};
 use crate::allowed;
+use crate::fetch::{Entry, Request, Response, SearchFilter, SearchSort, Source};
 use crate::nav;
 use crate::profile;
-use crate::subscriptions;
 use crate::remote_app::RemoteApp;
+use crate::subscriptions;
 
 /// The prefix of the ALPN of hyperb sessions over iroh.
 const ALPN: &str = "hyperb/0";
@@ -228,7 +228,10 @@ impl Config {
     }
 
     fn keys(&self) -> HashSet<String> {
-        self.devices.iter().map(|device| device.key.clone()).collect()
+        self.devices
+            .iter()
+            .map(|device| device.key.clone())
+            .collect()
     }
 }
 
@@ -322,7 +325,13 @@ pub fn address() -> String {
 
 /// The paired phones, the latest last.
 pub fn devices() -> Vec<Device> {
-    with(|local| local.config.as_ref().map(|config| config.devices.clone()).unwrap_or_default())
+    with(|local| {
+        local
+            .config
+            .as_ref()
+            .map(|config| config.devices.clone())
+            .unwrap_or_default()
+    })
 }
 
 /// Forgets a phone, and lets it go if it is connected.
@@ -443,8 +452,11 @@ fn run(command: Command) {
         Command::Previous => nav::queue_step(-1),
         Command::Jump(id) => nav::queue_play(&id),
         Command::Add(id) => {
-            let found = with(|local| local.found.get(&id).cloned())
-                .or_else(|| subscriptions::feed().into_iter().find(|entry| entry.id == id));
+            let found = with(|local| local.found.get(&id).cloned()).or_else(|| {
+                subscriptions::feed()
+                    .into_iter()
+                    .find(|entry| entry.id == id)
+            });
             if let Some(entry) = found {
                 nav::queue_add(entry);
             }
@@ -465,10 +477,7 @@ fn run(command: Command) {
                 nav::set_restricted(on);
             }
         }
-        Command::Search {
-            query,
-            reply,
-        } => {
+        Command::Search { query, reply } => {
             let key = with(|local| {
                 local.searched += 1;
                 let key = format!("{KEY_PREFIX}{}", local.searched);
@@ -559,7 +568,11 @@ pub fn hit(entry: &Entry) -> Hit {
 
 /// Keeps a video the phone was shown, for it to add it to the queue.
 fn remember(local: &mut Local, entry: Entry) {
-    if local.found.insert(entry.id.clone(), entry.clone()).is_none() {
+    if local
+        .found
+        .insert(entry.id.clone(), entry.clone())
+        .is_none()
+    {
         local.found_order.push(entry.id);
     }
     while local.found_order.len() > REMEMBERED {
@@ -589,7 +602,8 @@ pub fn intercept(response: Response) -> Option<Response> {
                 if pending.hits.len() >= RESULTS {
                     break;
                 }
-                if !nav::video_allowed(&entry) || pending.hits.iter().any(|hit| hit.id == entry.id) {
+                if !nav::video_allowed(&entry) || pending.hits.iter().any(|hit| hit.id == entry.id)
+                {
                     continue;
                 }
                 pending.hits.push(hit(&entry));
@@ -817,4 +831,3 @@ pub fn qr_code(text: &str) -> Option<gdk::Texture> {
         .upcast(),
     )
 }
-
