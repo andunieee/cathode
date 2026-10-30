@@ -300,7 +300,8 @@ mod tests {
     fn old_videos_expire() {
         let root = std::env::temp_dir().join(format!("cathode-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("XDG_CACHE_HOME", &root);
+        // SAFETY: This test owns the environment for the process; nothing else reads it concurrently.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", &root) };
         let dir = cache_dir();
         std::fs::create_dir_all(&dir).unwrap();
 

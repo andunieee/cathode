@@ -21,6 +21,9 @@ pub const SPEEDS: [f64; 9] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 /// The index of the normal speed in `SPEEDS`.
 pub const NORMAL_SPEED: u32 = 2;
 
+/// Duration of the video, and the `(start, end)` of its sponsor segments in seconds.
+pub type SponsorSpans = Rc<RefCell<(f64, Vec<(f64, f64)>)>>;
+
 pub struct CacheRow {
     pub entry: Entry,
     /// The name of the file, which tells apart the sizes a video was downloaded at.
@@ -139,7 +142,7 @@ pub struct Ui {
     /// Paints the sponsor segments over the seek bar.
     pub seek_marks: gtk::DrawingArea,
     /// Duration of the video, and the `(start, end)` of its sponsor segments in seconds.
-    pub sponsor_spans: Rc<RefCell<(f64, Vec<(f64, f64)>)>>,
+    pub sponsor_spans: SponsorSpans,
     pub time_label: gtk::Label,
     /// The sizes the video in the player can be downloaded at, in the order of `QUALITIES`.
     pub size_buttons: Vec<gtk::CheckButton>,
@@ -1147,7 +1150,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             None => false,
         }
     });
-    let sponsor_spans: Rc<RefCell<(f64, Vec<(f64, f64)>)>> = Default::default();
+    let sponsor_spans: SponsorSpans = Default::default();
     let seek_marks = gtk::DrawingArea::new();
     seek_marks.set_can_target(false);
     seek_marks.set_draw_func({

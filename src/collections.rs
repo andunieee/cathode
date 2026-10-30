@@ -451,8 +451,11 @@ mod tests {
     fn saving_and_importing() {
         let root = std::env::temp_dir().join(format!("cathode-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
-        std::env::set_var("XDG_DATA_HOME", root.join("data"));
+        // SAFETY: This test owns the environment for the process; nothing else reads it concurrently.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
+            std::env::set_var("XDG_DATA_HOME", root.join("data"));
+        }
 
         // The first run makes the default place to save to.
         init();
