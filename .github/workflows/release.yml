@@ -81,7 +81,9 @@ jobs:
 
           wget -qc https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -qc https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
-          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
+          wget -qc https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          wget -qc https://raw.githubusercontent.com/AppImageCommunity/pkg2appimage/master/excludelist
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh appimagetool-x86_64.AppImage
 
           # linuxdeploy copies the binary plus all (transitively) linked
           # shared libraries into AppDir/usr/lib and rewrites their RUNPATHs;
@@ -92,11 +94,41 @@ jobs:
             -d AppDir/usr/share/applications/io.github.andunieee.Cathode.desktop \
             -i AppDir/usr/share/icons/hicolor/256x256/apps/io.github.andunieee.Cathode.png \
             --plugin gtk \
-            --output appimage \
             --exclude-library 'libEGL.so*' \
             --exclude-library 'libGL.so*'
 
-          mv Cathode-*.AppImage "dist/cathode-linux-x86_64-${TAG}.AppImage"
+          # libpipewire-0.3 and libjack are on the excludelist but not on every host:
+          # ship them (with what they need that isn't bundled or excluded) aside, for
+          # the fallback-libs hook to use only when the host has none.
+          excluded="$(grep -v -e '^#' -e '^$' excludelist | sed 's/[[:space:]].*//')"
+          for lib in libpipewire-0.3.so.0 libjack.so.0; do
+            dir="AppDir/usr/lib/fallback/$lib"
+            mkdir -p "$dir"
+            cp -L "/usr/lib/x86_64-linux-gnu/$lib" "$dir/"
+            ldd "$dir/$lib" | awk '$2 == "=>" && $3 ~ /^\// {print $1, $3}' | while read -r name path; do
+              [ -e "AppDir/usr/lib/$name" ] || printf '%s\n' "$excluded" | grep -qxF "$name" || cp -L "$path" "$dir/"
+            done
+            patchelf --set-rpath '$ORIGIN:$ORIGIN/../..' "$dir"/*
+          done
+          ls -lR AppDir/usr/lib/fallback
+          # Without --output, linuxdeploy leaves AppRun a symlink to the binary: write the
+          # wrapper that sources the hooks (the gtk plugin's and ours) as it would.
+          install -m0644 packaging/appimage/fallback-libs.sh AppDir/apprun-hooks/
+          rm AppDir/AppRun
+          ln -sf usr/bin/cathode AppDir/AppRun.wrapped
+          {
+            printf '#! /usr/bin/env bash\n\nset -e\n\nthis_dir="$(readlink -f "$(dirname "$0")")"\n\n'
+            for hook in AppDir/apprun-hooks/*.sh; do
+              printf 'source "$this_dir"/apprun-hooks/"%s"\n' "${hook##*/}"
+            done
+            printf '\nexec "$this_dir"/AppRun.wrapped "$@"\n'
+          } > AppDir/AppRun
+          chmod 0755 AppDir/AppRun
+          cat AppDir/AppRun
+          grep -q linuxdeploy-plugin-gtk.sh AppDir/AppRun
+
+          # AppImage names don't say "linux": they all are.
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir "dist/cathode-${TAG}-x86_64.AppImage"
 
       - uses: actions/upload-artifact@v4
         with:
