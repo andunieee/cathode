@@ -468,6 +468,18 @@ fn about_dialog() -> adw::AboutDialog {
         .build()
 }
 
+/// A row showing where something is kept, the path selectable so that it can be copied.
+fn location_row(title: &str, path: std::path::PathBuf, description: &str) -> adw::ActionRow {
+    adw::ActionRow::builder()
+        .title(title)
+        .subtitle(path.display().to_string())
+        .subtitle_selectable(true)
+        // Wraps rather than cutting a long location short.
+        .subtitle_lines(2)
+        .tooltip_text(description)
+        .build()
+}
+
 fn link_row(title: &str, uri: String) -> adw::ActionRow {
     let row = adw::ActionRow::builder()
         .title(title)
@@ -518,9 +530,35 @@ fn about() -> adw::PreferencesPage {
     links.add(&link_row("Website", WEBSITE.to_string()));
     links.add(&link_row("Report an issue", format!("{WEBSITE}/issues")));
 
+    let files = adw::PreferencesGroup::builder()
+        .title("File paths")
+        .tooltip_text("Where do we save each type of data used by Cathode")
+        .build();
+    files.add(&location_row(
+        "Settings",
+        crate::paths::config().join("settings.json"),
+        "Global options, subscriptions, collections and restricted mode settings.",
+    ));
+    files.add(&location_row(
+        "Videos",
+        crate::fetch::cache_dir(),
+        "Videos and their subtitles, deleted after 48 hours unless saved.",
+    ));
+    files.add(&location_row(
+        "Permanent non-config data",
+        crate::paths::data(),
+        "Queue and other current app views, history, log and saved videos.",
+    ));
+    files.add(&location_row(
+        "Downloaded tools",
+        crate::tools::dir(),
+        "The programs Cathode downloads and requires in order to work, mostly yt-dlp, ffmpeg and deno",
+    ));
+
     let page = adw::PreferencesPage::new();
     page.add(&top);
     page.add(&links);
+    page.add(&files);
     page
 }
 

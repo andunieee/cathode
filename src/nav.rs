@@ -4119,11 +4119,14 @@ pub fn handle(response: Response) {
             match status {
                 Status::Checking => {}
                 Status::Installing { tool, fraction } => {
+                    let path = crate::tools::dir();
                     banner.set_title(&match fraction {
-                        Some(fraction) => {
-                            format!("Downloading {tool}… {:.0}%", fraction * 100.0)
-                        }
-                        None => format!("Setting up {tool}…"),
+                        Some(fraction) => format!(
+                            "Downloading {tool} to {}… {:.0}%",
+                            path.display(),
+                            fraction * 100.0
+                        ),
+                        None => format!("Setting up {tool} in {}…", path.display()),
                     });
                     banner.set_revealed(true);
                 }
