@@ -957,14 +957,22 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let play = gtk::Button::builder()
         .cursor(&crate::ui::pointer())
-        .label("Play")
         .css_classes(["suggested-action"])
         .build();
+    play.set_child(Some(
+        &adw::ButtonContent::builder()
+            .icon_name("media-playback-start-symbolic")
+            .label("Play")
+            .build(),
+    ));
     play.connect_clicked(|_| nav::play_current());
-    let queue_video = gtk::Button::builder()
-        .cursor(&crate::ui::pointer())
-        .label("Queue")
-        .build();
+    let queue_video = gtk::Button::builder().cursor(&crate::ui::pointer()).build();
+    queue_video.set_child(Some(
+        &adw::ButtonContent::builder()
+            .icon_name("list-add-symbolic")
+            .label("Queue")
+            .build(),
+    ));
     queue_video.connect_clicked(|_| nav::queue_current());
     let buttons = adw::WrapBox::builder()
         .child_spacing(8)
