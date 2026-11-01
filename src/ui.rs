@@ -117,7 +117,7 @@ pub struct Ui {
     pub controls: controls::Widgets,
     pub library: library::Widgets,
 
-    /// The queue sidebar, which takes the whole window in fullscreen.
+    /// The queue sidebar, which takes the whole window in theater mode and fullscreen.
     pub queue_split: adw::OverlaySplitView,
     pub queue_header: adw::HeaderBar,
     /// The left edge of the queue sidebar, dragged to resize it.
@@ -127,6 +127,12 @@ pub struct Ui {
     pub queue_scroll: gtk::ScrolledWindow,
     /// Keeps the player in proportion, in the queue sidebar.
     pub player_frame: gtk::Box,
+    /// Leaves theater mode, floating over the video while it fills the window.
+    pub exit_theater: gtk::Button,
+    /// Keeps that button shown while the pointer rests on it.
+    pub exit_theater_hover: gtk::EventControllerMotion,
+    /// Whether the video fills the window, without the window taking the whole screen.
+    pub theater: Cell<bool>,
     pub player: Rc<Player>,
     pub player_status: gtk::Label,
     /// A quick message at the top of the video, like the volume after changing it.
@@ -138,6 +144,8 @@ pub struct Ui {
     pub player_controls_hover: gtk::EventControllerMotion,
     pub player_controls_timer: RefCell<Option<glib::SourceId>>,
     pub player_settings: gtk::MenuButton,
+    /// Cycles theater mode, fullscreen and back.
+    pub fullscreen_button: gtk::Button,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
     /// Paints the sponsor segments over the seek bar.
@@ -155,7 +163,7 @@ pub struct Ui {
     pub volume: gtk::MenuButton,
     pub volume_scale: gtk::Scale,
     /// Skip buttons, which show when the progress bar is hidden, and whether each one is only
-    /// for fullscreen.
+    /// for when the video fills the window.
     pub skip_buttons: Vec<(gtk::Button, bool)>,
 
     pub queue_list: gtk::ListBox,
@@ -1330,7 +1338,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
     stop_button.connect_clicked(|_| nav::stop_player());
-    let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
+    let fullscreen = icon_button("view-fullscreen-symbolic", "Theater mode");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
     // The settings of the player
@@ -1451,6 +1459,22 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     player_controls.append(&seek_row);
     player_controls.append(&buttons_row);
 
+    // A way out of theater mode, where the header bar and its window buttons are gone.
+    let exit_theater = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
+        .icon_name("view-restore-symbolic")
+        .tooltip_text("Leave theater mode")
+        .css_classes(["osd", "theater-exit"])
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
+        .margin_top(8)
+        .margin_start(8)
+        .visible(false)
+        .build();
+    exit_theater.connect_clicked(|_| nav::leave_theater());
+    let exit_theater_hover = gtk::EventControllerMotion::new();
+    exit_theater.add_controller(exit_theater_hover.clone());
+
     let click = gtk::GestureClick::new();
     click.connect_released(|_, presses, _, _| match presses {
         1 => nav::toggle_pause(),
@@ -1476,6 +1500,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     overlay.add_overlay(&player_status);
     overlay.add_overlay(&player_message);
     overlay.add_overlay(&player_controls);
+    overlay.add_overlay(&exit_theater);
     overlay.add_controller(motion);
     // Not a `gtk::AspectFrame`: that one lays its child out at the wrong place in GTK 4.20.
     let player_frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1483,7 +1508,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     player_frame.add_tick_callback({
         let overlay = overlay.clone();
         move |frame, _clock| {
-            // In fullscreen the player fills the sidebar, otherwise it is kept 16:9.
+            // Filling the window (theater mode or fullscreen), the player takes it, otherwise it
+            // is kept 16:9.
             let height = if frame.vexpands() {
                 -1
             } else {
@@ -1807,7 +1833,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         match key {
             gdk::Key::Left if alt => nav::back(),
             gdk::Key::Right if alt => nav::forward(),
-            gdk::Key::Escape if get().window.is_fullscreen() => nav::toggle_fullscreen(),
+            gdk::Key::Escape => {
+                if !nav::exit_immersive() {
+                    return glib::Propagation::Proceed;
+                }
+            }
             _ if alt || ctrl => return glib::Propagation::Proceed,
             _ => {
                 if !player_key(key, shift) {
@@ -1887,6 +1917,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         queue_fractions,
         queue_scroll,
         player_frame,
+        exit_theater,
+        exit_theater_hover,
+        theater: Cell::new(false),
         player,
         player_status,
         player_message,
@@ -1895,6 +1928,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         player_controls_hover,
         player_controls_timer: RefCell::new(None),
         player_settings,
+        fullscreen_button: fullscreen.clone(),
         play_button,
         seek,
         seek_marks,

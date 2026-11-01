@@ -268,6 +268,8 @@ pub fn show_player_controls() {
     let ui = ui::get();
     ui.player_controls.remove_css_class("faded");
     ui.player_controls.set_can_target(true);
+    ui.exit_theater.remove_css_class("faded");
+    ui.exit_theater.set_can_target(true);
     ui.player_frame.set_cursor(None);
     if let Some(timer) = ui.player_controls_timer.borrow_mut().take() {
         timer.remove();
@@ -288,6 +290,7 @@ pub fn show_player_controls() {
                 .any(|child| child.is::<gtk::Popover>() && child.is_visible());
         if ui.player.is_paused()
             || ui.player_controls_hover.contains_pointer()
+            || ui.exit_theater_hover.contains_pointer()
             || menus.iter().any(|menu| menu.is_active())
             || speed_open
         {
@@ -296,6 +299,8 @@ pub fn show_player_controls() {
         ui.player_controls.add_css_class("faded");
         // Clicks go to the video, not to the invisible buttons.
         ui.player_controls.set_can_target(false);
+        ui.exit_theater.add_css_class("faded");
+        ui.exit_theater.set_can_target(false);
         // The mouse pointer goes away with it, over the video only.
         ui.player_frame.set_cursor_from_name(Some("none"));
     });
@@ -1678,11 +1683,11 @@ pub fn set_progress_bar(visible: bool) {
     if let Err(error) = settings::update(|s| s.hide_progress_bar = !visible) {
         toast(&format!("Could not save the settings: {error}"));
     }
-    apply_progress_bar(ui::get().window.is_fullscreen());
+    apply_immersive();
 }
 
-/// Shows the progress bar with the time, or the skip buttons when it is hidden. Fullscreen has
-/// more of them.
+/// Shows the progress bar with the time, or the skip buttons when it is hidden. Filling the window
+/// has more of them.
 pub fn apply_progress_bar(fullscreen: bool) {
     let ui = ui::get();
     let hidden = settings::get().hide_progress_bar;
@@ -2004,9 +2009,11 @@ pub fn stop_player() {
 
 fn unload_player() {
     let ui = ui::get();
+    ui.theater.set(false);
     if ui.window.is_fullscreen() {
-        toggle_fullscreen();
+        ui.window.set_fullscreened(false);
     }
+    apply_immersive();
     ui.player.stop();
     refresh_captions();
     with(|state| {
@@ -2377,29 +2384,87 @@ pub fn seek(fraction: f64) {
     }
 }
 
+/// Fills the window with the video first, the whole screen next, and goes back to a normal window
+/// from there.
 pub fn toggle_fullscreen() {
     let ui = ui::get();
-    let fullscreen = !ui.window.is_fullscreen();
-    if fullscreen && ui.player.id().is_none() {
-        return;
-    }
-
-    // The window only reports being fullscreen once the compositor agrees, don't wait for that.
-    ui.window.set_fullscreened(fullscreen);
-    show_fullscreen(fullscreen);
-}
-
-/// Fullscreen makes the sidebar take the whole window, with only the player in it.
-fn show_fullscreen(fullscreen: bool) {
-    let ui = ui::get();
-    let split = &ui.queue_split;
-    apply_progress_bar(fullscreen);
-    let saved = with(|state| state.sidebar_widths);
-    if fullscreen == saved.is_some() {
+    let fullscreen = ui.window.is_fullscreen();
+    if !fullscreen && !ui.theater.get() && ui.player.id().is_none() {
         return;
     }
 
     if fullscreen {
+        ui.theater.set(false);
+        ui.window.set_fullscreened(false);
+    } else if ui.theater.get() {
+        ui.window.set_fullscreened(true);
+    } else {
+        ui.theater.set(true);
+    }
+    apply_immersive();
+    show_player_controls();
+}
+
+/// Leaves fullscreen first, then theater mode. False when the window is a normal one already.
+pub fn exit_immersive() -> bool {
+    let ui = ui::get();
+    if !ui.window.is_fullscreen() && !ui.theater.get() {
+        return false;
+    }
+
+    if ui.window.is_fullscreen() {
+        // A fullscreen entered from theater goes back to it, otherwise to a normal window.
+        ui.window.set_fullscreened(false);
+    } else {
+        ui.theater.set(false);
+        // A fullscreen asked for just now may still be on its way.
+        ui.window.set_fullscreened(false);
+    }
+    apply_immersive();
+    true
+}
+
+/// Leaves theater mode, which the button floating over the video does.
+pub fn leave_theater() {
+    let ui = ui::get();
+    ui.theater.set(false);
+    if ui.window.is_fullscreen() {
+        ui.window.set_fullscreened(false);
+    }
+    apply_immersive();
+}
+
+/// Theater mode and fullscreen make the queue sidebar take the whole window, with only the player
+/// in it. The header bar, and with it the window buttons, goes away.
+fn apply_immersive() {
+    let ui = ui::get();
+    let fullscreen = ui.window.is_fullscreen();
+    let immersive = fullscreen || ui.theater.get();
+    let split = &ui.queue_split;
+
+    // The way out floats over the video, where the header bar would be.
+    ui.exit_theater.set_visible(ui.theater.get() && !fullscreen);
+    let (icon, tooltip) = if fullscreen {
+        ("view-restore-symbolic", "Leave fullscreen")
+    } else if ui.theater.get() {
+        ("view-fullscreen-symbolic", "Fullscreen")
+    } else {
+        ("view-fullscreen-symbolic", "Theater mode")
+    };
+    ui.fullscreen_button.set_icon_name(icon);
+    ui.fullscreen_button.set_tooltip_text(Some(tooltip));
+    apply_progress_bar(immersive);
+
+    // Sit under the queue normally, take the whole window once it is gone.
+    ui.player_frame.set_vexpand(immersive);
+    ui.player_frame.set_valign(gtk::Align::Fill);
+
+    let saved = with(|state| state.sidebar_widths);
+    if immersive == saved.is_some() {
+        return;
+    }
+
+    if immersive {
         with(|state| {
             state.sidebar_widths = Some((split.max_sidebar_width(), split.sidebar_width_fraction()))
         });
@@ -2413,21 +2478,17 @@ fn show_fullscreen(fullscreen: bool) {
         split.set_sidebar_width_fraction(fraction);
     }
 
-    // Sit under the queue normally, take the whole sidebar once the queue is hidden.
-    ui.player_frame.set_vexpand(fullscreen);
-    ui.player_frame.set_valign(gtk::Align::Fill);
-
     if let Some(content) = split.content() {
-        content.set_visible(!fullscreen);
+        content.set_visible(!immersive);
     }
-    ui.queue_header.set_visible(!fullscreen);
-    ui.queue_handle.set_visible(!fullscreen);
-    ui.queue_scroll.set_visible(!fullscreen);
+    ui.queue_header.set_visible(!immersive);
+    ui.queue_handle.set_visible(!immersive);
+    ui.queue_scroll.set_visible(!immersive);
 }
 
 /// The window left or entered fullscreen on its own, for instance from the compositor.
 pub fn fullscreen_changed() {
-    show_fullscreen(ui::get().window.is_fullscreen());
+    apply_immersive();
 }
 
 /// Called a few times a second to keep the player controls up to date.

@@ -263,8 +263,8 @@ fn load_css() {
          listview.rich-list > row, tab, dropdown { cursor: pointer; }
          button:disabled, checkbutton:disabled, row:disabled { cursor: default; }
          row.queue-playing { background-color: alpha(@accent_bg_color, 0.25); }
-         box.player-controls { transition: opacity 200ms; }
-         box.player-controls.faded { opacity: 0; }
+         box.player-controls, button.theater-exit { transition: opacity 200ms; }
+         box.player-controls.faded, button.theater-exit.faded { opacity: 0; }
          scale.seek-bar slider { min-width: 12px; min-height: 12px; margin: -4px; }
          row.queue-playing .title { font-weight: bold; }
          label.player-message { color: white; font-weight: bold; font-size: 1.4em;
