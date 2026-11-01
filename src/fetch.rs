@@ -1656,16 +1656,21 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
     if id.starts_with(RUMBLE_PREFIX) {
         return Err("Rumble videos have no thumbnail here".to_string());
     }
-    let bytes = reqwest::get(format!(
-        "https://i.ytimg.com/vi/{}/mqdefault.jpg",
-        bare_id(id)
-    ))
-    .await
-    .and_then(|response| response.error_for_status())
-    .map_err(|e| e.to_string())?
-    .bytes()
-    .await
-    .map_err(|e| e.to_string())?;
+
+    // Alongside the chosen thumbnail, YouTube keeps three frames from earlier in the video
+    // as `mq1` to `mq3`, the middle one being from around the middle. Not every video has
+    // one, so the chosen thumbnail is the fallback.
+    let base = format!("https://i.ytimg.com/vi/{}", bare_id(id));
+    let file = if crate::settings::get().middle_thumbnails {
+        "mq2"
+    } else {
+        "mqdefault"
+    };
+    let bytes = match thumbnail_jpeg(&format!("{base}/{file}.jpg")).await {
+        Ok(bytes) => bytes,
+        Err(_) if file != "mqdefault" => thumbnail_jpeg(&format!("{base}/mqdefault.jpg")).await?,
+        Err(error) => return Err(error),
+    };
 
     let mut image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
     if !large {
@@ -1678,6 +1683,18 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
         height: image.height(),
         rgba: image.into_raw(),
     })
+}
+
+/// The bytes of a JPEG served by YouTube.
+async fn thumbnail_jpeg(url: &str) -> Result<Vec<u8>, String> {
+    reqwest::get(url)
+        .await
+        .and_then(|response| response.error_for_status())
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())
+        .map(|bytes| bytes.to_vec())
 }
 
 /// How big the avatars are kept, they are shown at 40 pixels at most.

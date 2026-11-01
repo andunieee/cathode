@@ -2004,6 +2004,25 @@ pub fn caption_mode_label(mode: CaptionMode) -> String {
     }
 }
 
+/// The thumbnails option changed, so the textures kept are of the other kind. Everything
+/// on screen asks for its thumbnail again, the rest when it is shown.
+pub fn thumbnails_changed() {
+    with(|state| {
+        state.thumbnails = [HashMap::new(), HashMap::new()];
+        state.thumbnails_requested.clear();
+    });
+    ui::refresh_thumbnails();
+    refresh_queue();
+
+    // The picture of the video page, which isn't part of a list.
+    if let Page::Video(entry) = current() {
+        let ui = ui::get();
+        let large = thumbnail(&entry.id, true, None);
+        let small = with(|state| state.thumbnails[0].get(&entry.id).cloned());
+        ui.video_picture.set_paintable(large.or(small).as_ref());
+    }
+}
+
 /// Brings the subtitle choices up to date with a new default language.
 pub fn default_language_changed() {
     let ui = ui::get();

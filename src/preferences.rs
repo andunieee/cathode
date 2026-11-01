@@ -170,10 +170,31 @@ fn general() -> adw::PreferencesPage {
         .build();
     languages.add(&language);
 
+    let middle_thumbnails = adw::SwitchRow::builder()
+        .title("Thumbnails from the videos")
+        .subtitle(
+            "Shows a frame from around the middle of each video instead of the chosen thumbnail",
+        )
+        .cursor(&crate::ui::pointer())
+        .active(current.middle_thumbnails)
+        .build();
+    middle_thumbnails.connect_active_notify(|row| {
+        let active = row.is_active();
+        // Nothing to refresh when the switch is only being set up.
+        let changed = settings::get().middle_thumbnails != active;
+        save(|s| s.middle_thumbnails = active);
+        if changed {
+            nav::thumbnails_changed();
+        }
+    });
+
     let downloads = adw::PreferencesGroup::builder().title("Downloads").build();
     downloads.add(&quality);
     downloads.add(&sponsors);
     downloads.add(&rate);
+
+    let thumbnails = adw::PreferencesGroup::builder().title("Thumbnails").build();
+    thumbnails.add(&middle_thumbnails);
 
     let mut browsers = vec!["None"];
     browsers.extend(BROWSERS);
@@ -257,6 +278,7 @@ fn general() -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     page.add(&languages);
     page.add(&downloads);
+    page.add(&thumbnails);
     page.add(&queue);
     page.add(&network);
     page.add(&browser);

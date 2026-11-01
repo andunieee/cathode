@@ -539,6 +539,24 @@ pub fn refresh_watched() {
     });
 }
 
+/// Asks the cards on screen for their thumbnails again, after the thumbnails option changed.
+pub fn refresh_thumbnails() {
+    CARDS.with_borrow_mut(|cards| {
+        cards.retain_mut(|card| {
+            let (Some(picture), Some(entry)) = (card.picture.upgrade(), card.entry.upgrade())
+            else {
+                return false;
+            };
+            let Some(entry) = entry.borrow().as_ref().cloned() else {
+                return true;
+            };
+            picture.set_widget_name(&entry.id);
+            picture.set_paintable(nav::thumbnail(&entry.id, false, Some(&picture)).as_ref());
+            true
+        });
+    });
+}
+
 /// Shows whether the video was watched: dimmed, with the label in front of the details.
 fn show_watched(title: &gtk::Label, details: &gtk::Label, picture: &gtk::Picture, entry: &Entry) {
     let watched = history::is_watched(&entry.id);
