@@ -45,6 +45,8 @@ pub struct Settings {
     pub remove_played_from_queue: bool,
     /// Shows a frame from around the middle of the videos instead of their chosen thumbnails.
     pub middle_thumbnails: bool,
+    /// Leaves the Shorts out of channel listings.
+    pub hide_shorts: bool,
     /// The language the titles of the listings and the subtitles are wanted in, like `en` or
     /// `pt-BR`. Empty for what YouTube gives by default.
     pub language: String,
@@ -61,6 +63,7 @@ impl Default for Settings {
             hide_progress_bar: false,
             remove_played_from_queue: true,
             middle_thumbnails: true,
+            hide_shorts: false,
             language: "en".to_string(),
         }
     }

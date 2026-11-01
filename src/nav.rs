@@ -761,6 +761,23 @@ fn page_allowed(page: &Page) -> bool {
     }
 }
 
+/// Whether Shorts should be left out of channel listings: always if the general setting says
+/// so, or only while the restricted mode is on if that is what its own setting says.
+fn shorts_hidden() -> bool {
+    settings::get().hide_shorts || (profile::restricted() && profile::hides_shorts())
+}
+
+/// The settings that leave Shorts out of channel listings changed.
+pub fn shorts_hidden_changed() {
+    // The channel listings saved so far may still have Shorts in them.
+    with(|state| state.listings.retain(|key, _| !key.starts_with("c:")));
+    if matches!(current(), Page::Channel { .. }) {
+        show();
+    } else if matches!(current(), Page::Home) && !profile::restricted() {
+        show_feed();
+    }
+}
+
 /// Videos listed by an allowed channel or playlist are allowed too.
 fn note_listed(key: &str, entries: &[Entry]) {
     let allowed = if let Some(id) = key.strip_prefix("l:") {
@@ -823,6 +840,8 @@ pub fn set_restricted(restricted: bool) {
     profile::forget_listed();
 
     with(|state| {
+        // The channel listings saved may have the Shorts the restricted mode leaves out.
+        state.listings.retain(|key, _| !key.starts_with("c:"));
         state.history = vec![Page::Home];
         state.index = 0;
     });
@@ -3314,7 +3333,11 @@ fn show_feed() {
     }
     ui.controls.home.set_visible_child_name("feed");
 
-    let feed = subscriptions::feed();
+    // The feed is made of channel videos, which the settings may leave the Shorts out of.
+    let feed: Vec<Entry> = subscriptions::feed()
+        .into_iter()
+        .filter(|entry| !(shorts_hidden() && entry.is_short()))
+        .collect();
     let ids: Vec<String> = feed.iter().map(|entry| entry.id.clone()).collect();
     if with(|state| std::mem::replace(&mut state.feed_ids, ids.clone())) != ids {
         ui.feed_store.remove_all();
@@ -3919,6 +3942,16 @@ pub fn handle(response: Response) {
 
     match response {
         Response::Entries { key, entries } => {
+            // A channel listing can carry the Shorts of the channel.
+            let entries: Vec<Entry> = if key.starts_with("c:") && shorts_hidden() {
+                entries
+                    .into_iter()
+                    .filter(|entry| !entry.is_short())
+                    .collect()
+            } else {
+                entries
+            };
+
             let newest = with(|state| {
                 let listing = state
                     .listings

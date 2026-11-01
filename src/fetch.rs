@@ -159,6 +159,13 @@ pub struct Entry {
     pub published: Option<i64>,
 }
 
+impl Entry {
+    /// Whether the video is a YouTube Short, which its address tells.
+    pub fn is_short(&self) -> bool {
+        self.url.contains("/shorts/")
+    }
+}
+
 /// What yt-dlp knows about a video beyond what the listings carry.
 #[derive(Debug, Clone)]
 pub struct VideoInfo {
@@ -1827,6 +1834,29 @@ mod link_tests {
         ] {
             assert_eq!(video_id_of_link(text), None, "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::Entry;
+
+    fn entry(url: &str) -> Entry {
+        serde_json::from_value(serde_json::json!({
+            "id": "yt:dQw4w9WgXcQ",
+            "url": url,
+            "title": "Some video",
+            "channel": "Some channel",
+            "channel_id": "yt:UC123",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn shorts_are_told_by_their_address() {
+        assert!(entry("https://www.youtube.com/shorts/dQw4w9WgXcQ").is_short());
+        assert!(!entry("https://www.youtube.com/watch?v=dQw4w9WgXcQ").is_short());
+        assert!(!entry("https://rumble.com/v5abcde-some-title.html").is_short());
     }
 }
 

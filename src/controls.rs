@@ -66,6 +66,7 @@ pub struct Widgets {
 
     settings_entry: gtk::Entry,
     settings_status: gtk::Label,
+    hide_shorts: adw::SwitchRow,
     settings_channels: Section,
     settings_playlists: Section,
     settings_videos: Section,
@@ -147,6 +148,27 @@ impl Widgets {
             .css_classes(["dim-label"])
             .build();
 
+        let hide_shorts = adw::SwitchRow::builder()
+            .title("Hide Shorts")
+            .subtitle("Leaves Shorts out of channel listings while the restricted mode is on")
+            .cursor(&crate::ui::pointer())
+            .build();
+        hide_shorts.connect_active_notify(|row| {
+            let active = row.is_active();
+            if profile::hides_shorts() == active {
+                return;
+            }
+            match profile::update(|p| p.hide_shorts = active) {
+                Ok(()) => nav::shorts_hidden_changed(),
+                Err(error) => nav::toast(&format!("Could not save restricted mode: {error}")),
+            }
+        });
+        let listings = adw::PreferencesGroup::builder()
+            .title("Channel listings")
+            .description("What channel pages show while the restricted mode is on")
+            .build();
+        listings.add(&hide_shorts);
+
         let (settings_channels, settings_playlists, settings_videos, settings_collections) = (
             section("Channels"),
             section("Playlists"),
@@ -180,6 +202,7 @@ impl Widgets {
         settings_page.append(&explanation);
         settings_page.append(&adding);
         settings_page.append(&settings_status);
+        settings_page.append(&listings);
         settings_page.append(&settings_channels.root);
         settings_page.append(&settings_playlists.root);
         settings_page.append(&settings_collections.root);
@@ -198,6 +221,7 @@ impl Widgets {
             home_empty,
             settings_entry,
             settings_status,
+            hide_shorts,
             settings_channels,
             settings_playlists,
             settings_videos,
@@ -438,6 +462,8 @@ pub fn show_settings() {
         true,
         VideoRemoval::Direct,
     );
+
+    widgets.hide_shorts.set_active(profile::hides_shorts());
 
     let has_password = profile::has_password();
     widgets

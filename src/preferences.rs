@@ -188,6 +188,22 @@ fn general() -> adw::PreferencesPage {
         }
     });
 
+    let hide_shorts = adw::SwitchRow::builder()
+        .title("Hide Shorts")
+        .subtitle("Leaves Shorts out of channel listings")
+        .cursor(&crate::ui::pointer())
+        .active(current.hide_shorts)
+        .build();
+    hide_shorts.connect_active_notify(|row| {
+        let active = row.is_active();
+        // Nothing to refresh when the switch is only being set up.
+        let changed = settings::get().hide_shorts != active;
+        save(|s| s.hide_shorts = active);
+        if changed {
+            nav::shorts_hidden_changed();
+        }
+    });
+
     let downloads = adw::PreferencesGroup::builder().title("Downloads").build();
     downloads.add(&quality);
     downloads.add(&sponsors);
@@ -195,6 +211,9 @@ fn general() -> adw::PreferencesPage {
 
     let thumbnails = adw::PreferencesGroup::builder().title("Thumbnails").build();
     thumbnails.add(&middle_thumbnails);
+
+    let channels = adw::PreferencesGroup::builder().title("Channels").build();
+    channels.add(&hide_shorts);
 
     let mut browsers = vec!["None"];
     browsers.extend(BROWSERS);
@@ -279,6 +298,7 @@ fn general() -> adw::PreferencesPage {
     page.add(&languages);
     page.add(&downloads);
     page.add(&thumbnails);
+    page.add(&channels);
     page.add(&queue);
     page.add(&network);
     page.add(&browser);

@@ -35,6 +35,8 @@ pub struct Profile {
     pub videos: Vec<Entry>,
     /// Names of collections.
     pub collections: Vec<String>,
+    /// Leaves the Shorts out of channel listings while the restricted mode is on.
+    pub hide_shorts: bool,
 }
 
 /// Something that can be allowed in the profile.
@@ -125,6 +127,11 @@ pub fn allows_playlist(id: &str) -> bool {
 
 pub fn allows_collection(name: &str) -> bool {
     read(|profile| profile.collections.iter().any(|c| c == name))
+}
+
+/// Whether the restricted mode leaves the Shorts out of channel listings.
+pub fn hides_shorts() -> bool {
+    read(|profile| profile.hide_shorts)
 }
 
 pub fn lists_video(id: &str) -> bool {
@@ -466,6 +473,7 @@ mod tests {
     fn missing_fields_take_their_defaults() {
         let profile: Profile = serde_json::from_str("{}").unwrap();
         assert!(profile.channels.is_empty());
+        assert!(!profile.hide_shorts);
 
         let profile: Profile =
             serde_json::from_str(r#"{"channels": [{"id": "yt:UC1", "name": "A"}]}"#).unwrap();
