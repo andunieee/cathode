@@ -2450,17 +2450,16 @@ fn apply_immersive() {
 
     // The way out floats over the video, where the header bar would be.
     ui.exit_theater.set_visible(ui.theater.get() && !fullscreen);
-    let (theater_icon, theater_tooltip) = if ui.theater.get() {
-        ("view-restore-symbolic", "Leave theater mode")
-    } else {
-        ("zoom-fit-best-symbolic", "Theater mode")
-    };
-    ui.theater_button.set_icon_name(theater_icon);
-    ui.theater_button.set_tooltip_text(Some(theater_tooltip));
+    ui.theater_button
+        .set_tooltip_text(Some(if ui.theater.get() {
+            "Leave theater mode (Shift+F)"
+        } else {
+            "Theater mode (Shift+F)"
+        }));
     let (icon, tooltip) = if fullscreen {
-        ("view-restore-symbolic", "Leave fullscreen")
+        ("view-restore-symbolic", "Leave fullscreen (F)")
     } else {
-        ("view-fullscreen-symbolic", "Fullscreen")
+        ("view-fullscreen-symbolic", "Fullscreen (F)")
     };
     ui.fullscreen_button.set_icon_name(icon);
     ui.fullscreen_button.set_tooltip_text(Some(tooltip));

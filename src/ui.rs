@@ -745,8 +745,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Header bar
     let header = adw::HeaderBar::new();
-    let back = icon_button("go-previous-symbolic", "Back");
-    let forward = icon_button("go-next-symbolic", "Forward");
+    let back = icon_button("go-previous-symbolic", "Back (Alt+Left)");
+    let forward = icon_button("go-next-symbolic", "Forward (Alt+Right)");
     back.connect_clicked(|_| nav::back());
     forward.connect_clicked(|_| nav::forward());
     let home = icon_button("go-home-symbolic", "Home");
@@ -1202,7 +1202,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .css_classes(["osd", "title-3"])
         .build();
 
-    let play_button = icon_button("media-playback-pause-symbolic", "Play/Pause");
+    let play_button = icon_button("media-playback-pause-symbolic", "Play/Pause (Space)");
     play_button.connect_clicked(|_| nav::toggle_pause());
     let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.001);
     seek.set_cursor(Some(&crate::ui::pointer()));
@@ -1259,7 +1259,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     speed.set_cursor(Some(&crate::ui::pointer()));
     speed.set_selected(SPEEDS.iter().position(|&speed| speed == 1.0).unwrap() as u32);
-    speed.set_tooltip_text(Some("Playback speed"));
+    speed.set_tooltip_text(Some("Playback speed ([ and ])"));
     speed.connect_selected_notify(|_| {
         if get().syncing.get() {
             return;
@@ -1281,7 +1281,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let volume = gtk::MenuButton::builder()
         .cursor(&crate::ui::pointer())
         .icon_name("audio-volume-high-symbolic")
-        .tooltip_text("Volume")
+        .tooltip_text("Volume (0 and 9, M to mute)")
         .direction(gtk::ArrowType::Up)
         .popover(&gtk::Popover::builder().child(&volume_scale).build())
         .build();
@@ -1300,7 +1300,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let chapters_button = gtk::MenuButton::builder()
         .cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
-        .tooltip_text("Chapters")
+        .tooltip_text("Chapters (Page Up and Page Down)")
         .direction(gtk::ArrowType::Up)
         .visible(false)
         .popover(
@@ -1323,7 +1323,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let captions_button = gtk::MenuButton::builder()
         .cursor(&crate::ui::pointer())
         .icon_name("media-view-subtitles-symbolic")
-        .tooltip_text("Subtitles")
+        .tooltip_text("Subtitles (C)")
         .direction(gtk::ArrowType::Up)
         .visible(false)
         .popover(
@@ -1341,9 +1341,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
     stop_button.connect_clicked(|_| nav::stop_player());
-    let theater = icon_button("video-display-symbolic", "Theater mode");
+    let theater = icon_button("video-display-symbolic", "Theater mode (Shift+F)");
     theater.connect_clicked(|_| nav::toggle_theater());
-    let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
+    let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen (F)");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
     // The settings of the player
@@ -1469,7 +1469,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let exit_theater = gtk::Button::builder()
         .cursor(&crate::ui::pointer())
         .icon_name("window-restore-symbolic")
-        .tooltip_text("Leave theater mode")
+        .tooltip_text("Leave theater mode (Shift+F)")
         .css_classes(["osd", "theater-exit"])
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Start)
