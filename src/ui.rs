@@ -631,16 +631,17 @@ fn fill_menu(menu: &gtk::Box, popover: &gtk::Popover, entry: &Entry) {
         let entry = entry.clone();
         Box::new(move || nav::open_related_of(entry.clone()))
     });
-    // Only the one in charge of the profile gets to change it, and to save.
-    if !profile::restricted() {
-        if !entry.url.is_empty() {
-            for name in crate::collections::savable() {
-                add("folder-symbolic", &format!("Save to “{name}”"), {
-                    let entry = entry.clone();
-                    Box::new(move || nav::save_video(entry.clone(), name.clone()))
-                });
-            }
+    // Only the one in charge of the profile gets to save.
+    if !profile::restricted() && !entry.url.is_empty() {
+        for name in crate::collections::savable() {
+            add("folder-symbolic", &format!("Save to “{name}”"), {
+                let entry = entry.clone();
+                Box::new(move || nav::save_video(entry.clone(), name.clone()))
+            });
         }
+    }
+    // Videos that are allowed can still be taken out of it while the restricted mode is on.
+    if !profile::restricted() || profile::lists_video(&entry.id) {
         add(
             "system-users-symbolic",
             if profile::lists_video(&entry.id) {

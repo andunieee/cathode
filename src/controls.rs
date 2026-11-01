@@ -292,7 +292,18 @@ fn collection_row(name: &str, removable: bool) -> adw::ActionRow {
     row
 }
 
-fn video_row(entry: &Entry, removable: bool) -> adw::ActionRow {
+/// How a video row can be taken out of the restricted mode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VideoRemoval {
+    /// No remove button.
+    None,
+    /// Removed straight away, as the settings page is already the place to manage it.
+    Direct,
+    /// Asks for the password or for confirmation first, for while the restricted mode is on.
+    Confirmed,
+}
+
+fn video_row(entry: &Entry, removal: VideoRemoval) -> adw::ActionRow {
     let mut subtitle = Vec::new();
     if !entry.channel.is_empty() {
         subtitle.push(entry.channel.clone());
@@ -326,10 +337,16 @@ fn video_row(entry: &Entry, removable: bool) -> adw::ActionRow {
         let entry = entry.clone();
         move |_| nav::open_video(entry.clone())
     });
-    if removable {
+    if removal != VideoRemoval::None {
         let id = entry.id.clone();
-        row.add_suffix(&remove_button(move || {
-            remove(|p| p.videos.retain(|v| v.id != id))
+        let entry = entry.clone();
+        row.add_suffix(&remove_button(move || match removal {
+            VideoRemoval::None => {}
+            VideoRemoval::Direct => {
+                let id = id.clone();
+                remove(|p| p.videos.retain(|v| v.id != id))
+            }
+            VideoRemoval::Confirmed => nav::remove_video_allowed(entry.clone()),
         }));
     }
     row
@@ -349,6 +366,7 @@ fn fill(
     collections: &Section,
     videos: &Section,
     removable: bool,
+    video_removal: VideoRemoval,
 ) -> bool {
     let profile = profile::read(|profile| profile.clone());
 
@@ -372,7 +390,7 @@ fn fill(
     }
     clear(&videos.list);
     for video in &profile.videos {
-        videos.list.append(&video_row(video, removable));
+        videos.list.append(&video_row(video, video_removal));
     }
 
     channels.root.set_visible(!profile.channels.is_empty());
@@ -400,6 +418,7 @@ pub fn show_home() {
             &widgets.home_collections,
             &widgets.home_videos,
             false,
+            VideoRemoval::Confirmed,
         );
         widgets.home_empty.set_visible(empty);
     } else {
@@ -417,6 +436,7 @@ pub fn show_settings() {
         &widgets.settings_collections,
         &widgets.settings_videos,
         true,
+        VideoRemoval::Direct,
     );
 
     let has_password = profile::has_password();
@@ -479,6 +499,42 @@ pub fn resolved(result: Result<Item, String>) {
 }
 
 // Passwords
+
+/// Removes something from the restricted mode, asking for the password if there is one, or
+/// just to confirm if there is not.
+pub fn confirm_removal(heading: &str, body: &str, on_confirm: impl FnOnce() + 'static) {
+    if profile::has_password() {
+        prompt(
+            heading,
+            &format!("{body} Enter the password."),
+            "Remove",
+            &["Password"],
+            move |passwords| {
+                if profile::check_password(&passwords[0]) {
+                    on_confirm();
+                } else {
+                    nav::toast("Wrong password");
+                }
+            },
+        );
+        return;
+    }
+
+    let dialog = adw::AlertDialog::new(Some(heading), Some(body));
+    dialog.add_responses(&[("cancel", "Cancel"), ("ok", "Remove")]);
+    dialog.set_response_appearance("ok", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("cancel");
+    dialog.choose(
+        Some(&ui::get().window),
+        gio::Cancellable::NONE,
+        move |response| {
+            if response == "ok" {
+                on_confirm();
+            }
+        },
+    );
+}
 
 /// Asks for passwords, `on_confirm` gets what was typed in each of the fields.
 fn prompt(

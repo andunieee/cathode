@@ -848,7 +848,10 @@ fn update_allow_buttons() {
     let (channel, video) = match current() {
         Page::Channel { id, .. } => (Some(label(profile::allows_channel(&id))), None),
         Page::Playlist { id, .. } => (Some(label(profile::allows_playlist(&id))), None),
-        Page::Video(entry) => (None, Some(label(profile::lists_video(&entry.id)))),
+        Page::Video(entry) => {
+            let allowed = profile::lists_video(&entry.id);
+            (None, Some((label(allowed), allowed)))
+        }
         _ => (None, None),
     };
     let collection = match current() {
@@ -856,12 +859,18 @@ fn update_allow_buttons() {
         _ => None,
     };
 
-    // Only the one in charge of the profile gets to change it.
+    // Only the one in charge of the profile gets to change it. A video that is allowed can
+    // still be taken out of it while the restricted mode is on.
     let editable = !profile::restricted();
     ui.allow_channel.set_visible(editable && channel.is_some());
     ui.allow_channel.set_label(channel.unwrap_or_default());
-    ui.allow_video.set_visible(editable && video.is_some());
-    ui.allow_video.set_label(video.unwrap_or_default());
+    let video_visible = match &video {
+        Some((_, allowed)) => editable || *allowed,
+        None => false,
+    };
+    ui.allow_video.set_visible(video_visible);
+    ui.allow_video
+        .set_label(video.map(|(label, _)| label).unwrap_or_default());
     library::set_allow_button(
         editable && collection.is_some(),
         collection.unwrap_or_default(),
@@ -888,8 +897,48 @@ fn toggle_video(entry: Entry) -> Result<bool, String> {
     }
 }
 
+/// Takes a video out of the restricted mode, asking for the password if there is one, or just
+/// to confirm if there is not.
+pub fn remove_video_allowed(entry: Entry) {
+    let title = entry.title.clone();
+    let body = if title.is_empty() {
+        "This video will no longer be allowed in the restricted mode.".to_string()
+    } else {
+        format!("“{title}” will no longer be allowed in the restricted mode.")
+    };
+
+    controls::confirm_removal("Remove from the restricted mode", &body, move || {
+        let id = entry.id.clone();
+        let result = profile::update(Box::new(move |p: &mut profile::Profile| {
+            p.videos.retain(|v| v.id != id)
+        }));
+        match result {
+            Ok(()) => {
+                toast("Removed from the restricted mode");
+                if playing_id().as_deref() == Some(&entry.id) {
+                    stop_player();
+                }
+                update_allow_buttons();
+                if !page_allowed(&current()) {
+                    open_home();
+                } else if matches!(current(), Page::Home) {
+                    controls::show_home();
+                }
+            }
+            Err(error) => toast(&format!("Could not save the profile: {error}")),
+        }
+    });
+}
+
 /// Adds a video of a list to the restricted mode, or takes it out of it.
 pub fn toggle_video_allowed(entry: Entry) {
+    if profile::restricted() {
+        if profile::lists_video(&entry.id) {
+            remove_video_allowed(entry);
+        }
+        return;
+    }
+
     match toggle_video(entry) {
         Ok(true) => toast("Added to the restricted mode"),
         Ok(false) => toast("Removed from the restricted mode"),
@@ -900,6 +949,11 @@ pub fn toggle_video_allowed(entry: Entry) {
 
 /// Adds the page on screen to the restricted mode, or takes it out of it.
 pub fn toggle_allowed() {
+    if let Page::Video(entry) = current() {
+        toggle_video_allowed(entry);
+        return;
+    }
+
     let toggle = |allowed: bool, item: Item, remove: Box<dyn FnOnce(&mut profile::Profile)>| {
         if allowed {
             profile::update(remove).map(|_| false)
@@ -925,7 +979,6 @@ pub fn toggle_allowed() {
             }),
             Box::new(move |p| p.playlists.retain(|p| p.id != id)),
         ),
-        Page::Video(entry) => toggle_video(entry),
         Page::Collection(name) => toggle(
             profile::allows_collection(&name),
             Item::Collection(name.clone()),
