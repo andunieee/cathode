@@ -41,7 +41,6 @@ pub struct Ui {
     pub back: gtk::Button,
     pub forward: gtk::Button,
     pub downloads: gtk::Button,
-    pub history_button: gtk::Button,
     /// Opens the sidebar listing the subscriptions.
     pub subs_toggle: gtk::ToggleButton,
     pub queue_toggle: gtk::ToggleButton,
@@ -1827,7 +1826,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         back,
         forward,
         downloads,
-        history_button,
         subs_toggle,
         queue_toggle,
         subscriptions_list,

@@ -750,10 +750,8 @@ fn page_allowed(page: &Page) -> bool {
     }
 
     match page {
-        Page::Home | Page::Allowed { .. } => true,
-        Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache | Page::History => {
-            false
-        }
+        Page::Home | Page::Allowed { .. } | Page::History => true,
+        Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache => false,
         Page::Channel { id, .. } => profile::allows_channel(id),
         Page::Playlist { id, .. } => profile::allows_playlist(id),
         Page::Collection(name) => profile::allows_collection(name),
@@ -806,7 +804,6 @@ fn apply_mode() {
         .set_visible_child_name(if restricted { "restricted" } else { "search" });
     ui.downloads.set_visible(!restricted);
     update_related();
-    ui.history_button.set_visible(!restricted);
     // The subscriptions would be a way around the restricted mode.
     ui.subs_toggle.set_visible(!restricted);
     if restricted {
@@ -848,6 +845,8 @@ pub fn set_restricted(restricted: bool) {
     apply_mode();
     restore_session();
     show();
+    // The videos watched belong to the history of the mode that is now on.
+    crate::ui::refresh_watched();
     if !restricted {
         refresh_feed();
         suggest_next();

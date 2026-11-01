@@ -1,7 +1,8 @@
 //! The videos watched, one JSON object per line in `history.jsonl` in the data directory of
 //! the app, the latest last. A new entry is appended to the file, unless the video is there
 //! already, and reading goes backwards from its end, which gives the most recent ones, as far
-//! back as one cares to go.
+//! back as one cares to go. The restricted mode keeps a `history-restricted.jsonl` of its own,
+//! so that what is watched with it is neither seen by nor mixed with the rest.
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -15,8 +16,10 @@ use crate::fetch::Entry;
 /// How much of the file is read at a time when going backwards.
 const CHUNK: u64 = 8192;
 
-/// The ids of the videos watched, read from the file the first time they are asked for.
+/// The ids of the videos watched, read from the file of each mode the first time they are
+/// asked for.
 static IDS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+static RESTRICTED_IDS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Watched {
@@ -25,8 +28,23 @@ pub struct Watched {
     pub entry: Entry,
 }
 
+/// The history of the mode that is on.
 fn path() -> PathBuf {
-    crate::paths::data().join("history.jsonl")
+    let name = if crate::profile::restricted() {
+        "history-restricted.jsonl"
+    } else {
+        "history.jsonl"
+    };
+    crate::paths::data().join(name)
+}
+
+/// The ids of the videos of the history in use.
+fn watched_ids() -> &'static Mutex<Option<HashSet<String>>> {
+    if crate::profile::restricted() {
+        &RESTRICTED_IDS
+    } else {
+        &IDS
+    }
 }
 
 /// Puts the video at the end of the history, unless it is there already.
@@ -44,7 +62,7 @@ pub fn record(entry: &Entry) -> Result<(), String> {
     let path = path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     // One write, so a line is either all there or not at all.
-    let mut ids = IDS.lock().unwrap();
+    let mut ids = watched_ids().lock().unwrap();
     if ids.get_or_insert_with(read_ids).contains(&entry.id) {
         return Ok(());
     }
@@ -69,7 +87,7 @@ pub fn remove(id: &str) -> Result<(), String> {
     }
 
     let path = path();
-    let mut ids = IDS.lock().unwrap();
+    let mut ids = watched_ids().lock().unwrap();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -97,7 +115,8 @@ pub fn remove(id: &str) -> Result<(), String> {
 
 /// Whether the video is in the history.
 pub fn is_watched(id: &str) -> bool {
-    IDS.lock()
+    watched_ids()
+        .lock()
         .unwrap()
         .get_or_insert_with(read_ids)
         .contains(id)

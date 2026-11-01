@@ -78,6 +78,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 
 - Parental controls: only the videos, channels, playlists and collections you allow can be watched
 - Can be protected with a password
+- Its own watch history, kept apart from the rest
 
 ![Restricted mode on](assets/restricted.jpg)
 
