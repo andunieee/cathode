@@ -137,15 +137,14 @@ fn host_config_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-/// A yt-dlp command with the settings that go for everything it does.
-pub fn yt_dlp() -> Command {
+/// A yt-dlp command with the settings that go for everything it does, but without a browser's
+/// cookies: checking a browser's cookies uses this so that it can try that browser only.
+pub fn yt_dlp_base() -> Command {
     let settings = get();
     let mut command = crate::tools::command("yt-dlp");
 
-    if let Some(browser) = &settings.cookies_from_browser {
-        command.args(["--cookies-from-browser", &browser_argument(browser)]);
-    }
-    // yt-dlp looks for the Chromium profiles under `XDG_CONFIG_HOME`.
+    // yt-dlp looks for the Chromium profiles under `XDG_CONFIG_HOME`, which in a Flatpak points
+    // inside the sandbox: point it at the real `~/.config` instead.
     #[cfg(not(target_os = "windows"))]
     if let Some(dir) = host_config_dir() {
         command.env("XDG_CONFIG_HOME", dir);
@@ -153,6 +152,15 @@ pub fn yt_dlp() -> Command {
     let proxy = settings.proxy.trim();
     if !proxy.is_empty() {
         command.args(["--proxy", proxy]);
+    }
+    command
+}
+
+/// A yt-dlp command with the settings that go for everything it does.
+pub fn yt_dlp() -> Command {
+    let mut command = yt_dlp_base();
+    if let Some(browser) = &get().cookies_from_browser {
+        command.args(["--cookies-from-browser", &browser_argument(browser)]);
     }
     command
 }

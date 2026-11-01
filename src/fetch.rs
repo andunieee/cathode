@@ -1255,15 +1255,11 @@ fn parse_entry(entry: &Value) -> Option<Entry> {
 /// Runs yt-dlp with the cookies of the browser. They are read as it starts, so a search for a
 /// single result is enough to find out whether they can be.
 async fn check_cookies(browser: &str) -> Result<(), String> {
-    let mut command = crate::tools::command("yt-dlp");
+    let mut command = crate::settings::yt_dlp_base();
     command.args([
         "--cookies-from-browser",
         &crate::settings::browser_argument(browser),
     ]);
-    let proxy = crate::settings::get().proxy;
-    if !proxy.trim().is_empty() {
-        command.args(["--proxy", proxy.trim()]);
-    }
 
     let output = command
         .args([
