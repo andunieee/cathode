@@ -144,7 +144,9 @@ pub struct Ui {
     pub player_controls_hover: gtk::EventControllerMotion,
     pub player_controls_timer: RefCell<Option<glib::SourceId>>,
     pub player_settings: gtk::MenuButton,
-    /// Cycles theater mode, fullscreen and back.
+    /// Fills the window with the video.
+    pub theater_button: gtk::Button,
+    /// Takes the whole screen.
     pub fullscreen_button: gtk::Button,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
@@ -247,6 +249,7 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
     // The spacebar pauses wherever the focus is, the focused widget can be pressed with enter.
     match key {
         gdk::Key::space | gdk::Key::p | gdk::Key::P => nav::toggle_pause(),
+        gdk::Key::f | gdk::Key::F if shift => nav::toggle_theater(),
         gdk::Key::f | gdk::Key::F => nav::toggle_fullscreen(),
         gdk::Key::m | gdk::Key::M => nav::toggle_mute(),
         gdk::Key::c | gdk::Key::C => nav::toggle_captions(),
@@ -1338,7 +1341,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
     stop_button.connect_clicked(|_| nav::stop_player());
-    let fullscreen = icon_button("view-fullscreen-symbolic", "Theater mode");
+    let theater = icon_button("video-display-symbolic", "Theater mode");
+    theater.connect_clicked(|_| nav::toggle_theater());
+    let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
 
     // The settings of the player
@@ -1447,6 +1452,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons_row.append(&captions_button);
     buttons_row.append(&chapters_button);
     buttons_row.append(&player_settings);
+    buttons_row.append(&theater);
     buttons_row.append(&fullscreen);
     let player_controls = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_controls.add_css_class("osd");
@@ -1462,7 +1468,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     // A way out of theater mode, where the header bar and its window buttons are gone.
     let exit_theater = gtk::Button::builder()
         .cursor(&crate::ui::pointer())
-        .icon_name("view-restore-symbolic")
+        .icon_name("window-restore-symbolic")
         .tooltip_text("Leave theater mode")
         .css_classes(["osd", "theater-exit"])
         .halign(gtk::Align::Start)
@@ -1928,6 +1934,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         player_controls_hover,
         player_controls_timer: RefCell::new(None),
         player_settings,
+        theater_button: theater.clone(),
         fullscreen_button: fullscreen.clone(),
         play_button,
         seek,

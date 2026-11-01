@@ -2384,42 +2384,48 @@ pub fn seek(fraction: f64) {
     }
 }
 
-/// Fills the window with the video first, the whole screen next, and goes back to a normal window
-/// from there.
+/// Takes the whole screen, with only the video in it. Theater mode and fullscreen are separate.
 pub fn toggle_fullscreen() {
     let ui = ui::get();
-    let fullscreen = ui.window.is_fullscreen();
-    if !fullscreen && !ui.theater.get() && ui.player.id().is_none() {
+    let fullscreen = !ui.window.is_fullscreen();
+    if fullscreen && ui.player.id().is_none() {
         return;
     }
 
-    if fullscreen {
-        ui.theater.set(false);
-        ui.window.set_fullscreened(false);
-    } else if ui.theater.get() {
-        ui.window.set_fullscreened(true);
-    } else {
-        ui.theater.set(true);
-    }
+    ui.theater.set(false);
+    ui.window.set_fullscreened(fullscreen);
     apply_immersive();
     show_player_controls();
 }
 
-/// Leaves fullscreen first, then theater mode. False when the window is a normal one already.
+/// Fills the window with the video, leaving fullscreen when it was on.
+pub fn toggle_theater() {
+    let ui = ui::get();
+    if ui.theater.get() {
+        leave_theater();
+        return;
+    }
+    if ui.player.id().is_none() {
+        return;
+    }
+
+    // Theater mode is the window, not the screen.
+    ui.window.set_fullscreened(false);
+    ui.theater.set(true);
+    apply_immersive();
+    show_player_controls();
+}
+
+/// Back to a normal window, whatever mode the video was in. False when it was a normal one already.
 pub fn exit_immersive() -> bool {
     let ui = ui::get();
     if !ui.window.is_fullscreen() && !ui.theater.get() {
         return false;
     }
 
-    if ui.window.is_fullscreen() {
-        // A fullscreen entered from theater goes back to it, otherwise to a normal window.
-        ui.window.set_fullscreened(false);
-    } else {
-        ui.theater.set(false);
-        // A fullscreen asked for just now may still be on its way.
-        ui.window.set_fullscreened(false);
-    }
+    ui.theater.set(false);
+    // A fullscreen asked for just now may still be on its way.
+    ui.window.set_fullscreened(false);
     apply_immersive();
     true
 }
@@ -2444,12 +2450,17 @@ fn apply_immersive() {
 
     // The way out floats over the video, where the header bar would be.
     ui.exit_theater.set_visible(ui.theater.get() && !fullscreen);
+    let (theater_icon, theater_tooltip) = if ui.theater.get() {
+        ("view-restore-symbolic", "Leave theater mode")
+    } else {
+        ("zoom-fit-best-symbolic", "Theater mode")
+    };
+    ui.theater_button.set_icon_name(theater_icon);
+    ui.theater_button.set_tooltip_text(Some(theater_tooltip));
     let (icon, tooltip) = if fullscreen {
         ("view-restore-symbolic", "Leave fullscreen")
-    } else if ui.theater.get() {
-        ("view-fullscreen-symbolic", "Fullscreen")
     } else {
-        ("view-fullscreen-symbolic", "Theater mode")
+        ("view-fullscreen-symbolic", "Fullscreen")
     };
     ui.fullscreen_button.set_icon_name(icon);
     ui.fullscreen_button.set_tooltip_text(Some(tooltip));
