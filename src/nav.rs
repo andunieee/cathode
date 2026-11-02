@@ -2051,6 +2051,9 @@ fn unload_player() {
     if ui.window.is_fullscreen() {
         ui.window.set_fullscreened(false);
     }
+    if let Some(window) = dock_player(&ui) {
+        window.close();
+    }
     apply_immersive();
     ui.player.stop();
     refresh_captions();
@@ -2428,13 +2431,16 @@ pub fn seek(fraction: f64) {
 /// Takes the whole screen, with only the video in it. Theater mode and fullscreen are separate.
 pub fn toggle_fullscreen() {
     let ui = ui::get();
-    let fullscreen = !ui.window.is_fullscreen();
+    let window = video_window(&ui);
+    let fullscreen = !window.is_fullscreen();
     if fullscreen && ui.player.id().is_none() {
         return;
     }
 
-    ui.theater.set(false);
-    ui.window.set_fullscreened(fullscreen);
+    if ui.popout.borrow().is_none() {
+        ui.theater.set(false);
+    }
+    window.set_fullscreened(fullscreen);
     apply_immersive();
     show_player_controls();
 }
@@ -2442,6 +2448,9 @@ pub fn toggle_fullscreen() {
 /// Fills the window with the video, leaving fullscreen when it was on.
 pub fn toggle_theater() {
     let ui = ui::get();
+    if ui.popout.borrow().is_some() {
+        return;
+    }
     if ui.theater.get() {
         leave_theater();
         return;
@@ -2457,16 +2466,98 @@ pub fn toggle_theater() {
     show_player_controls();
 }
 
+/// Moves the video into a window of its own, or back into the queue sidebar.
+pub fn toggle_popout() {
+    let ui = ui::get();
+    if ui.popout.borrow().is_some() {
+        if let Some(window) = dock_player(&ui) {
+            window.close();
+        }
+        return;
+    }
+    if !ui.player_frame.is_visible() {
+        return;
+    }
+    pop_out(&ui);
+}
+
+/// The window the video is in, its own when it is popped out.
+fn video_window(ui: &crate::ui::Ui) -> gtk::Window {
+    match ui.popout.borrow().as_ref() {
+        Some(window) => window.clone(),
+        None => ui.window.clone().upcast(),
+    }
+}
+
+fn pop_out(ui: &crate::ui::Ui) {
+    crate::log::info!("popping the player out");
+    // A window of its own, free of this one's layout and fullscreen.
+    ui.theater.set(false);
+    if ui.window.is_fullscreen() {
+        ui.window.set_fullscreened(false);
+    }
+
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(
+        &gtk::Label::builder()
+            .label("Cathode")
+            .css_classes(["heading"])
+            .build(),
+    ));
+    let window = gtk::Window::builder()
+        .title("Cathode")
+        .default_width(960)
+        .default_height(540)
+        .build();
+    window.set_titlebar(Some(&header));
+    ui.player_frame.unparent();
+    window.set_child(Some(&ui.player_frame));
+    window.connect_fullscreened_notify(|_| fullscreen_changed());
+    // Closing the window leaves the video playing here, in the sidebar.
+    window.connect_close_request(|_| {
+        let ui = ui::get();
+        dock_player(&ui);
+        glib::Propagation::Proceed
+    });
+
+    *ui.popout.borrow_mut() = Some(window.clone());
+    apply_immersive();
+    window.present();
+    show_player_controls();
+}
+
+/// Takes the video out of its own window, if it has one, and gives the window back to close.
+fn dock_player(ui: &crate::ui::Ui) -> Option<gtk::Window> {
+    let window = ui.popout.borrow_mut().take()?;
+    crate::log::info!("docking the player back");
+    // Take the video out of the window before it starts closing: a window that still had it
+    // would unparent it from the queue sidebar afterwards.
+    window.set_child(None::<&gtk::Widget>);
+    ui.queue_content.append(&ui.player_frame);
+    ui.player_frame.set_vexpand(false);
+    ui.player_frame.set_valign(gtk::Align::Fill);
+    // The tick callback may be asleep until the frame has a height again.
+    ui.player_overlay.set_vexpand(false);
+    let width = ui.queue_content.width();
+    if width > 0 {
+        let height = (width as f32 * 9.0 / 16.0).round() as i32;
+        ui.player_overlay.set_height_request(height);
+    }
+    apply_immersive();
+    Some(window)
+}
+
 /// Back to a normal window, whatever mode the video was in. False when it was a normal one already.
 fn exit_immersive() -> bool {
     let ui = ui::get();
-    if !ui.window.is_fullscreen() && !ui.theater.get() {
+    let window = video_window(&ui);
+    if !window.is_fullscreen() && !ui.theater.get() {
         return false;
     }
 
     ui.theater.set(false);
     // A fullscreen asked for just now may still be on its way.
-    ui.window.set_fullscreened(false);
+    window.set_fullscreened(false);
     apply_immersive();
     true
 }
@@ -2496,18 +2587,23 @@ pub fn leave_theater() {
 /// in it. The header bar, and with it the window buttons, goes away.
 fn apply_immersive() {
     let ui = ui::get();
-    let fullscreen = ui.window.is_fullscreen();
-    let immersive = fullscreen || ui.theater.get();
+    let popped = ui.popout.borrow().is_some();
+    let fullscreen = video_window(&ui).is_fullscreen();
+    let theater = ui.theater.get() && !popped;
+    // The video fills the window it is in, whichever that is.
+    let filling = popped || theater || fullscreen;
+    // Only the main window's layout changes: a popped out video has its own.
+    let immersive = !popped && (theater || fullscreen);
     let split = &ui.queue_split;
 
     // The way out floats over the video, where the header bar would be.
-    ui.exit_theater.set_visible(ui.theater.get() && !fullscreen);
-    ui.theater_button
-        .set_tooltip_text(Some(if ui.theater.get() {
-            "Leave theater mode (Shift+F)"
-        } else {
-            "Theater mode (Shift+F)"
-        }));
+    ui.exit_theater.set_visible(theater && !fullscreen);
+    ui.theater_button.set_visible(!popped);
+    ui.theater_button.set_tooltip_text(Some(if theater {
+        "Leave theater mode (Shift+F)"
+    } else {
+        "Theater mode (Shift+F)"
+    }));
     let (icon, tooltip) = if fullscreen {
         ("view-restore-symbolic", "Leave fullscreen (F)")
     } else {
@@ -2515,10 +2611,20 @@ fn apply_immersive() {
     };
     ui.fullscreen_button.set_icon_name(icon);
     ui.fullscreen_button.set_tooltip_text(Some(tooltip));
-    apply_progress_bar(immersive);
+    ui.popout_button.set_icon_name(if popped {
+        "process-stop-symbolic"
+    } else {
+        "window-new-symbolic"
+    });
+    ui.popout_button.set_tooltip_text(Some(if popped {
+        "Bring the video back"
+    } else {
+        "Play in a separate window"
+    }));
+    apply_progress_bar(filling);
 
     // Sit under the queue normally, take the whole window once it is gone.
-    ui.player_frame.set_vexpand(immersive);
+    ui.player_frame.set_vexpand(filling);
     ui.player_frame.set_valign(gtk::Align::Fill);
 
     let saved = with(|state| state.sidebar_widths);

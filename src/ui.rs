@@ -124,9 +124,17 @@ pub struct Ui {
     pub queue_handle: gtk::Box,
     /// The queue sidebar's share of the window when docked, and when floating over the page.
     pub queue_fractions: Rc<Cell<[f64; 2]>>,
+    /// The queue sidebar's content, which the player leaves while it is popped out.
+    pub queue_content: gtk::Box,
     pub queue_scroll: gtk::ScrolledWindow,
     /// Keeps the player in proportion, in the queue sidebar.
     pub player_frame: gtk::Box,
+    /// The video with its controls, which sets the height of the frame when docked.
+    pub player_overlay: gtk::Overlay,
+    /// The window the video is in while it is popped out of the main one.
+    pub popout: RefCell<Option<gtk::Window>>,
+    /// Moves the video into its own window and back.
+    pub popout_button: gtk::Button,
     /// Leaves theater mode, floating over the video while it fills the window.
     pub exit_theater: gtk::Button,
     /// Keeps that button shown while the pointer rests on it.
@@ -1349,6 +1357,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     theater.connect_clicked(|_| nav::toggle_theater());
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen (F)");
     fullscreen.connect_clicked(|_| nav::toggle_fullscreen());
+    let popout = icon_button("window-new-symbolic", "Play in a separate window");
+    popout.connect_clicked(|_| nav::toggle_popout());
 
     // The settings of the player
     let progress_bar = gtk::CheckButton::with_label("Show the progress bar");
@@ -1458,6 +1468,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     buttons_row.append(&player_settings);
     buttons_row.append(&theater);
     buttons_row.append(&fullscreen);
+    buttons_row.append(&popout);
     let player_controls = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_controls.add_css_class("osd");
     player_controls.add_css_class("player-controls");
@@ -1516,9 +1527,9 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     // Not a `gtk::AspectFrame`: that one lays its child out at the wrong place in GTK 4.20.
     let player_frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
     player_frame.append(&overlay);
-    player_frame.add_tick_callback({
+    let fit_player = {
         let overlay = overlay.clone();
-        move |frame, _clock| {
+        Rc::new(move |frame: &gtk::Box| {
             // Filling the window (theater mode or fullscreen), the player takes it, otherwise it
             // is kept 16:9.
             let height = if frame.vexpands() {
@@ -1530,9 +1541,17 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
                 overlay.set_height_request(height);
             }
             overlay.set_vexpand(frame.vexpands());
+        })
+    };
+    player_frame.add_tick_callback({
+        let fit_player = fit_player.clone();
+        move |frame, _clock| {
+            fit_player(frame);
             glib::ControlFlow::Continue
         }
     });
+    // Coming back from a window of its own, the tick callback may take a while to run again.
+    player_frame.connect_notify_local(Some("width"), move |frame, _| fit_player(frame));
     // The player's expand flags would otherwise share the sidebar's height with the queue.
     player_frame.set_vexpand(false);
     player_frame.set_hexpand(true);
@@ -1930,8 +1949,12 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         queue_header,
         queue_handle,
         queue_fractions,
+        queue_content,
         queue_scroll,
         player_frame,
+        player_overlay: overlay.clone(),
+        popout: RefCell::new(None),
+        popout_button: popout.clone(),
         exit_theater,
         exit_theater_hover,
         theater: Cell::new(false),

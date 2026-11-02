@@ -121,12 +121,16 @@ pub struct Player {
     id: RefCell<Option<String>>,
     /// A file to load once the render context exists: without it mpv drops the video.
     waiting: RefCell<Option<String>>,
+    /// The file loaded last, to load it again when the render context is recreated.
+    file: RefCell<Option<String>>,
+    /// Where the file was and whether it was paused when the render context went away.
+    resume: Cell<Option<(f64, bool)>>,
     this: std::rc::Weak<Player>,
     /// Caption files of the file loaded, `(track, path)`, until mpv has loaded the file and
     /// they can be added.
     pending_captions: RefCell<Vec<(String, std::path::PathBuf)>>,
-    /// The caption files mpv has been given for the file loaded.
-    added_captions: RefCell<Vec<std::path::PathBuf>>,
+    /// The caption files mpv has been given for the file loaded, with their track.
+    added_captions: RefCell<Vec<(String, std::path::PathBuf)>>,
     /// The languages mpv picks a caption track from, like `pt`, none for any.
     preferred_languages: RefCell<String>,
     /// Whether captions are wanted, which holds from one file to the next.
@@ -174,6 +178,8 @@ impl Player {
             settling: Cell::new(0),
             id: RefCell::new(None),
             waiting: RefCell::new(None),
+            file: RefCell::new(None),
+            resume: Cell::new(None),
             render: RefCell::new(None),
             mpv,
         });
@@ -207,8 +213,28 @@ impl Player {
                         });
                         if let Some(file) = player.waiting.borrow_mut().take() {
                             let _ = player.mpv.command("loadfile", &[&file, "replace"]);
-                            area.queue_render();
+                        } else if let Some((position, paused)) = player.resume.take()
+                            && let Some(file) = player.file.borrow().clone()
+                        {
+                            // Freeing the render context unloads the file, so load it again where
+                            // it was. The options go after the playlist index.
+                            let start = format!("start={position}");
+                            let _ = player
+                                .mpv
+                                .command("loadfile", &[&file, "replace", "-1", &start]);
+                            let _ = player.mpv.set_property("pause", paused);
+                            player.ended.set(false);
+                            // The caption tracks went away with the file.
+                            player
+                                .pending_captions
+                                .borrow_mut()
+                                .extend(std::mem::take(&mut *player.added_captions.borrow_mut()));
+                            player.apply_captions();
+                            player.schedule_skip(position);
                         }
+                        // The context is new, and nothing redraws a paused video on its own.
+                        player.settling.set(10);
+                        area.queue_render();
                     }
                     Err(error) => {
                         crate::log::error!("Failed creating the mpv render context: {error}")
@@ -221,6 +247,12 @@ impl Player {
             let player = Rc::downgrade(&player);
             move |area| {
                 if let Some(player) = player.upgrade() {
+                    if player.id().is_some() {
+                        player
+                            .resume
+                            .set(Some((player.position(), player.is_paused())));
+                    }
+                    player.cancel_skip();
                     area.make_current();
                     drop(player.render.borrow_mut().take());
                 }
@@ -295,6 +327,8 @@ impl Player {
     /// Replaces the current file and starts playback.
     pub fn load(&self, id: &str, file: &str) {
         *self.id.borrow_mut() = Some(id.to_string());
+        *self.file.borrow_mut() = Some(file.to_string());
+        self.resume.set(None);
         self.ended.set(false);
         self.settling.set(10);
         self.skips.borrow_mut().clear();
@@ -315,6 +349,8 @@ impl Player {
     /// Unloads the file, nothing is loaded afterwards.
     pub fn stop(&self) {
         *self.id.borrow_mut() = None;
+        *self.file.borrow_mut() = None;
+        self.resume.set(None);
         self.ended.set(false);
         *self.waiting.borrow_mut() = None;
         self.pending_captions.borrow_mut().clear();
@@ -360,7 +396,11 @@ impl Player {
     /// Lets the file loaded have a caption file that turned up, it is added once mpv has
     /// loaded the file. Does nothing for a file that was added already.
     pub fn queue_caption(&self, track: String, path: std::path::PathBuf) {
-        let known = self.added_captions.borrow().contains(&path)
+        let known = self
+            .added_captions
+            .borrow()
+            .iter()
+            .any(|(_, added)| *added == path)
             || self
                 .pending_captions
                 .borrow()
@@ -378,7 +418,9 @@ impl Player {
         }
         let files = std::mem::take(&mut *self.pending_captions.borrow_mut());
         for (language, path) in files {
-            self.added_captions.borrow_mut().push(path.clone());
+            self.added_captions
+                .borrow_mut()
+                .push((language.clone(), path.clone()));
             // "cached" adds the track without selecting it. The language is the plain one, like
             // `pt` for `pt-orig`, so that it matches what is preferred.
             let plain = language.split('-').next().unwrap_or(&language);
