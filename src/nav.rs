@@ -307,6 +307,44 @@ pub fn show_player_controls() {
     *ui.player_controls_timer.borrow_mut() = Some(timer);
 }
 
+/// Shows or hides the list of keyboard shortcuts in the middle of the window.
+pub fn toggle_shortcuts() {
+    let ui = ui::get();
+    if ui.shortcuts.is_visible() {
+        hide_shortcuts();
+        return;
+    }
+    if ui.player.id().is_none() {
+        return;
+    }
+    fit_shortcuts(&ui);
+    ui.shortcuts.set_visible(true);
+    // The bar would show through the panel, and the list has the window to itself.
+    ui.player_controls.set_visible(false);
+    if let Some(timer) = ui.player_controls_timer.borrow_mut().take() {
+        timer.remove();
+    }
+}
+
+/// Hides the list and brings the player controls back.
+fn hide_shortcuts() {
+    let ui = ui::get();
+    if !ui.shortcuts.is_visible() {
+        return;
+    }
+    ui.shortcuts.set_visible(false);
+    ui.player_controls.set_visible(true);
+    show_player_controls();
+}
+
+/// Keeps the list within the window, so it scrolls in a small one.
+fn fit_shortcuts(ui: &crate::ui::Ui) {
+    let height = (ui.window.height() - 72).max(100);
+    if ui.shortcuts_scroll.max_content_height() != height {
+        ui.shortcuts_scroll.set_max_content_height(height);
+    }
+}
+
 /// "3:21  ·  1.2M views"
 pub fn details(entry: &Entry) -> String {
     let mut details = Vec::new();
@@ -2024,6 +2062,9 @@ fn unload_player() {
     });
     caption_options_changed();
     ui.player_status.set_visible(false);
+    ui.shortcuts.set_visible(false);
+    // The list hides the bar, which the next video wants back.
+    ui.player_controls.set_visible(true);
     ui.player_frame.set_visible(false);
     ui.play_button
         .set_icon_name("media-playback-pause-symbolic");
@@ -2417,7 +2458,7 @@ pub fn toggle_theater() {
 }
 
 /// Back to a normal window, whatever mode the video was in. False when it was a normal one already.
-pub fn exit_immersive() -> bool {
+fn exit_immersive() -> bool {
     let ui = ui::get();
     if !ui.window.is_fullscreen() && !ui.theater.get() {
         return false;
@@ -2428,6 +2469,17 @@ pub fn exit_immersive() -> bool {
     ui.window.set_fullscreened(false);
     apply_immersive();
     true
+}
+
+/// Closes the list of shortcuts, or else leaves theater mode and fullscreen. False when there was
+/// nothing to close.
+pub fn escape() -> bool {
+    let ui = ui::get();
+    if ui.shortcuts.is_visible() {
+        hide_shortcuts();
+        return true;
+    }
+    exit_immersive()
 }
 
 /// Leaves theater mode, which the button floating over the video does.
@@ -2506,6 +2558,9 @@ pub fn tick() {
     let ui = ui::get();
     if ui.player.id().is_none() {
         return;
+    }
+    if ui.shortcuts.is_visible() {
+        fit_shortcuts(&ui);
     }
 
     let (position, duration) = (ui.player.position(), ui.player.duration());

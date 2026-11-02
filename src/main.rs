@@ -22,6 +22,7 @@ mod profile;
 mod remote;
 mod remote_app;
 mod settings;
+mod shortcuts;
 mod state;
 mod subscriptions;
 mod suggestions;
@@ -265,6 +266,13 @@ fn load_css() {
          row.queue-playing { background-color: alpha(@accent_bg_color, 0.25); }
          box.player-controls, button.theater-exit { transition: opacity 200ms; }
          box.player-controls.faded, button.theater-exit.faded { opacity: 0; }
+         box.shortcuts { background-color: alpha(black, 0.85); border-radius: 12px; padding: 16px; }
+         box.shortcuts scrollbar { background: none; }
+         box.shortcuts scrollbar slider { background-color: alpha(white, 0.35); min-width: 4px; min-height: 40px; }
+         label.shortcut-heading { color: alpha(white, 0.65); font-weight: bold; }
+         label.shortcut-key { background-color: alpha(white, 0.14); border-radius: 4px;
+           padding: 1px 6px; color: white; font-family: monospace; }
+         label.shortcut-action { color: alpha(white, 0.92); }
          scale.seek-bar slider { min-width: 12px; min-height: 12px; margin: -4px; }
          row.queue-playing .title { font-weight: bold; }
          label.player-message { color: white; font-weight: bold; font-size: 1.4em;

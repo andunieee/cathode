@@ -31,8 +31,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Playback moves on to the next video by itself, and videos played to the end leave the queue (or stay in it, dimmed, if you turn that off in the settings)
 - Drag videos to reorder the queue
 - Picks up where you left off when you reopen the app
-- Seekbar, playback speed, volume, theater mode (Shift+F) and fullscreen (F), with the controls and the mouse pointer hidden after 2 seconds without moving the mouse over the video
-- Subtitles in your default language and in the language of the video, automatic captions included, switched in the player settings, with the CC button or with `C`
+- Subtitles in your default language and in the language of the video, automatic captions included
 - Works offline, as long as you have downloaded the videos first (which happens automatically as soon as they're added to the queue)
 
 ## Remote control

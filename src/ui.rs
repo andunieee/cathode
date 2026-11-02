@@ -148,6 +148,9 @@ pub struct Ui {
     pub theater_button: gtk::Button,
     /// Takes the whole screen.
     pub fullscreen_button: gtk::Button,
+    /// The list of keyboard shortcuts, shown in the middle of the window with `?`.
+    pub shortcuts: adw::Clamp,
+    pub shortcuts_scroll: gtk::ScrolledWindow,
     pub play_button: gtk::Button,
     pub seek: gtk::Scale,
     /// Paints the sponsor segments over the seek bar.
@@ -249,6 +252,7 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
     // The spacebar pauses wherever the focus is, the focused widget can be pressed with enter.
     match key {
         gdk::Key::space | gdk::Key::p | gdk::Key::P => nav::toggle_pause(),
+        gdk::Key::question => nav::toggle_shortcuts(),
         gdk::Key::f | gdk::Key::F if shift => nav::toggle_theater(),
         gdk::Key::f | gdk::Key::F => nav::toggle_fullscreen(),
         gdk::Key::m | gdk::Key::M => nav::toggle_mute(),
@@ -1480,6 +1484,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     exit_theater.connect_clicked(|_| nav::leave_theater());
     let exit_theater_hover = gtk::EventControllerMotion::new();
     exit_theater.add_controller(exit_theater_hover.clone());
+    let shortcut_list = crate::shortcuts::build();
 
     let click = gtk::GestureClick::new();
     click.connect_released(|_, presses, _, _| match presses {
@@ -1817,7 +1822,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&subs_split));
-    window.set_content(Some(&toasts));
+    // The list of shortcuts sits in the middle of the window, wherever the video is.
+    let window_overlay = gtk::Overlay::new();
+    window_overlay.set_child(Some(&toasts));
+    window_overlay.add_overlay(&shortcut_list.root);
+    window.set_content(Some(&window_overlay));
 
     // Mouse back/forward buttons and keyboard shortcuts
     let buttons = gtk::GestureClick::new();
@@ -1840,7 +1849,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             gdk::Key::Left if alt => nav::back(),
             gdk::Key::Right if alt => nav::forward(),
             gdk::Key::Escape => {
-                if !nav::exit_immersive() {
+                if !nav::escape() {
                     return glib::Propagation::Proceed;
                 }
             }
@@ -1936,6 +1945,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         player_settings,
         theater_button: theater.clone(),
         fullscreen_button: fullscreen.clone(),
+        shortcuts: shortcut_list.root,
+        shortcuts_scroll: shortcut_list.scroll,
         play_button,
         seek,
         seek_marks,
