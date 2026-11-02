@@ -676,7 +676,8 @@ fn show_player_chapters() {
 
     clear_rows(&ui.chapters_list);
     ui.seek.clear_marks();
-    ui.chapters_button.set_visible(!chapters.is_empty());
+    ui.chapters_button
+        .set_visible(settings::get().show_chapters_button && !chapters.is_empty());
 
     for chapter in &chapters {
         let label = gtk::Label::builder()
@@ -853,11 +854,33 @@ fn apply_mode() {
         set_sidebar_toggle(&ui.subs_toggle, false);
     }
     ui.settings_button.set_visible(!restricted);
+    ui.controls_button
+        .set_visible(settings::get().show_restricted_controls);
     ui.controls_button.set_tooltip_text(Some(if restricted {
         "Turn off the restricted mode"
     } else {
         "Turn on the restricted mode"
     }));
+}
+
+/// Applies which player buttons the settings show, and whether the restricted mode can be set up.
+pub fn controls_changed() {
+    let ui = ui::get();
+    let settings = settings::get();
+    let popped = ui.popout.borrow().is_some();
+
+    ui.theater_button
+        .set_visible(!popped && settings.show_theater_button);
+    ui.fullscreen_button
+        .set_visible(settings.show_fullscreen_button);
+    ui.popout_button.set_visible(settings.show_popout_button);
+    ui.speed.set_visible(settings.show_speed_button);
+    ui.controls_button
+        .set_visible(settings.show_restricted_controls);
+    crate::preferences::show_restricted_controls(settings.show_restricted_controls);
+    // The chapters button shows for videos that have chapters, if the setting allows.
+    show_player_chapters();
+    update_allow_buttons();
 }
 
 /// Turns the restricted mode on or off, starting over from the home page.
@@ -923,17 +946,19 @@ fn update_allow_buttons() {
     // Only the one in charge of the profile gets to change it. A video that is allowed can
     // still be taken out of it while the restricted mode is on.
     let editable = !profile::restricted();
-    ui.allow_channel.set_visible(editable && channel.is_some());
+    let show = settings::get().show_restricted_controls;
+    ui.allow_channel
+        .set_visible(show && editable && channel.is_some());
     ui.allow_channel.set_label(channel.unwrap_or_default());
     let video_visible = match &video {
         Some((_, allowed)) => editable || *allowed,
         None => false,
     };
-    ui.allow_video.set_visible(video_visible);
+    ui.allow_video.set_visible(show && video_visible);
     ui.allow_video
         .set_label(video.map(|(label, _)| label).unwrap_or_default());
     library::set_allow_button(
-        editable && collection.is_some(),
+        show && editable && collection.is_some(),
         collection.unwrap_or_default(),
     );
 
@@ -1223,6 +1248,7 @@ pub fn init(requests: UnboundedSender<Request>) {
     restore_session();
     library::refresh();
     apply_mode();
+    controls_changed();
     // Videos that were not saved don't stay for long.
     let expired = cache::expire();
     if expired > 0 {
@@ -2598,7 +2624,8 @@ fn apply_immersive() {
 
     // The way out floats over the video, where the header bar would be.
     ui.exit_theater.set_visible(theater && !fullscreen);
-    ui.theater_button.set_visible(!popped);
+    ui.theater_button
+        .set_visible(!popped && settings::get().show_theater_button);
     ui.theater_button.set_tooltip_text(Some(if theater {
         "Leave theater mode (Shift+F)"
     } else {
@@ -2802,6 +2829,7 @@ pub fn remote_status() -> crate::remote::Status {
         chapters,
         restricted: profile::restricted(),
         locked: profile::has_password(),
+        show_restricted_controls: settings::get().show_restricted_controls,
         playing: state.playing.as_ref().map(|entry| entry.id.clone()),
         title: state
             .playing

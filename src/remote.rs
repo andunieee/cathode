@@ -75,6 +75,8 @@ pub struct Status {
     pub restricted: bool,
     /// Whether a password guards the restricted mode.
     pub locked: bool,
+    /// Whether the restricted mode controls are shown.
+    pub show_restricted_controls: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

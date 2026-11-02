@@ -98,6 +98,7 @@ impl RemoteApp {
             "chapter": -1,
             "restricted": false,
             "locked": false,
+            "show_restricted_controls": status.show_restricted_controls,
             "password": "",
             "restrict_error": "",
             "allowed_query": "",
@@ -245,7 +246,12 @@ impl RemoteApp {
                 .empty("Nothing from the subscriptions"),
         );
 
-        out.element(ui::tab("restricted_tab").parent("tabs").label("Restricted"));
+        out.element(
+            ui::tab("restricted_tab")
+                .parent("tabs")
+                .label("Restricted")
+                .visible(cel("s.show_restricted_controls")),
+        );
         out.element(
             ui::checkbox("restricted")
                 .parent("restricted_tab")
@@ -448,6 +454,7 @@ impl RemoteApp {
             "chapter": status.chapters.iter().rposition(|(_, start)| *start <= status.position).map_or(-1, |index| index as i64),
             "restricted": status.restricted,
             "locked": status.locked,
+            "show_restricted_controls": status.show_restricted_controls,
         }));
         self.restricted = status.restricted;
         if status.captions != self.captions {

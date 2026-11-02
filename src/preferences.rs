@@ -21,6 +21,28 @@ struct CookiesRow {
 
 thread_local! {
     static COOKIES: RefCell<Option<std::rc::Rc<CookiesRow>>> = const { RefCell::new(None) };
+    /// The Restricted Mode page in the settings sidebar.
+    static RESTRICTED_ROW: RefCell<Option<gtk::ListBoxRow>> = const { RefCell::new(None) };
+}
+
+/// Shows or hides the Restricted Mode page in the settings sidebar.
+pub fn show_restricted_controls(show: bool) {
+    RESTRICTED_ROW.with(|slot| {
+        let Some(row) = slot.borrow().clone() else {
+            return;
+        };
+        row.set_visible(show);
+        // The page being looked at just went away.
+        if !show
+            && row.is_selected()
+            && let Some(list) = row
+                .parent()
+                .and_then(|parent| parent.downcast::<gtk::ListBox>().ok())
+            && let Some(first) = list.row_at_index(0)
+        {
+            list.select_row(Some(&first));
+        }
+    });
 }
 
 fn cookies_row() -> Option<std::rc::Rc<CookiesRow>> {
@@ -102,6 +124,27 @@ fn point_buttons(widget: &impl IsA<gtk::Widget>) {
         point_buttons(&current);
         child = current.next_sibling();
     }
+}
+
+/// A switch that saves one setting and applies it right away.
+fn toggle_row(
+    title: &str,
+    subtitle: &str,
+    active: bool,
+    set: fn(&mut settings::Settings, bool),
+) -> adw::SwitchRow {
+    let row = adw::SwitchRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .cursor(&crate::ui::pointer())
+        .active(active)
+        .build();
+    row.connect_active_notify(move |row| {
+        let active = row.is_active();
+        save(|s| set(s, active));
+        nav::controls_changed();
+    });
+    row
 }
 
 fn general() -> adw::PreferencesPage {
@@ -294,12 +337,54 @@ fn general() -> adw::PreferencesPage {
     let browser = adw::PreferencesGroup::builder().title("Browser").build();
     browser.add(&browser_row);
 
+    let player_buttons = adw::PreferencesGroup::builder()
+        .title("Player controls")
+        .description("Which buttons the player shows")
+        .build();
+    player_buttons.add(&toggle_row(
+        "Fullscreen button",
+        "The button that takes the whole screen",
+        current.show_fullscreen_button,
+        |s, on| s.show_fullscreen_button = on,
+    ));
+    player_buttons.add(&toggle_row(
+        "Theater mode button",
+        "The button that fills the window with the video",
+        current.show_theater_button,
+        |s, on| s.show_theater_button = on,
+    ));
+    player_buttons.add(&toggle_row(
+        "Pop-out button",
+        "The button that opens the video in its own window",
+        current.show_popout_button,
+        |s, on| s.show_popout_button = on,
+    ));
+    player_buttons.add(&toggle_row(
+        "Playback speed button",
+        "The speed menu of the player",
+        current.show_speed_button,
+        |s, on| s.show_speed_button = on,
+    ));
+    player_buttons.add(&toggle_row(
+        "Chapters button",
+        "Only the button in the player controls; the chapters of the video page stay",
+        current.show_chapters_button,
+        |s, on| s.show_chapters_button = on,
+    ));
+    player_buttons.add(&toggle_row(
+        "Restricted mode controls",
+        "The buttons and pages that set up the restricted mode, here and on the video pages, in the navigation bar and in the remote",
+        current.show_restricted_controls,
+        |s, on| s.show_restricted_controls = on,
+    ));
+
     let page = adw::PreferencesPage::new();
     page.add(&languages);
     page.add(&downloads);
     page.add(&thumbnails);
     page.add(&channels);
     page.add(&queue);
+    page.add(&player_buttons);
     page.add(&network);
     page.add(&browser);
     page
@@ -590,6 +675,9 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
             .cursor(&crate::ui::pointer())
             .build();
         row.set_widget_name(name);
+        if name == "parental" {
+            RESTRICTED_ROW.with(|slot| *slot.borrow_mut() = Some(row.clone()));
+        }
         sidebar.append(&row);
     }
     sidebar.connect_row_selected({
@@ -601,6 +689,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
         }
     });
     sidebar.select_row(sidebar.row_at_index(0).as_ref());
+    show_restricted_controls(settings::get().show_restricted_controls);
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     root.append(&sidebar);

@@ -41,6 +41,18 @@ pub struct Settings {
     pub skip_sponsors: bool,
     /// Hides the seek bar of the player.
     pub hide_progress_bar: bool,
+    /// Shows the fullscreen button of the player.
+    pub show_fullscreen_button: bool,
+    /// Shows the theater mode button of the player.
+    pub show_theater_button: bool,
+    /// Shows the pop-out button of the player.
+    pub show_popout_button: bool,
+    /// Shows the playback speed menu of the player.
+    pub show_speed_button: bool,
+    /// Shows the chapters button of the player.
+    pub show_chapters_button: bool,
+    /// Shows the buttons and pages that set up the restricted mode.
+    pub show_restricted_controls: bool,
     /// Takes the videos played through out of the queue, instead of leaving them dimmed.
     pub remove_played_from_queue: bool,
     /// Shows a frame from around the middle of the videos instead of their chosen thumbnails.
@@ -61,6 +73,12 @@ impl Default for Settings {
             limit_rate: String::new(),
             skip_sponsors: false,
             hide_progress_bar: false,
+            show_fullscreen_button: false,
+            show_theater_button: true,
+            show_popout_button: true,
+            show_speed_button: true,
+            show_chapters_button: false,
+            show_restricted_controls: true,
             remove_played_from_queue: true,
             middle_thumbnails: true,
             hide_shorts: false,
