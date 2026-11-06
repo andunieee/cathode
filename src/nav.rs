@@ -21,6 +21,7 @@ use crate::history;
 use crate::library;
 use crate::profile::{self, ChannelRef, Input, Item, PlaylistRef};
 use crate::settings;
+use crate::social;
 use crate::state::{self, CaptionMode};
 use crate::subscriptions::{self, Subscription};
 use crate::suggestions;
@@ -32,6 +33,8 @@ const HISTORY_PAGE: usize = 10;
 const FEED_REFRESH_SECONDS: u32 = 30 * 60;
 /// How long to wait between asking for the suggestions of two videos.
 const SUGGESTION_WAIT_SECONDS: u32 = 30;
+/// How often the people followed are checked for new recommendations.
+const SOCIAL_SYNC_SECONDS: u32 = 15 * 60;
 
 #[derive(Clone)]
 enum Page {
@@ -61,6 +64,10 @@ enum Page {
     Allowed {
         query: String,
     },
+    /// A person followed, with the videos they recommend. The key is in hex.
+    Person {
+        pubkey: String,
+    },
 }
 
 impl Page {
@@ -84,6 +91,7 @@ impl Page {
             Page::History => "history".to_string(),
             Page::Collection(name) => format!("collection:{name}"),
             Page::Allowed { query } => format!("a:{query}"),
+            Page::Person { pubkey } => format!("p:{pubkey}"),
         }
     }
 }
@@ -132,6 +140,17 @@ struct State {
     avatars: HashMap<String, gdk::Texture>,
     avatars_requested: HashSet<String>,
     waiting_avatars: HashMap<String, Vec<glib::WeakRef<adw::Avatar>>>,
+    /// The same for the people followed, by public key, and whose profile was asked for.
+    social_pictures: HashMap<String, gdk::Texture>,
+    social_profiles_requested: HashSet<String>,
+    /// Whether the indexers have a relay list of each person whose profile was looked up.
+    social_relay_lists: HashMap<String, bool>,
+    /// What the channels say about themselves, by channel id, and the ones asked for.
+    channel_abouts: HashMap<String, crate::fetch::ChannelAbout>,
+    channel_abouts_requested: HashSet<String>,
+    /// The key of the last page of results shown, to know when the filter of the results is for
+    /// another one.
+    shown_key: String,
     waiting_pictures: HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>,
 
     queue: Vec<QueueItem>,
@@ -177,6 +196,16 @@ struct State {
     feed_ids: Vec<String>,
     /// The same for the suggestions.
     suggestion_ids: Vec<String>,
+    /// The same for the recommendations.
+    recommendation_ids: Vec<String>,
+    /// The categories and the hashtags in the menus over the recommendations, with how many
+    /// videos have each, in the order of the menus after their first item.
+    recommendation_categories: Vec<(String, usize)>,
+    recommendation_hashtags: Vec<(String, usize)>,
+    /// While those menus are filled, when their changes aren't the user's.
+    filling_recommendation_filters: bool,
+    /// How many recommendations are shown, of how many there are.
+    recommendation_counts: (usize, usize),
 
     /// Where to read the next entries of the history file from, and the day of the last one shown.
     history_offset: u64,
@@ -204,6 +233,12 @@ thread_local! {
         avatars: HashMap::new(),
         avatars_requested: HashSet::new(),
         waiting_avatars: HashMap::new(),
+        social_pictures: HashMap::new(),
+        social_profiles_requested: HashSet::new(),
+        social_relay_lists: HashMap::new(),
+        channel_abouts: HashMap::new(),
+        channel_abouts_requested: HashSet::new(),
+        shown_key: String::new(),
         waiting_pictures: HashMap::new(),
         queue: Vec::new(),
         queue_downloading: None,
@@ -219,6 +254,11 @@ thread_local! {
         local_files: HashMap::new(),
         feed_ids: Vec::new(),
         suggestion_ids: Vec::new(),
+        recommendation_ids: Vec::new(),
+        recommendation_categories: Vec::new(),
+        recommendation_hashtags: Vec::new(),
+        filling_recommendation_filters: false,
+        recommendation_counts: (0, 0),
         history_offset: u64::MAX,
         history_done: true,
         history_day: None,
@@ -434,8 +474,9 @@ fn append_to(store: &gio::ListStore, entries: &[Entry]) {
     store.extend_from_slice(&objects);
 }
 
+/// Adds the entries the filter of the results lets through.
 fn append_entries(ui: &Ui, entries: &[Entry]) {
-    append_to(&ui.store, entries);
+    append_to(&ui.store, &ui.results_filter.criteria().select(entries));
 }
 
 fn update_results_status(key: &str) {
@@ -446,13 +487,38 @@ fn update_results_status(key: &str) {
             .map_or((0, true), |listing| (listing.entries.len(), listing.done))
     });
 
+    let ui = ui::get();
+    let shown = ui.store.n_items() as usize;
+    let results = if ui.results_filter.criteria().is_empty() {
+        format!("{count} results")
+    } else {
+        format!("{shown} of {count} results")
+    };
     let text = match (count, done) {
         (0, true) => "No results".to_string(),
         (0, false) => "Loading…".to_string(),
-        (count, true) => format!("{count} results"),
-        (count, false) => format!("{count} results, loading more…"),
+        (_, true) => results,
+        (_, false) => format!("{results}, loading more…"),
     };
-    ui::get().results_status.set_text(&text);
+    ui.results_status.set_text(&text);
+}
+
+/// The filter of the results changed, the ones listed so far are sifted through again.
+pub fn results_filter_changed() {
+    let ui = ui::get();
+    let key = current().key();
+    let entries = with(|state| {
+        state
+            .listings
+            .get(&key)
+            .map(|listing| listing.entries.clone())
+    });
+    let Some(entries) = entries else {
+        return;
+    };
+    ui.store.remove_all();
+    append_entries(&ui, &entries);
+    update_results_status(&key);
 }
 
 /// Fills the row of channels above the results, which is hidden when there are none.
@@ -795,7 +861,11 @@ fn page_allowed(page: &Page) -> bool {
 
     match page {
         Page::Home | Page::Allowed { .. } | Page::History => true,
-        Page::Settings | Page::Search { .. } | Page::Related(_) | Page::Cache => false,
+        Page::Settings
+        | Page::Search { .. }
+        | Page::Related(_)
+        | Page::Cache
+        | Page::Person { .. } => false,
         Page::Channel { id, .. } => profile::allows_channel(id),
         Page::Playlist { id, .. } => profile::allows_playlist(id),
         Page::Collection(name) => profile::allows_collection(name),
@@ -878,6 +948,7 @@ pub fn controls_changed() {
     ui.controls_button
         .set_visible(settings.show_restricted_controls);
     crate::preferences::show_restricted_controls(settings.show_restricted_controls);
+    social_changed(settings.show_social);
     // The chapters button shows for videos that have chapters, if the setting allows.
     show_player_chapters();
     update_allow_buttons();
@@ -1097,6 +1168,21 @@ fn show() {
     ui.forward.set_sensitive(can_forward);
 
     let key = page.key();
+    // The filter of the results is for the page it was set on, it stays while a video opened
+    // from there is looked at.
+    let listed = matches!(
+        page,
+        Page::Search { .. }
+            | Page::Playlist { .. }
+            | Page::Channel { .. }
+            | Page::Related(_)
+            | Page::Allowed { .. }
+            | Page::Person { .. }
+    );
+    if listed && with(|state| std::mem::replace(&mut state.shown_key, key.clone())) != key {
+        ui.results_filter.clear();
+    }
+    clear_about(&ui);
     match page {
         Page::Search {
             query,
@@ -1153,6 +1239,7 @@ fn show() {
             ui.channel_entry.set_text(&query);
             ui.channel_entry.set_visible(true);
             ui.channel_link.set(Some(&crate::fetch::channel_url(&id)));
+            show_channel_about(&id);
 
             let language = subscriptions::language(&id);
             show_listing(
@@ -1198,8 +1285,10 @@ fn show() {
             ui.allowed_entry.set_text(&query);
             show_allowed(key, &query);
         }
+        Page::Person { pubkey } => show_person(key, &pubkey),
     }
 
+    update_details(&ui);
     update_allow_buttons();
     update_subscribe_button();
 }
@@ -1276,6 +1365,10 @@ pub fn init(requests: UnboundedSender<Request>) {
         refresh_feed();
         glib::ControlFlow::Continue
     });
+    glib::timeout_add_seconds_local(SOCIAL_SYNC_SECONDS, || {
+        social_sync();
+        glib::ControlFlow::Continue
+    });
 }
 
 pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
@@ -1306,6 +1399,8 @@ pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
     } else if let Some(path) = crate::fetch::rumble_channel_of_link(query) {
         let name = path.split_once('/').map_or(path.as_str(), |(_, name)| name);
         open_channel(&crate::fetch::rumble_id(&path), name);
+    } else if let Some(pubkey) = nostr_profile(query) {
+        open_person(&pubkey.to_hex());
     } else if let Some(input) = youtube_link(query) {
         match input {
             Input::Playlist(url) => navigate(Page::Playlist {
@@ -1329,6 +1424,14 @@ pub fn search(query: &str, sort: SearchSort, filter: SearchFilter) {
             filter,
         });
     }
+}
+
+/// The person a pasted `npub` or `nprofile` is of, with or without `nostr:` in front.
+fn nostr_profile(query: &str) -> Option<ritualistic::PubKey> {
+    let code = query.strip_prefix("nostr:").unwrap_or(query);
+    (code.starts_with("npub1") || code.starts_with("nprofile1"))
+        .then(|| code.parse().ok())
+        .flatten()
 }
 
 /// The playlist or channel a pasted YouTube link points to. Bare ids and handles are left to
@@ -3461,9 +3564,15 @@ fn unsubscribe(id: &str) {
     }
 }
 
-/// Subscribes to the channel on screen, or unsubscribes from it.
+/// Subscribes to the channel on screen, or unsubscribes from it. On the page of a person, starts
+/// or stops following their recommendations.
 pub fn toggle_subscription() {
-    let Page::Channel { id, name, .. } = current() else {
+    let page = current();
+    if let Page::Person { pubkey } = &page {
+        toggle_follow(pubkey);
+        return;
+    }
+    let Page::Channel { id, name, .. } = page else {
         return;
     };
 
@@ -3485,21 +3594,47 @@ pub fn toggle_subscription() {
     update_subscribe_button();
 }
 
+fn toggle_follow(hex: &str) {
+    let Ok(pubkey) = hex.parse::<ritualistic::PubKey>() else {
+        return;
+    };
+    let followed = !social::is_followed(pubkey);
+    crate::log::info!("following {hex}: {followed}");
+    if let Err(error) = social::set_followed(pubkey, followed) {
+        toast(&format!("Could not save the people followed: {error}"));
+    }
+    refresh_following();
+    update_subscribe_button();
+    if followed {
+        social_sync();
+    }
+}
+
 fn update_subscribe_button() {
     let ui = ui::get();
-    let channel = match current() {
-        Page::Channel { id, .. } if !profile::restricted() => Some(id),
+    let state = match current() {
+        _ if profile::restricted() => None,
+        Page::Channel { id, .. } => Some((
+            subscriptions::is_subscribed(&id),
+            "Unsubscribe",
+            "Subscribe",
+        )),
+        Page::Person { pubkey } if settings::get().show_social => {
+            pubkey.parse().ok().map(|pubkey| {
+                (
+                    social::is_followed(pubkey),
+                    "Unfollow",
+                    "Follow Recommendations",
+                )
+            })
+        }
         _ => None,
     };
 
-    ui.subscribe_button.set_visible(channel.is_some());
-    if let Some(id) = channel {
-        let subscribed = subscriptions::is_subscribed(&id);
-        ui.subscribe_button.set_label(if subscribed {
-            "Unsubscribe"
-        } else {
-            "Subscribe"
-        });
+    ui.subscribe_button.set_visible(state.is_some());
+    if let Some((subscribed, on, off)) = state {
+        ui.subscribe_button
+            .set_label(if subscribed { on } else { off });
         if subscribed {
             ui.subscribe_button.remove_css_class("suggested-action");
         } else {
@@ -3582,15 +3717,24 @@ pub fn refresh_feed() {
     }
 }
 
-/// The home page: the latest videos of the subscriptions, or the invitation to search if there
-/// are none.
+/// The home page: the latest videos of the subscriptions and the recommendations, or the
+/// invitation to search if there are neither.
 fn show_feed() {
     let ui = ui::get();
-    if subscriptions::list().is_empty() {
+    let subscribed = !subscriptions::list().is_empty();
+    let social = settings::get().show_social;
+    if !subscribed && !social {
         ui.controls.home.set_visible_child_name("open");
         return;
     }
     ui.controls.home.set_visible_child_name("feed");
+    update_feed_tabs(&ui);
+    if !subscribed {
+        // The recommendations are all there is to show.
+        ui.feed_tabs.set_visible_child_name("recommendations");
+        feed_tab_changed();
+        return;
+    }
 
     // The feed is made of channel videos, which the settings may leave the Shorts out of.
     let feed: Vec<Entry> = subscriptions::feed()
@@ -3639,19 +3783,517 @@ pub fn dismiss_suggestion(id: &str) {
 /// The tab of the home page changed, or what it shows did.
 pub fn feed_tab_changed() {
     let ui = ui::get();
-    if ui.feed_tabs.visible_child_name().as_deref() == Some("suggestions") {
-        let ranked = suggestions::ranked();
-        let ids: Vec<String> = ranked.iter().map(|entry| entry.id.clone()).collect();
-        if with(|state| std::mem::replace(&mut state.suggestion_ids, ids.clone())) != ids {
-            ui.suggestions_store.remove_all();
-            append_to(&ui.suggestions_store, &ranked);
+    match ui.feed_tabs.visible_child_name().as_deref() {
+        Some("suggestions") => {
+            let ranked = suggestions::ranked();
+            let ids: Vec<String> = ranked.iter().map(|entry| entry.id.clone()).collect();
+            if with(|state| std::mem::replace(&mut state.suggestion_ids, ids.clone())) != ids {
+                ui.suggestions_store.remove_all();
+                append_to(&ui.suggestions_store, &ranked);
+            }
         }
+        Some("recommendations") => show_recommendations(&ui),
+        _ => {}
     }
     update_feed_status();
 }
 
+/// What the menus over the recommendations pick.
+fn recommendation_selection(ui: &Ui) -> social::Selection {
+    let filters = &ui.recommendation_filters;
+    let (categories, hashtags) = with(|state| {
+        (
+            state.recommendation_categories.clone(),
+            state.recommendation_hashtags.clone(),
+        )
+    });
+    // The first item is all of them.
+    let label = |dropdown: &gtk::DropDown, labels: &[(String, usize)]| {
+        (dropdown.selected() as usize)
+            .checked_sub(1)
+            .and_then(|at| labels.get(at))
+            .map(|(label, _)| label.clone())
+    };
+    social::Selection {
+        category: label(&filters.category, &categories),
+        hashtag: label(&filters.hashtag, &hashtags),
+        length: social::Length::ALL
+            .get(filters.length.selected() as usize)
+            .map(|(length, _)| *length)
+            .unwrap_or_default(),
+        order: social::Order::ALL
+            .get(filters.order.selected() as usize)
+            .map(|(order, _)| *order)
+            .unwrap_or_default(),
+    }
+}
+
+/// Puts the labels in the menu, keeping it on the one it had picked while that's still there.
+fn fill_label_menu(
+    dropdown: &gtk::DropDown,
+    all: &str,
+    labels: Vec<(String, usize)>,
+    picked: Option<&String>,
+    slot: fn(&mut State) -> &mut Vec<(String, usize)>,
+) {
+    if with(|state| *slot(state) == labels) {
+        return;
+    }
+    let mut names = vec![all.to_string()];
+    names.extend(
+        labels
+            .iter()
+            .map(|(label, count)| format!("{label} ({count})")),
+    );
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let at = picked
+        .and_then(|picked| labels.iter().position(|(label, _)| label == picked))
+        .map_or(0, |at| at + 1);
+    with(|state| *slot(state) = labels);
+    dropdown.set_model(Some(&gtk::StringList::new(&names)));
+    dropdown.set_selected(at as u32);
+}
+
+/// Shows the recommendations the menus over them pick.
+fn show_recommendations(ui: &Ui) {
+    let videos = social::recommended();
+    let (categories, hashtags) = social::labels(&videos);
+    let picked = recommendation_selection(ui);
+    with(|state| state.filling_recommendation_filters = true);
+    let filters = &ui.recommendation_filters;
+    fill_label_menu(
+        &filters.category,
+        "All categories",
+        categories,
+        picked.category.as_ref(),
+        |state| &mut state.recommendation_categories,
+    );
+    fill_label_menu(
+        &filters.hashtag,
+        "All hashtags",
+        hashtags,
+        picked.hashtag.as_ref(),
+        |state| &mut state.recommendation_hashtags,
+    );
+    with(|state| state.filling_recommendation_filters = false);
+
+    // What was picked may be gone.
+    let selection = recommendation_selection(ui);
+    filters
+        .clear
+        .set_visible(selection != social::Selection::default());
+    let shown = social::select(&videos, &selection);
+    let ids: Vec<String> = shown.iter().map(|entry| entry.id.clone()).collect();
+    with(|state| state.recommendation_counts = (shown.len(), videos.len()));
+    if with(|state| std::mem::replace(&mut state.recommendation_ids, ids.clone())) != ids {
+        ui.recommendations_store.remove_all();
+        append_to(&ui.recommendations_store, &shown);
+        ui.recommendations_scroll.vadjustment().set_value(0.0);
+    }
+}
+
+/// A menu over the recommendations picked something else.
+pub fn recommendation_filters_changed() {
+    if with(|state| state.filling_recommendation_filters) {
+        return;
+    }
+    show_recommendations(&ui::get());
+    update_feed_status();
+}
+
+/// Shows all the recommendations again.
+pub fn clear_recommendation_filters() {
+    let ui = ui::get();
+    let filters = &ui.recommendation_filters;
+    with(|state| state.filling_recommendation_filters = true);
+    for dropdown in [
+        &filters.category,
+        &filters.hashtag,
+        &filters.length,
+        &filters.order,
+    ] {
+        dropdown.set_selected(0);
+    }
+    with(|state| state.filling_recommendation_filters = false);
+    recommendation_filters_changed();
+}
+
+/// Shows only the recommendations with the hashtag, or the category, clicked on one of them.
+pub fn pick_recommendation_label(label: &str, hashtag: bool) {
+    let ui = ui::get();
+    let filters = &ui.recommendation_filters;
+    let (dropdown, labels) = if hashtag {
+        (
+            &filters.hashtag,
+            with(|state| state.recommendation_hashtags.clone()),
+        )
+    } else {
+        (
+            &filters.category,
+            with(|state| state.recommendation_categories.clone()),
+        )
+    };
+    if let Some(at) = labels.iter().position(|(name, _)| name == label) {
+        dropdown.set_selected(at as u32 + 1);
+    }
+}
+
+/// Shows or hides what goes with the social recommendations, and syncs them if they're shown.
+fn social_changed(show: bool) {
+    let ui = ui::get();
+    let page = |name: &str| {
+        ui.feed_tabs
+            .child_by_name(name)
+            .map(|child| ui.feed_tabs.page(&child))
+    };
+    if let Some(suggestions) = page("suggestions") {
+        suggestions.set_title(if show {
+            "YouTube Suggestions"
+        } else {
+            "Suggestions"
+        });
+    }
+    update_feed_tabs(&ui);
+    crate::preferences::show_social(show);
+    ui.following.set_visible(show);
+    update_subscribe_button();
+    if show {
+        if let Err(error) = social::ensure_follows() {
+            toast(&format!("Could not save the people followed: {error}"));
+        }
+        refresh_following();
+        social_sync();
+    }
+    // Without subscriptions, the recommendations may be all the home page has.
+    if matches!(current(), Page::Home) && !profile::restricted() {
+        show_feed();
+    }
+}
+
+/// Shows the tabs of the home page there is something for: the subscriptions' ones with
+/// subscriptions, the recommendations with the social recommendations turned on.
+fn update_feed_tabs(ui: &Ui) {
+    let subscribed = !subscriptions::list().is_empty();
+    let social = settings::get().show_social;
+    let mut shown = 0;
+    for (name, visible) in [
+        ("latest", subscribed),
+        ("suggestions", subscribed),
+        ("recommendations", social),
+    ] {
+        if let Some(child) = ui.feed_tabs.child_by_name(name) {
+            ui.feed_tabs.page(&child).set_visible(visible);
+        }
+        shown += visible as usize;
+    }
+    // A single tab needs no switching.
+    ui.feed_switcher.set_visible(shown > 1);
+}
+
+/// Asks for the new recommendations of the people followed who are due a sync.
+fn social_sync() {
+    if !settings::get().show_social || profile::restricted() {
+        return;
+    }
+    for (pubkey, since) in social::due() {
+        send(Request::SocialSync { pubkey, since });
+    }
+    update_feed_status();
+}
+
+/// Fills the list of the people followed in the sidebar, and asks for the profiles not asked for
+/// yet.
+fn refresh_following() {
+    let ui = ui::get();
+    while let Some(row) = ui.following_list.first_child() {
+        ui.following_list.remove(&row);
+    }
+    if !settings::get().show_social {
+        return;
+    }
+
+    let follows = social::follows();
+    if follows.is_empty() {
+        ui.following_list.append(
+            &gtk::Label::builder()
+                .label("Nobody followed yet.")
+                .justify(gtk::Justification::Center)
+                .css_classes(["dim-label"])
+                .margin_top(12)
+                .margin_bottom(12)
+                .build(),
+        );
+    }
+    for pubkey in follows {
+        let hex = pubkey.to_hex();
+        let person = social::profile(pubkey);
+        let name = person.render_name();
+        let row = adw::ActionRow::builder()
+            .title(&name)
+            .title_lines(1)
+            .use_markup(false)
+            .tooltip_text(pubkey.to_npub())
+            .activatable(true)
+            .cursor(&crate::ui::pointer())
+            .build();
+        row.connect_activated({
+            let hex = hex.clone();
+            move |_| open_person(&hex)
+        });
+        let avatar = adw::Avatar::new(32, Some(&name), true);
+        let (picture, request) = with(|state| {
+            (
+                state.social_pictures.get(&hex).cloned(),
+                state.social_profiles_requested.insert(hex.clone()),
+            )
+        });
+        avatar.set_custom_image(picture.as_ref());
+        row.add_prefix(&avatar);
+        ui.following_list.append(&row);
+        if request {
+            send(Request::SocialProfile { pubkey: hex });
+        }
+    }
+}
+
+pub fn open_person(pubkey: &str) {
+    navigate(Page::Person {
+        pubkey: pubkey.to_string(),
+    });
+}
+
+/// Whether the page on screen is the one of the person.
+fn showing_person(pubkey: &str) -> bool {
+    matches!(current(), Page::Person { pubkey: shown } if shown == pubkey)
+}
+
+/// Shows the page of a person followed: who they say they are, their relays and the videos they
+/// recommend, all from what the syncs saved.
+fn show_person(key: String, hex: &str) {
+    let ui = ui::get();
+    ui.stack.set_visible_child_name("results");
+    ui.store.remove_all();
+    show_channel_results(&[]);
+    let Ok(pubkey) = hex.parse::<ritualistic::PubKey>() else {
+        ui.channel_header.set_visible(false);
+        ui.channel_link.set(None);
+        ui.results_status.set_text("Not a valid public key");
+        return;
+    };
+
+    let person = social::profile(pubkey);
+    let name = person.render_name();
+    ui.channel_header.set_visible(true);
+    ui.channel_title.set_text(&name);
+    ui.channel_avatar.set_text(Some(&name));
+    ui.channel_avatar.set_visible(true);
+    ui.channel_avatar.set_widget_name(hex);
+    let picture = with(|state| state.social_pictures.get(hex).cloned());
+    ui.channel_avatar.set_custom_image(picture.as_ref());
+    ui.channel_entry.set_visible(false);
+    ui.channel_link.set(Some(&pubkey.to_npub()));
+    let looked_up = with(|state| state.social_relay_lists.contains_key(hex));
+    fill_person_details(
+        &ui,
+        pubkey,
+        &person.metadata,
+        social::relays(pubkey),
+        looked_up,
+    );
+    if with(|state| state.social_profiles_requested.insert(hex.to_string())) {
+        send(Request::SocialProfile {
+            pubkey: hex.to_string(),
+        });
+    }
+
+    // Read again each time, the syncs may have brought more.
+    let entries = social::videos_of(pubkey);
+    append_entries(&ui, &entries);
+    with(|state| {
+        state.listings.insert(
+            key.clone(),
+            Listing {
+                entries,
+                channels: Vec::new(),
+                done: true,
+            },
+        )
+    });
+    update_results_status(&key);
+}
+
+/// Empties what the page says about the channel or person shown.
+fn clear_about(ui: &ui::Ui) {
+    ui.page_about.set_visible(false);
+    while let Some(child) = ui.page_facts.first_child() {
+        ui.page_facts.remove(&child);
+    }
+}
+
+/// Shows the details only when there is something in them.
+fn update_details(ui: &ui::Ui) {
+    let any = ui.channel_link.row.is_visible() || ui.page_facts.first_child().is_some();
+    ui.page_details.set_visible(any);
+    ui.page_details_toggle.set_visible(any);
+}
+
+fn set_about(ui: &ui::Ui, text: &str) {
+    ui.page_about.set_text(text);
+    ui.page_about.set_visible(!text.is_empty());
+}
+
+fn fact_label(text: &str) -> gtk::Label {
+    gtk::Label::builder()
+        .label(text)
+        .xalign(0.0)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .selectable(true)
+        .focusable(false)
+        .css_classes(["dim-label"])
+        .build()
+}
+
+/// Shows what the channel says about itself, now if we have it or when it arrives.
+fn show_channel_about(id: &str) {
+    let (about, request) = with(|state| {
+        (
+            state.channel_abouts.get(id).cloned(),
+            state.channel_abouts_requested.insert(id.to_string()),
+        )
+    });
+    if let Some(about) = about {
+        fill_channel_about(&about);
+    }
+    if request {
+        send(Request::ChannelAbout { id: id.to_string() });
+    }
+}
+
+fn fill_channel_about(about: &crate::fetch::ChannelAbout) {
+    let ui = ui::get();
+    clear_about(&ui);
+    // Channels opened from a link have no name until now.
+    if let Some(name) = about.name.as_deref()
+        && ui.channel_title.text().is_empty()
+    {
+        ui.channel_title.set_text(name);
+        ui.channel_avatar.set_text(Some(name));
+    }
+    set_about(&ui, about.description.trim());
+
+    let mut facts = Vec::new();
+    if let Some(handle) = &about.handle {
+        facts.push(handle.clone());
+    }
+    if let Some(subscribers) = about.subscribers {
+        facts.push(format!("{} subscribers", format::count(subscribers)));
+    }
+    if about.verified {
+        facts.push("Verified".to_string());
+    }
+    if !facts.is_empty() {
+        ui.page_facts.append(&fact_label(&facts.join("   ")));
+    }
+    if !about.tags.is_empty() {
+        ui.page_facts
+            .append(&fact_label(&format!("Tags: {}", about.tags.join(", "))));
+    }
+    update_details(&ui);
+}
+
+/// Puts what the metadata says on the page, and the public key and the relays in the details.
+/// Without `relays`, `looked_up` tells whether the indexers were asked for them already.
+fn fill_person_details(
+    ui: &ui::Ui,
+    pubkey: ritualistic::PubKey,
+    metadata: &ritualistic::Metadata,
+    relays: Option<Vec<(String, Option<String>)>>,
+    looked_up: bool,
+) {
+    clear_about(ui);
+    fn given(value: &Option<String>) -> Option<&str> {
+        value.as_deref().map(str::trim).filter(|v| !v.is_empty())
+    }
+
+    let display_name = given(&metadata.display_name)
+        .filter(|display_name| Some(*display_name) != given(&metadata.name));
+    let about: Vec<&str> = [display_name, given(&metadata.about)]
+        .into_iter()
+        .flatten()
+        .collect();
+    set_about(ui, &about.join("\n"));
+
+    let facts: Vec<String> = [
+        ("Address", given(&metadata.nip05)),
+        ("Website", given(&metadata.website)),
+        ("Lightning", given(&metadata.lud16)),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| {
+        let value = glib::markup_escape_text(value?);
+        Some(if name == "Website" {
+            format!("{name}: <a href=\"{value}\">{value}</a>")
+        } else {
+            format!("{name}: {value}")
+        })
+    })
+    .collect();
+    if !facts.is_empty() {
+        let facts_label = fact_label("");
+        facts_label.set_markup(&facts.join("   "));
+        ui.page_facts.append(&facts_label);
+    }
+    ui.page_facts
+        .append(&fact_label(&format!("Public key: {}", pubkey.to_hex())));
+
+    let heading = gtk::Label::builder()
+        .label("Relays")
+        .xalign(0.0)
+        .margin_top(6)
+        .css_classes(["heading"])
+        .build();
+    ui.page_facts.append(&heading);
+    let relays = match relays {
+        None if looked_up => "The indexers have no relay list of theirs, so their \
+            recommendations can't be looked for."
+            .to_string(),
+        None => "Looking for their relay list…".to_string(),
+        Some(relays) if relays.is_empty() => "The relay list is empty.".to_string(),
+        Some(relays) => relays
+            .iter()
+            .map(|(url, marker)| match marker.as_deref() {
+                Some("read") => format!("{url} (read only)"),
+                Some("write") => format!("{url} (write only)"),
+                _ => url.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    ui.page_facts.append(&fact_label(&relays));
+}
+
 fn update_feed_status() {
     let ui = ui::get();
+    if ui.feed_tabs.visible_child_name().as_deref() == Some("recommendations") {
+        let (pending, failed, error) = social::progress();
+        let (shown, total) = with(|state| state.recommendation_counts);
+        let text = if pending > 0 {
+            format!("Looking for new recommendations… {pending} people to go")
+        } else if let (true, Some(error)) = (failed > 0, error) {
+            format!("{failed} people could not be checked: {error}")
+        } else if shown < total {
+            format!("{shown} of {total} videos")
+        } else if total > 0 {
+            format!("{total} videos")
+        } else {
+            String::new()
+        };
+        ui.feed_refresh.set_visible(false);
+        ui.feed_status.set_text(&text);
+        ui.feed_status.set_tooltip_text(Some(&text));
+        return;
+    }
     if ui.feed_tabs.visible_child_name().as_deref() == Some("suggestions") {
         let (done, total) = suggestions::progress();
         let text = if done < total {
@@ -4371,6 +5013,17 @@ pub fn handle(response: Response) {
         Response::CookiesChecked { browser, result } => {
             crate::preferences::cookies_checked(&browser, result)
         }
+        Response::SocialSynced { pubkey, result } => {
+            let changed = social::synced(&pubkey, result);
+            if showing_person(&pubkey) {
+                // The relay list comes with the sync, even when no video does.
+                show();
+            } else if changed && matches!(current(), Page::Home) && !profile::restricted() {
+                feed_tab_changed();
+            } else {
+                update_feed_status();
+            }
+        }
         Response::Setup(status) => {
             use crate::tools::Status;
 
@@ -4457,6 +5110,37 @@ pub fn handle(response: Response) {
                     ui.video_picture.set_paintable(Some(&texture));
                 }
             }
+        }
+        Response::SocialProfile {
+            pubkey,
+            picture,
+            relay_list,
+        } => {
+            with(|state| state.social_relay_lists.insert(pubkey.clone(), relay_list));
+            social::forget_name(&pubkey);
+            if let Some(image) = picture {
+                let bytes = glib::Bytes::from_owned(image.rgba);
+                let texture: gdk::Texture = gdk::MemoryTexture::new(
+                    image.width as i32,
+                    image.height as i32,
+                    gdk::MemoryFormat::R8g8b8a8,
+                    &bytes,
+                    image.width as usize * 4,
+                )
+                .upcast();
+                with(|state| state.social_pictures.insert(pubkey.clone(), texture));
+            }
+            refresh_following();
+            if showing_person(&pubkey) {
+                show();
+            }
+        }
+        Response::ChannelAbout { id, about } => {
+            let shown = matches!(current(), Page::Channel { id: shown, .. } if shown == id);
+            if shown {
+                fill_channel_about(&about);
+            }
+            with(|state| state.channel_abouts.insert(id, about));
         }
         Response::Avatar { id, image } => {
             let bytes = glib::Bytes::from_owned(image.rgba);

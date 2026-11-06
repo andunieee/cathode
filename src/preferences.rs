@@ -9,6 +9,7 @@ use crate::fetch::Request;
 use crate::nav;
 use crate::remote;
 use crate::settings::{self, BROWSERS, QUALITIES};
+use crate::social;
 
 const COOKIES_SUBTITLE: &str =
     "Uses the browser's sign-in, for age-restricted videos and sign-in checks";
@@ -23,26 +24,36 @@ thread_local! {
     static COOKIES: RefCell<Option<std::rc::Rc<CookiesRow>>> = const { RefCell::new(None) };
     /// The Restricted Mode page in the settings sidebar.
     static RESTRICTED_ROW: RefCell<Option<gtk::ListBoxRow>> = const { RefCell::new(None) };
+    /// The Social page in the settings sidebar.
+    static SOCIAL_ROW: RefCell<Option<gtk::ListBoxRow>> = const { RefCell::new(None) };
+}
+
+/// Shows or hides a page in the settings sidebar.
+fn show_row(slot: &RefCell<Option<gtk::ListBoxRow>>, show: bool) {
+    let Some(row) = slot.borrow().clone() else {
+        return;
+    };
+    row.set_visible(show);
+    // The page being looked at just went away.
+    if !show
+        && row.is_selected()
+        && let Some(list) = row
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk::ListBox>().ok())
+        && let Some(first) = list.row_at_index(0)
+    {
+        list.select_row(Some(&first));
+    }
 }
 
 /// Shows or hides the Restricted Mode page in the settings sidebar.
 pub fn show_restricted_controls(show: bool) {
-    RESTRICTED_ROW.with(|slot| {
-        let Some(row) = slot.borrow().clone() else {
-            return;
-        };
-        row.set_visible(show);
-        // The page being looked at just went away.
-        if !show
-            && row.is_selected()
-            && let Some(list) = row
-                .parent()
-                .and_then(|parent| parent.downcast::<gtk::ListBox>().ok())
-            && let Some(first) = list.row_at_index(0)
-        {
-            list.select_row(Some(&first));
-        }
-    });
+    RESTRICTED_ROW.with(|slot| show_row(slot, show));
+}
+
+/// Shows or hides the Social page in the settings sidebar.
+pub fn show_social(show: bool) {
+    SOCIAL_ROW.with(|slot| show_row(slot, show));
 }
 
 fn cookies_row() -> Option<std::rc::Rc<CookiesRow>> {
@@ -377,6 +388,12 @@ fn general() -> adw::PreferencesPage {
         current.show_restricted_controls,
         |s, on| s.show_restricted_controls = on,
     ));
+    player_buttons.add(&toggle_row(
+        "Display social recommendations",
+        "The Social page here, and the Recommendations tab of the home page with the videos the people followed on Nostr recommend",
+        current.show_social,
+        |s, on| s.show_social = on,
+    ));
 
     let page = adw::PreferencesPage::new();
     page.add(&languages);
@@ -440,6 +457,79 @@ fn remote_page() -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     page.add(&group);
     page.add(&devices);
+    page
+}
+
+/// The page with who the user is on Nostr.
+fn social_page() -> adw::PreferencesPage {
+    let config = social::config();
+
+    let name = entry_row("Name", "The name you go by", &config.name, |text| {
+        if let Err(error) = social::update(|config| config.name = text) {
+            nav::toast(&format!("Could not save the name: {error}"));
+        }
+    });
+
+    let public_key = adw::ActionRow::builder()
+        .title("Public key")
+        .subtitle(social::public_key())
+        .subtitle_selectable(true)
+        .subtitle_lines(2)
+        .css_classes(["property"])
+        .build();
+    let copy = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Copy")
+        .cursor(&crate::ui::pointer())
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    copy.connect_clicked({
+        let public_key = public_key.clone();
+        move |button| {
+            button
+                .clipboard()
+                .set_text(&public_key.subtitle().unwrap_or_default());
+            nav::toast("Public key copied");
+        }
+    });
+    public_key.add_suffix(&copy);
+
+    // The row has its own button to reveal the key.
+    let secret_key = adw::PasswordEntryRow::builder()
+        .title("Secret key")
+        .text(&config.secret_key)
+        .show_apply_button(true)
+        .tooltip_text(
+            "Generated for you, in hex. Paste another one, in hex or as an nsec, to use it instead",
+        )
+        .build();
+    point_buttons(&secret_key);
+    secret_key.connect_apply({
+        let public_key = public_key.clone();
+        move |row| match social::set_secret_key(&row.text()) {
+            Ok(public) => {
+                row.remove_css_class("error");
+                row.set_text(&social::config().secret_key);
+                public_key.set_subtitle(&public);
+            }
+            Err(error) => {
+                row.add_css_class("error");
+                nav::toast(&format!("Not a valid secret key: {error}"));
+            }
+        }
+    });
+
+    let group = adw::PreferencesGroup::builder()
+        .title("You")
+        .description("Who you are on Nostr, where the recommendations come from")
+        .build();
+    group.add(&name);
+    group.add(&secret_key);
+    group.add(&public_key);
+
+    let page = adw::PreferencesPage::new();
+    page.add(&group);
     page
 }
 
@@ -653,6 +743,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     stack.add_named(&general(), Some("general"));
     stack.add_named(parental, Some("parental"));
     stack.add_named(&remote_page(), Some("remote"));
+    stack.add_named(&social_page(), Some("social"));
     stack.add_named(&about(), Some("about"));
 
     let sidebar = gtk::ListBox::builder()
@@ -663,6 +754,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
         ("general", "General", "preferences-system-symbolic"),
         ("parental", "Restricted Mode", "system-users-symbolic"),
         ("remote", "Remote Control", "phone-symbolic"),
+        ("social", "Social", "system-users-symbolic"),
         ("about", "About", "help-about-symbolic"),
     ] {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -675,8 +767,10 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
             .cursor(&crate::ui::pointer())
             .build();
         row.set_widget_name(name);
-        if name == "parental" {
-            RESTRICTED_ROW.with(|slot| *slot.borrow_mut() = Some(row.clone()));
+        match name {
+            "parental" => RESTRICTED_ROW.with(|slot| *slot.borrow_mut() = Some(row.clone())),
+            "social" => SOCIAL_ROW.with(|slot| *slot.borrow_mut() = Some(row.clone())),
+            _ => {}
         }
         sidebar.append(&row);
     }
@@ -690,6 +784,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     });
     sidebar.select_row(sidebar.row_at_index(0).as_ref());
     show_restricted_controls(settings::get().show_restricted_controls);
+    show_social(settings::get().show_social);
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     root.append(&sidebar);

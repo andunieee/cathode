@@ -173,7 +173,7 @@ impl Widgets {
 
         let sidebar_list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["navigation-sidebar"])
+            .css_classes(["navigation-sidebar", "compact-sidebar"])
             .build();
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
         sidebar.append(&heading);

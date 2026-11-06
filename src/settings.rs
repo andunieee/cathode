@@ -53,6 +53,8 @@ pub struct Settings {
     pub show_chapters_button: bool,
     /// Shows the buttons and pages that set up the restricted mode.
     pub show_restricted_controls: bool,
+    /// Shows the Social settings page and the recommendations of the people followed on Nostr.
+    pub show_social: bool,
     /// Takes the videos played through out of the queue, instead of leaving them dimmed.
     pub remove_played_from_queue: bool,
     /// Shows a frame from around the middle of the videos instead of their chosen thumbnails.
@@ -79,6 +81,7 @@ impl Default for Settings {
             show_speed_button: true,
             show_chapters_button: false,
             show_restricted_controls: true,
+            show_social: false,
             remove_played_from_queue: true,
             middle_thumbnails: true,
             hide_shorts: false,

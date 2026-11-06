@@ -9,6 +9,7 @@ mod controls;
 mod desktop;
 mod extension;
 mod fetch;
+mod filter;
 mod format;
 mod history;
 mod instance;
@@ -23,6 +24,7 @@ mod remote;
 mod remote_app;
 mod settings;
 mod shortcuts;
+mod social;
 mod state;
 mod subscriptions;
 mod suggestions;
@@ -275,6 +277,13 @@ fn load_css() {
          label.shortcut-action { color: alpha(white, 0.92); }
          scale.seek-bar slider { min-width: 12px; min-height: 12px; margin: -4px; }
          row.queue-playing .title { font-weight: bold; }
+         label.recommendation-labels { font-size: smaller; }
+         label.recommenders { font-size: smaller; padding: 0 8px; border-radius: 999px;
+           background: alpha(@accent_bg_color, 0.15); }
+         list.compact-sidebar > row { margin-bottom: 0; }
+         list.compact-sidebar > row > box.header { min-height: 36px; }
+         list.compact-sidebar > row > box.header > box.title { margin-top: 2px; margin-bottom: 2px;
+           border-spacing: 0; }
          label.player-message { color: white; font-weight: bold; font-size: 1.4em;
            text-shadow: -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black, 1px 1px 0 black,
              0 -1px 0 black, 0 1px 0 black, -1px 0 0 black, 1px 0 0 black; }",

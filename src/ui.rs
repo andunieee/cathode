@@ -14,6 +14,7 @@ use crate::nav;
 use crate::player::Player;
 use crate::preferences;
 use crate::profile;
+use crate::social;
 use crate::state::CaptionMode;
 
 /// Playback speeds on offer, 1.0 being the first selected.
@@ -45,6 +46,10 @@ pub struct Ui {
     pub subs_toggle: gtk::ToggleButton,
     pub queue_toggle: gtk::ToggleButton,
     pub subscriptions_list: gtk::ListBox,
+    /// The section of the sidebar with the people followed, shown with the social recommendations
+    /// only.
+    pub following: gtk::Box,
+    pub following_list: gtk::ListBox,
     /// Turns the restricted mode on or off.
     pub controls_button: gtk::Button,
     pub settings_button: gtk::Button,
@@ -60,7 +65,7 @@ pub struct Ui {
     pub channel_header: gtk::Box,
     pub channel_title: gtk::Label,
     pub channel_avatar: adw::Avatar,
-    /// The YouTube link of the channel or playlist shown, and its row.
+    /// The link of the channel, playlist or person shown, and its row, in `page_details`.
     pub channel_link: LinkRow,
     pub channel_entry: gtk::SearchEntry,
     pub allow_channel: gtk::Button,
@@ -69,6 +74,15 @@ pub struct Ui {
     /// The channels a search found, above its videos.
     pub channel_results: gtk::Box,
     pub channel_results_row: gtk::ScrolledWindow,
+    /// What the channel or person shown says about themselves, under the header.
+    pub page_about: gtk::Label,
+    /// The link and the rest of what is known about the channel or person shown, folded away,
+    /// and the arrow by the title that unfolds them.
+    pub page_details: gtk::Revealer,
+    pub page_details_toggle: gtk::ToggleButton,
+    pub page_facts: gtk::Box,
+    /// Narrows down the videos listed, the ones in `store`.
+    pub results_filter: Rc<crate::filter::Filter>,
     pub store: gio::ListStore,
 
     pub video_picture: gtk::Picture,
@@ -103,10 +117,16 @@ pub struct Ui {
     pub feed_store: gio::ListStore,
     pub feed_status: gtk::Label,
     pub feed_refresh: gtk::Button,
-    /// The tabs of the home page: "latest" and "suggestions".
+    /// The tabs of the home page: "latest", "suggestions" and "recommendations".
     pub feed_tabs: gtk::Stack,
+    pub feed_switcher: gtk::StackSwitcher,
     /// The videos suggested next to the ones in the history, on the home page.
     pub suggestions_store: gio::ListStore,
+    /// The videos the people followed recommend, on the home page.
+    pub recommendations_store: gio::ListStore,
+    pub recommendations_scroll: gtk::ScrolledWindow,
+    /// What the recommendations shown are narrowed down by.
+    pub recommendation_filters: RecommendationFilters,
 
     pub history_scroll: gtk::ScrolledWindow,
     /// The history page is one list per day, the one most recently added to is kept here.
@@ -336,6 +356,68 @@ pub fn get() -> Rc<Ui> {
     UI.with(|ui| ui.borrow().clone().expect("The UI is not built yet"))
 }
 
+/// The menus over the recommendations.
+pub struct RecommendationFilters {
+    /// The first item of these two is all of them, then come the ones the videos have.
+    pub category: gtk::DropDown,
+    pub hashtag: gtk::DropDown,
+    /// These two are in the order of `social::Length::ALL` and `social::Order::ALL`.
+    pub length: gtk::DropDown,
+    pub order: gtk::DropDown,
+    /// Takes the menus back to showing everything.
+    pub clear: gtk::Button,
+}
+
+impl RecommendationFilters {
+    fn new() -> Self {
+        // A list of labels to pick from, which can be searched by typing.
+        let labels = |all: &str| {
+            let dropdown = gtk::DropDown::builder()
+                .model(&gtk::StringList::new(&[all]))
+                .expression(gtk::PropertyExpression::new(
+                    gtk::StringObject::static_type(),
+                    None::<&gtk::Expression>,
+                    "string",
+                ))
+                .enable_search(true)
+                .cursor(&pointer())
+                .build();
+            dropdown.connect_selected_notify(|_| nav::recommendation_filters_changed());
+            dropdown
+        };
+        let options = |names: Vec<&str>| {
+            let dropdown = gtk::DropDown::from_strings(&names);
+            dropdown.set_cursor(Some(&pointer()));
+            dropdown.connect_selected_notify(|_| nav::recommendation_filters_changed());
+            dropdown
+        };
+        let clear = icon_button("edit-clear-symbolic", "Show all the recommendations");
+        clear.add_css_class("flat");
+        clear.set_visible(false);
+        clear.connect_clicked(|_| nav::clear_recommendation_filters());
+        Self {
+            category: labels("All categories"),
+            hashtag: labels("All hashtags"),
+            length: options(social::Length::ALL.iter().map(|(_, name)| *name).collect()),
+            order: options(social::Order::ALL.iter().map(|(_, name)| *name).collect()),
+            clear,
+        }
+    }
+
+    fn bar(&self) -> gtk::Box {
+        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        bar.set_margin_start(12);
+        bar.set_margin_end(12);
+        bar.set_margin_bottom(6);
+        bar.append(&self.category);
+        bar.append(&self.hashtag);
+        bar.append(&self.length);
+        bar.append(&self.order);
+        bar.append(&self.clear);
+        bar
+    }
+}
+
 /// What the widgets of one row of a result list need to be bound to an entry.
 struct Card {
     root: gtk::Box,
@@ -343,12 +425,16 @@ struct Card {
     title: gtk::Label,
     channel: gtk::LinkButton,
     details: gtk::Label,
+    /// Who recommends a recommendation, links to their pages, and its categories and hashtags,
+    /// links that narrow the recommendations down to it.
+    labels: Option<(gtk::Label, gtk::Label)>,
     entry: Rc<RefCell<Option<Entry>>>,
 }
 
 impl Card {
-    /// With `dismissable`, the card has a button to take the video out of the suggestions.
-    fn new(dismissable: bool) -> Self {
+    /// With `dismissable`, the card has a button to take the video out of the suggestions. With
+    /// `labelled`, it shows the categories and hashtags of the recommendation.
+    fn new(dismissable: bool, labelled: bool) -> Self {
         let entry: Rc<RefCell<Option<Entry>>> = Rc::default();
 
         let picture = gtk::Picture::builder()
@@ -393,11 +479,45 @@ impl Card {
         line.append(&channel);
         line.append(&details);
 
+        let labels = labelled.then(|| {
+            // Who recommends the video, set apart from its labels.
+            let recommenders = gtk::Label::builder()
+                .xalign(0.0)
+                .css_classes(["recommenders"])
+                .build();
+            recommenders.connect_activate_link(|_, uri| {
+                if let Some(pubkey) = uri.strip_prefix("person:") {
+                    nav::open_person(pubkey);
+                }
+                glib::Propagation::Stop
+            });
+            let labels = gtk::Label::builder()
+                .xalign(0.0)
+                .ellipsize(pango::EllipsizeMode::End)
+                .css_classes(["recommendation-labels"])
+                .build();
+            labels.connect_activate_link(|_, uri| {
+                if let Some(category) = uri.strip_prefix("category:") {
+                    nav::pick_recommendation_label(category, false);
+                } else if let Some(hashtag) = uri.strip_prefix("hashtag:") {
+                    nav::pick_recommendation_label(hashtag, true);
+                }
+                glib::Propagation::Stop
+            });
+            (recommenders, labels)
+        });
+
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         text.set_hexpand(true);
         text.set_valign(gtk::Align::Center);
         text.append(&title);
         text.append(&line);
+        if let Some((recommenders, labels)) = &labels {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.append(recommenders);
+            line.append(labels);
+            text.append(&line);
+        }
 
         let queue = gtk::Button::builder()
             .cursor(&crate::ui::pointer())
@@ -506,11 +626,56 @@ impl Card {
             title,
             channel,
             details,
+            labels,
             entry,
         }
     }
 
     fn bind(&self, entry: &Entry) {
+        if let Some((recommenders, labels)) = &self.labels {
+            let (hashtags, categories, by) = social::labels_of(&entry.id).unwrap_or_default();
+            let link = |kind: &str, value: &str, text: &str, title: &str| {
+                let escape = |text: &str| glib::markup_escape_text(text).to_string();
+                format!(
+                    "<a href=\"{kind}:{}\" title=\"{title}\">{}</a>",
+                    escape(value),
+                    escape(text)
+                )
+            };
+            // A few names, then how many more.
+            const NAMED: usize = 3;
+            let mut people: Vec<String> = by
+                .iter()
+                .take(NAMED)
+                .map(|pubkey| {
+                    link(
+                        "person",
+                        &pubkey.to_hex(),
+                        &social::name_of(*pubkey),
+                        "See what they recommend",
+                    )
+                })
+                .collect();
+            if by.len() > NAMED {
+                people.push(format!("+{}", by.len() - NAMED));
+            }
+            recommenders.set_markup(&people.join(", "));
+            recommenders.set_visible(!people.is_empty());
+            let links: Vec<String> = categories
+                .iter()
+                .map(|category| link("category", category, category, "Show only this category"))
+                .chain(hashtags.iter().map(|hashtag| {
+                    link(
+                        "hashtag",
+                        hashtag,
+                        &format!("#{hashtag}"),
+                        "Show only this hashtag",
+                    )
+                }))
+                .collect();
+            labels.set_markup(&links.join("  "));
+            labels.set_visible(!links.is_empty());
+        }
         self.title.set_text(&entry.title);
         self.channel.set_label(&entry.channel);
         self.channel.set_visible(!entry.channel.is_empty());
@@ -679,11 +844,11 @@ fn fill_menu(menu: &gtk::Box, popover: &gtk::Popover, entry: &Entry) {
     }
 }
 
-fn results_view(store: &gio::ListStore, dismissable: bool) -> gtk::ListView {
+fn results_view(store: &gio::ListStore, dismissable: bool, labelled: bool) -> gtk::ListView {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_, item| {
         let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-        let card = Card::new(dismissable);
+        let card = Card::new(dismissable, labelled);
         item.set_child(Some(&card.root));
         // SAFETY: only ever read back as a `Card` below.
         unsafe { item.set_data("card", card) };
@@ -889,7 +1054,21 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     channel_header.set_margin_end(12);
     let channel_avatar = adw::Avatar::new(40, None, true);
     channel_header.append(&channel_avatar);
-    channel_header.append(&channel_title);
+    let page_details_toggle = gtk::ToggleButton::builder()
+        .cursor(&crate::ui::pointer())
+        .icon_name("pan-end-symbolic")
+        .tooltip_text("Details")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat", "circular"])
+        .visible(false)
+        .build();
+    // The arrow sits right after the title, the rest of the header goes to the end.
+    channel_title.set_hexpand(false);
+    let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    title_row.set_hexpand(true);
+    title_row.append(&channel_title);
+    title_row.append(&page_details_toggle);
+    channel_header.append(&title_row);
     channel_header.append(&channel_entry);
     let allow_channel = gtk::Button::builder()
         .cursor(&crate::ui::pointer())
@@ -931,18 +1110,53 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .visible(false)
         .child(&channel_results)
         .build();
-    let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let page_about = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .wrap_mode(pango::WrapMode::WordChar)
+        .selectable(true)
+        .focusable(false)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_bottom(6)
+        .visible(false)
+        .build();
     let channel_link = LinkRow::new();
-    channel_link.row.set_margin_start(12);
-    channel_link.row.set_margin_end(12);
+    let page_facts = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let details_content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    details_content.set_margin_start(12);
+    details_content.set_margin_end(12);
+    details_content.set_margin_bottom(6);
+    details_content.append(&channel_link.row);
+    details_content.append(&page_facts);
+    let page_details = gtk::Revealer::builder()
+        .child(&details_content)
+        .visible(false)
+        .build();
+    page_details_toggle.connect_toggled({
+        let page_details = page_details.clone();
+        move |toggle| {
+            let open = toggle.is_active();
+            page_details.set_reveal_child(open);
+            toggle.set_icon_name(if open {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
+        }
+    });
+    let results_filter = crate::filter::Filter::new(nav::results_filter_changed);
+    let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
     results.append(&channel_header);
-    results.append(&channel_link.row);
+    results.append(&page_details);
+    results.append(&page_about);
     results.append(&channel_results_row);
+    results.append(&results_filter.bar);
     results.append(&results_status);
     results.append(
         &gtk::ScrolledWindow::builder()
             .vexpand(true)
-            .child(&results_view(&store, false))
+            .child(&results_view(&store, false, false))
             .build(),
     );
 
@@ -1133,7 +1347,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     feed_tabs.add_titled(
         &gtk::ScrolledWindow::builder()
             .vexpand(true)
-            .child(&results_view(&feed_store, false))
+            .child(&results_view(&feed_store, false, false))
             .build(),
         Some("latest"),
         "Subscriptions Feed",
@@ -1141,11 +1355,24 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     feed_tabs.add_titled(
         &gtk::ScrolledWindow::builder()
             .vexpand(true)
-            .child(&results_view(&suggestions_store, true))
+            .child(&results_view(&suggestions_store, true, false))
             .build(),
         Some("suggestions"),
         "Suggestions",
     );
+    // Shown with the social recommendations only.
+    let recommendations_store = gio::ListStore::new::<glib::BoxedAnyObject>();
+    let recommendations_scroll = gtk::ScrolledWindow::builder()
+        .vexpand(true)
+        .child(&results_view(&recommendations_store, false, true))
+        .build();
+    let recommendation_filters = RecommendationFilters::new();
+    let recommendations = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    recommendations.append(&recommendation_filters.bar());
+    recommendations.append(&recommendations_scroll);
+    feed_tabs
+        .add_titled(&recommendations, Some("recommendations"), "Recommendations")
+        .set_visible(false);
     feed_tabs.connect_visible_child_name_notify(|_| nav::feed_tab_changed());
     let feed_switcher = gtk::StackSwitcher::builder()
         .cursor(&crate::ui::pointer())
@@ -1710,7 +1937,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     ));
     let subscriptions_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["navigation-sidebar"])
+        .css_classes(["navigation-sidebar", "compact-sidebar"])
         .build();
     let subs_heading = gtk::Label::builder()
         .label("Subscriptions")
@@ -1719,10 +1946,27 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .margin_start(12)
         .css_classes(["heading"])
         .build();
+    let following_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar", "compact-sidebar"])
+        .build();
+    let following = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    following.set_visible(false);
+    following.append(
+        &gtk::Label::builder()
+            .label("Recommenders")
+            .xalign(0.0)
+            .margin_top(12)
+            .margin_start(12)
+            .css_classes(["heading"])
+            .build(),
+    );
+    following.append(&following_list);
     let sidebar_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     sidebar_content.append(&subs_heading);
     sidebar_content.append(&subscriptions_list);
     sidebar_content.append(&library.sidebar);
+    sidebar_content.append(&following);
     let subs_bar = adw::ToolbarView::new();
     subs_bar.add_top_bar(&subs_header);
     subs_bar.set_content(Some(
@@ -1893,6 +2137,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         subs_toggle,
         queue_toggle,
         subscriptions_list,
+        following,
+        following_list,
         title_stack,
         controls_button,
         settings_button,
@@ -1911,6 +2157,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         results_status,
         channel_results,
         channel_results_row,
+        page_about,
+        page_details,
+        page_details_toggle,
+        page_facts,
+        results_filter,
         store,
         video_picture,
         video_title,
@@ -1938,7 +2189,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         feed_status,
         feed_refresh,
         feed_tabs,
+        feed_switcher,
         suggestions_store,
+        recommendations_store,
+        recommendations_scroll,
+        recommendation_filters,
         history_scroll,
         history_box,
         history_current: RefCell::new(None),

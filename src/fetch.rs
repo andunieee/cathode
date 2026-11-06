@@ -180,6 +180,21 @@ pub struct VideoInfo {
     pub chapters: Vec<Chapter>,
 }
 
+/// What a channel says about itself, beyond its name and picture.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelAbout {
+    pub name: Option<String>,
+    pub description: String,
+    /// The handle, like `@Fireship`.
+    pub handle: Option<String>,
+    pub subscribers: Option<u64>,
+    pub verified: bool,
+    pub tags: Vec<String>,
+    /// The address of the picture, at its original size.
+    pub avatar_url: Option<String>,
+}
+
 /// A titled stretch of a video, as its uploader marked it.
 #[derive(Debug, Clone)]
 pub struct Chapter {
@@ -289,6 +304,10 @@ pub enum Request {
     Avatar {
         id: String,
     },
+    /// What the channel says about itself.
+    ChannelAbout {
+        id: String,
+    },
     /// Looks up what a link typed in by the user points to.
     Resolve {
         input: Input,
@@ -313,6 +332,16 @@ pub enum Request {
     CheckCookies {
         browser: String,
     },
+    /// Downloads the recommendations of a person followed, from `since` on, from the relays they
+    /// write to.
+    SocialSync {
+        pubkey: String,
+        since: u32,
+    },
+    /// Downloads the name and the picture of a person followed.
+    SocialProfile {
+        pubkey: String,
+    },
 }
 
 impl Request {
@@ -329,11 +358,16 @@ impl Request {
             Request::Cancel { id } => format!("cancel the download of {id}"),
             Request::Thumbnail { id, large } => format!("thumbnail of {id}, large: {large}"),
             Request::Avatar { id } => format!("avatar of {id}"),
+            Request::ChannelAbout { id } => format!("about of {id}"),
             Request::Resolve { .. } => "resolve a link".to_string(),
             Request::Latest { channel_id, .. } => format!("latest videos of {channel_id}"),
             Request::Suggest { id } => format!("suggestions after {id}"),
             Request::Segments { id } => format!("sponsor segments of {id}"),
             Request::CheckCookies { browser } => format!("check the cookies of {browser}"),
+            Request::SocialSync { pubkey, since, .. } => {
+                format!("recommendations of {pubkey} since {since}")
+            }
+            Request::SocialProfile { pubkey } => format!("profile of {pubkey}"),
         }
     }
 }
@@ -346,6 +380,7 @@ impl Response {
             Response::Channels { key, channels } => {
                 format!("{} channels for {key}", channels.len())
             }
+            Response::ChannelAbout { id, .. } => format!("about of {id} arrived"),
             Response::ListingDone { key, error } => format!("listing {key} done, error: {error:?}"),
             Response::Info { key, result } => match result {
                 Ok(_) => format!("info {key} arrived"),
@@ -355,6 +390,17 @@ impl Response {
                 Ok(path) => format!("downloaded {id} at {height:?} to {}", path.display()),
                 Err(error) => format!("download of {id} failed: {error}"),
             },
+            Response::SocialSynced { pubkey, result } => {
+                format!("recommendations of {pubkey} synced: {result:?}")
+            }
+            Response::SocialProfile {
+                pubkey,
+                picture,
+                relay_list,
+            } => format!(
+                "profile of {pubkey}, with a picture: {}, with a relay list: {relay_list}",
+                picture.is_some()
+            ),
             Response::Captions {
                 id,
                 mode,
@@ -417,6 +463,10 @@ pub enum Response {
         id: String,
         image: Thumbnail,
     },
+    ChannelAbout {
+        id: String,
+        about: ChannelAbout,
+    },
     Latest {
         channel_id: String,
         result: Result<Vec<Entry>, String>,
@@ -439,6 +489,17 @@ pub enum Response {
     CookiesChecked {
         browser: String,
         result: Result<(), String>,
+    },
+    SocialSynced {
+        pubkey: String,
+        result: Result<crate::social::Synced, String>,
+    },
+    /// The metadata and the relay list of the person are in the database, as far as they were
+    /// found, with their picture if they have one.
+    SocialProfile {
+        pubkey: String,
+        picture: Option<Thumbnail>,
+        relay_list: bool,
     },
     /// Progress of the startup check of the external tools.
     Setup(crate::tools::Status),
@@ -481,6 +542,8 @@ async fn run(
     // A queue of videos asks for the details of all of them at once.
     let info_slots = Arc::new(Semaphore::new(INFO_PARALLEL));
     let downloads: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Default::default();
+    // The relay connections are shared by the syncs of all the people followed.
+    let network = ritualistic::Network::new();
 
     // Without the tools there is nothing to run, so the first start waits for them. Later ones
     // only update in the background.
@@ -603,6 +666,45 @@ async fn run(
                     });
                 });
             }
+            Request::SocialSync { pubkey, since } => {
+                let network = network.clone();
+                tokio::spawn(async move {
+                    on_response(Response::SocialSynced {
+                        result: crate::social::sync(&network, &pubkey, since).await,
+                        pubkey,
+                    });
+                });
+            }
+            Request::SocialProfile { pubkey } => {
+                let network = network.clone();
+                let slots = avatar_slots.clone();
+                tokio::spawn(async move {
+                    let found = match crate::social::fetch_profile(&network, &pubkey).await {
+                        Ok(found) => found,
+                        Err(error) => {
+                            crate::log::info!("no profile for {pubkey}: {error}");
+                            return;
+                        }
+                    };
+                    let picture = match found.picture {
+                        Some(url) => {
+                            let _slot = slots.acquire().await;
+                            picture(&url)
+                                .await
+                                .inspect_err(|error| {
+                                    crate::log::info!("no picture for {pubkey}: {error}")
+                                })
+                                .ok()
+                        }
+                        None => None,
+                    };
+                    on_response(Response::SocialProfile {
+                        pubkey,
+                        picture,
+                        relay_list: found.relay_list,
+                    });
+                });
+            }
             Request::Segments { id } => {
                 tokio::spawn(async move {
                     // Not worth bothering the user when SponsorBlock is out of reach.
@@ -617,6 +719,14 @@ async fn run(
                     match avatar(&id).await {
                         Ok(image) => on_response(Response::Avatar { id, image }),
                         Err(error) => crate::log::info!("no avatar for {id}: {error}"),
+                    }
+                });
+            }
+            Request::ChannelAbout { id } => {
+                tokio::spawn(async move {
+                    match channel_about(&id).await {
+                        Ok(about) => on_response(Response::ChannelAbout { id, about }),
+                        Err(error) => crate::log::info!("nothing about {id}: {error}"),
                     }
                 });
             }
@@ -1714,14 +1824,9 @@ async fn avatar(id: &str) -> Result<Thumbnail, String> {
     let bytes = match std::fs::read(&file) {
         Ok(bytes) => bytes,
         Err(_) => {
-            let head = listing_head(&channel_videos_url(id)).await?;
-            let url = head["thumbnails"]
-                .as_array()
-                .and_then(|list| {
-                    list.iter()
-                        .find(|t| t["id"] == "avatar_uncropped")
-                        .and_then(|t| t["url"].as_str())
-                })
+            let url = channel_about(id)
+                .await?
+                .avatar_url
                 .ok_or("The channel has no avatar")?;
             // The address ends with the size asked for, 0 being the original.
             let url = match url.rsplit_once("=s0") {
@@ -1741,6 +1846,107 @@ async fn avatar(id: &str) -> Result<Thumbnail, String> {
             }
             let _ = std::fs::write(&file, &bytes);
             bytes
+        }
+    };
+
+    let image = image::load_from_memory(&bytes)
+        .map_err(|e| e.to_string())?
+        .into_rgba8();
+    Ok(Thumbnail {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    })
+}
+
+/// How long what a channel says about itself is kept before being looked up again.
+const ABOUT_DAYS: u64 = 7;
+
+/// What the channel says about itself, from the disk if it was looked up lately.
+async fn channel_about(id: &str) -> Result<ChannelAbout, String> {
+    if id.starts_with(RUMBLE_PREFIX) {
+        return Err("Rumble channels are not looked up here".to_string());
+    }
+    let file = cache_dir()
+        .join("channels")
+        .join(format!("{}.json", bare_id(id)));
+    let fresh = std::fs::metadata(&file)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < Duration::from_secs(ABOUT_DAYS * 24 * 60 * 60));
+    if fresh
+        && let Some(about) = std::fs::read(&file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    {
+        return Ok(about);
+    }
+
+    let head = listing_head(&channel_videos_url(id)).await?;
+    let about = ChannelAbout {
+        name: string(&head, "channel").or_else(|| string(&head, "uploader")),
+        description: string(&head, "description").unwrap_or_default(),
+        handle: string(&head, "uploader_id").filter(|handle| handle.starts_with('@')),
+        subscribers: head["channel_follower_count"].as_u64(),
+        verified: head["channel_is_verified"].as_bool().unwrap_or(false),
+        tags: head["tags"]
+            .as_array()
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(|tag| tag.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        avatar_url: head["thumbnails"].as_array().and_then(|list| {
+            list.iter()
+                .find(|t| t["id"] == "avatar_uncropped")
+                .and_then(|t| t["url"].as_str())
+                .map(str::to_string)
+        }),
+    };
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(bytes) = serde_json::to_vec(&about) {
+        let _ = std::fs::write(&file, bytes);
+    }
+    Ok(about)
+}
+
+/// A picture found at `url`, from the disk if it was downloaded before, made small enough for an
+/// avatar.
+async fn picture(url: &str) -> Result<Thumbnail, String> {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    let file = cache_dir()
+        .join("pictures")
+        .join(format!("{:016x}", hasher.finish()));
+    let bytes = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let bytes = reqwest::get(url)
+                .await
+                .and_then(|response| response.error_for_status())
+                .map_err(|e| e.to_string())?
+                .bytes()
+                .await
+                .map_err(|e| e.to_string())?;
+            // Some are huge, only the small version is kept.
+            let image = image::load_from_memory(&bytes)
+                .map_err(|e| e.to_string())?
+                .thumbnail(AVATAR_SIZE, AVATAR_SIZE);
+            let mut png = std::io::Cursor::new(Vec::new());
+            image
+                .write_to(&mut png, image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            if let Some(dir) = file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&file, png.get_ref());
+            png.into_inner()
         }
     };
 
