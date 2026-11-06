@@ -82,7 +82,6 @@ impl Widgets {
         let open = adw::StatusPage::builder()
             .icon_name("system-search-symbolic")
             .title("Search YouTube")
-            .description("Type in the search bar to look for videos")
             .build();
 
         // Home, profile on
@@ -165,7 +164,6 @@ impl Widgets {
         });
         let listings = adw::PreferencesGroup::builder()
             .title("Channel listings")
-            .description("What channel pages show while the restricted mode is on")
             .build();
         listings.add(&hide_shorts);
 
@@ -193,7 +191,6 @@ impl Widgets {
         password_row.add_suffix(&password_remove);
         let password = adw::PreferencesGroup::builder()
             .title("Password")
-            .description("Asked for to turn the restricted mode on or off")
             .build();
         password.add(&password_row);
 

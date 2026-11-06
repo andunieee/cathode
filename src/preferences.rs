@@ -11,9 +11,6 @@ use crate::remote;
 use crate::settings::{self, BROWSERS, QUALITIES};
 use crate::social;
 
-const COOKIES_SUBTITLE: &str =
-    "Uses the browser's sign-in, for age-restricted videos and sign-in checks";
-
 struct CookiesRow {
     row: adw::ComboRow,
     /// Set while the row is changed by code, so its signal can be ignored.
@@ -86,7 +83,6 @@ pub fn cookies_checked(browser: &str, result: Result<(), String>) {
     row.set_sensitive(true);
     match result {
         Ok(()) => {
-            row.set_subtitle(COOKIES_SUBTITLE);
             row.remove_css_class("error");
             save(|s| s.cookies_from_browser = Some(browser.to_string()));
         }
@@ -179,8 +175,7 @@ fn general() -> adw::PreferencesPage {
     });
 
     let sponsors = adw::SwitchRow::builder()
-        .title("Skip sponsor segments")
-        .subtitle("Jumps over the sponsored parts while playing (SponsorBlock)")
+        .title("Skip sponsor segments (SponsorBlock)")
         .cursor(&crate::ui::pointer())
         .active(current.skip_sponsors)
         .build();
@@ -191,7 +186,6 @@ fn general() -> adw::PreferencesPage {
 
     let remove_played = adw::SwitchRow::builder()
         .title("Remove played videos from the queue")
-        .subtitle("Once mostly played, otherwise they stay in it dimmed")
         .cursor(&crate::ui::pointer())
         .active(current.remove_played_from_queue)
         .build();
@@ -220,15 +214,11 @@ fn general() -> adw::PreferencesPage {
     );
     let languages = adw::PreferencesGroup::builder()
         .title("Language")
-        .description("The language of the titles in lists and of the subtitles to download")
         .build();
     languages.add(&language);
 
     let middle_thumbnails = adw::SwitchRow::builder()
-        .title("Thumbnails from the videos")
-        .subtitle(
-            "Shows a frame from around the middle of each video instead of the chosen thumbnail",
-        )
+        .title("Natural thumbnails extracted from the videos")
         .cursor(&crate::ui::pointer())
         .active(current.middle_thumbnails)
         .build();
@@ -244,7 +234,6 @@ fn general() -> adw::PreferencesPage {
 
     let hide_shorts = adw::SwitchRow::builder()
         .title("Hide Shorts")
-        .subtitle("Leaves Shorts out of channel listings")
         .cursor(&crate::ui::pointer())
         .active(current.hide_shorts)
         .build();
@@ -273,7 +262,6 @@ fn general() -> adw::PreferencesPage {
     browsers.extend(BROWSERS);
     let cookies = adw::ComboRow::builder()
         .title("Cookies from browser")
-        .subtitle(COOKIES_SUBTITLE)
         .cursor(&crate::ui::pointer())
         .model(&gtk::StringList::new(&browsers))
         .selected(saved_position())
@@ -299,7 +287,6 @@ fn general() -> adw::PreferencesPage {
                 });
             }
             None => {
-                row.set_subtitle(COOKIES_SUBTITLE);
                 save(|s| s.cookies_from_browser = None);
             }
         }
@@ -314,7 +301,6 @@ fn general() -> adw::PreferencesPage {
 
     let network = adw::PreferencesGroup::builder()
         .title("Network and account")
-        .description("Used for everything yt-dlp does, searching included")
         .build();
     network.add(&cookies);
     network.add(&proxy);
@@ -342,7 +328,6 @@ fn general() -> adw::PreferencesPage {
     });
     let browser_row = adw::ActionRow::builder()
         .title("Chrome extension")
-        .subtitle("Alt+C, the toolbar button or the right-click menu on YouTube opens the page in Cathode")
         .build();
     browser_row.add_suffix(&browser_button);
     let browser = adw::PreferencesGroup::builder().title("Browser").build();
@@ -350,7 +335,6 @@ fn general() -> adw::PreferencesPage {
 
     let player_buttons = adw::PreferencesGroup::builder()
         .title("Player controls")
-        .description("Which buttons the player shows")
         .build();
     player_buttons.add(&toggle_row(
         "Fullscreen button",
@@ -390,7 +374,7 @@ fn general() -> adw::PreferencesPage {
     ));
     player_buttons.add(&toggle_row(
         "Display social recommendations",
-        "The Social page here, and the Recommendations tab of the home page with the videos the people followed on Nostr recommend",
+        "The Social settings page here, and the Recommendations tab on the home page",
         current.show_social,
         |s, on| s.show_social = on,
     ));
@@ -411,7 +395,6 @@ fn general() -> adw::PreferencesPage {
 fn remote_page() -> adw::PreferencesPage {
     let switch = adw::SwitchRow::builder()
         .title("Phone remote")
-        .subtitle("Play, pause, search and manage the queue from a phone with a hyperb browser")
         .cursor(&crate::ui::pointer())
         .active(remote::enabled())
         .build();
@@ -431,7 +414,6 @@ fn remote_page() -> adw::PreferencesPage {
     });
     let pair = adw::ActionRow::builder()
         .title("Pair a phone")
-        .subtitle("Scan the code with the camera of the phone, then open the link in hyperb")
         .build();
     pair.add_suffix(&pair_button);
 
@@ -441,7 +423,6 @@ fn remote_page() -> adw::PreferencesPage {
 
     let devices = adw::PreferencesGroup::builder()
         .title("Paired phones")
-        .description("Each phone is known by its own key. Unpairing one locks out only that phone.")
         .build();
     let rows = std::rc::Rc::new(RefCell::new(Vec::new()));
     fill_devices(&devices, &rows);
@@ -522,7 +503,6 @@ fn social_page() -> adw::PreferencesPage {
 
     let group = adw::PreferencesGroup::builder()
         .title("You")
-        .description("Who you are on Nostr, where the recommendations come from")
         .build();
     group.add(&name);
     group.add(&secret_key);
