@@ -265,19 +265,16 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
     let inside = |check: &dyn Fn(&gtk::Widget) -> bool| {
         std::iter::successors(focus.clone(), |widget| widget.parent()).any(|widget| check(&widget))
     };
-    // Typing, and the widgets that use the arrows themselves.
+    // Typing, and the menus that use the arrows themselves. Lists and the seek bar don't count:
+    // the keys of the player, like in mpv, win while a video is loaded.
     if focus
         .as_ref()
         .is_some_and(|widget| widget.is::<gtk::Editable>())
     {
         return false;
     }
-    let arrows_taken = inside(&|widget| {
-        widget.is::<gtk::Scale>()
-            || widget.is::<gtk::ListBox>()
-            || widget.is::<gtk::DropDown>()
-            || widget.is::<gtk::Popover>()
-    });
+    let arrows_taken =
+        inside(&|widget| widget.is::<gtk::DropDown>() || widget.is::<gtk::Popover>());
 
     // The spacebar pauses wherever the focus is, the focused widget can be pressed with enter.
     match key {
