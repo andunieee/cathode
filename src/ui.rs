@@ -125,8 +125,10 @@ pub struct Ui {
     /// The videos the people followed recommend, on the home page.
     pub recommendations_store: gio::ListStore,
     pub recommendations_scroll: gtk::ScrolledWindow,
-    /// What the recommendations shown are narrowed down by.
-    pub recommendation_filters: RecommendationFilters,
+    /// What the recommendations shown are narrowed down by, its first menu their categories:
+    /// all of them first, then the ones the videos have.
+    pub recommendation_filter: Rc<crate::filter::Filter>,
+    pub recommendation_category: gtk::DropDown,
 
     pub history_scroll: gtk::ScrolledWindow,
     /// The history page is one list per day, the one most recently added to is kept here.
@@ -354,68 +356,6 @@ impl LinkRow {
 
 pub fn get() -> Rc<Ui> {
     UI.with(|ui| ui.borrow().clone().expect("The UI is not built yet"))
-}
-
-/// The menus over the recommendations.
-pub struct RecommendationFilters {
-    /// The first item of these two is all of them, then come the ones the videos have.
-    pub category: gtk::DropDown,
-    pub hashtag: gtk::DropDown,
-    /// These two are in the order of `social::Length::ALL` and `social::Order::ALL`.
-    pub length: gtk::DropDown,
-    pub order: gtk::DropDown,
-    /// Takes the menus back to showing everything.
-    pub clear: gtk::Button,
-}
-
-impl RecommendationFilters {
-    fn new() -> Self {
-        // A list of labels to pick from, which can be searched by typing.
-        let labels = |all: &str| {
-            let dropdown = gtk::DropDown::builder()
-                .model(&gtk::StringList::new(&[all]))
-                .expression(gtk::PropertyExpression::new(
-                    gtk::StringObject::static_type(),
-                    None::<&gtk::Expression>,
-                    "string",
-                ))
-                .enable_search(true)
-                .cursor(&pointer())
-                .build();
-            dropdown.connect_selected_notify(|_| nav::recommendation_filters_changed());
-            dropdown
-        };
-        let options = |names: Vec<&str>| {
-            let dropdown = gtk::DropDown::from_strings(&names);
-            dropdown.set_cursor(Some(&pointer()));
-            dropdown.connect_selected_notify(|_| nav::recommendation_filters_changed());
-            dropdown
-        };
-        let clear = icon_button("edit-clear-symbolic", "Show all the recommendations");
-        clear.add_css_class("flat");
-        clear.set_visible(false);
-        clear.connect_clicked(|_| nav::clear_recommendation_filters());
-        Self {
-            category: labels("All categories"),
-            hashtag: labels("All hashtags"),
-            length: options(social::Length::ALL.iter().map(|(_, name)| *name).collect()),
-            order: options(social::Order::ALL.iter().map(|(_, name)| *name).collect()),
-            clear,
-        }
-    }
-
-    fn bar(&self) -> gtk::Box {
-        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        bar.set_margin_start(12);
-        bar.set_margin_end(12);
-        bar.set_margin_bottom(6);
-        bar.append(&self.category);
-        bar.append(&self.hashtag);
-        bar.append(&self.length);
-        bar.append(&self.order);
-        bar.append(&self.clear);
-        bar
-    }
 }
 
 /// What the widgets of one row of a result list need to be bound to an entry.
@@ -669,7 +609,7 @@ impl Card {
                         "hashtag",
                         hashtag,
                         &format!("#{hashtag}"),
-                        "Show only this hashtag",
+                        "Filter by this hashtag too",
                     )
                 }))
                 .collect();
@@ -1145,7 +1085,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
             });
         }
     });
-    let results_filter = crate::filter::Filter::new(nav::results_filter_changed);
+    let results_filter =
+        crate::filter::Filter::new("Listed order", Vec::new(), nav::results_filter_changed);
     let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
     results.append(&channel_header);
     results.append(&page_details);
@@ -1366,9 +1307,24 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .vexpand(true)
         .child(&results_view(&recommendations_store, false, true))
         .build();
-    let recommendation_filters = RecommendationFilters::new();
+    // A list of categories to pick from, which can be searched by typing.
+    let recommendation_category = gtk::DropDown::builder()
+        .model(&gtk::StringList::new(&["All categories"]))
+        .expression(gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<&gtk::Expression>,
+            "string",
+        ))
+        .enable_search(true)
+        .cursor(&pointer())
+        .build();
+    let recommendation_filter = crate::filter::Filter::new(
+        "Most recommended",
+        vec![recommendation_category.clone()],
+        nav::recommendation_filter_changed,
+    );
     let recommendations = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    recommendations.append(&recommendation_filters.bar());
+    recommendations.append(&recommendation_filter.bar);
     recommendations.append(&recommendations_scroll);
     feed_tabs
         .add_titled(&recommendations, Some("recommendations"), "Recommendations")
@@ -2193,7 +2149,8 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         suggestions_store,
         recommendations_store,
         recommendations_scroll,
-        recommendation_filters,
+        recommendation_filter,
+        recommendation_category,
         history_scroll,
         history_box,
         history_current: RefCell::new(None),

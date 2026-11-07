@@ -16,6 +16,7 @@ use crate::controls;
 use crate::fetch::{
     Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo,
 };
+use crate::filter::Sort;
 use crate::format;
 use crate::history;
 use crate::library;
@@ -198,11 +199,10 @@ struct State {
     suggestion_ids: Vec<String>,
     /// The same for the recommendations.
     recommendation_ids: Vec<String>,
-    /// The categories and the hashtags in the menus over the recommendations, with how many
-    /// videos have each, in the order of the menus after their first item.
+    /// The categories in the menu over the recommendations, with how many videos have each, in
+    /// the order of the menu after its first item.
     recommendation_categories: Vec<(String, usize)>,
-    recommendation_hashtags: Vec<(String, usize)>,
-    /// While those menus are filled, when their changes aren't the user's.
+    /// While that menu is filled, when their changes aren't the user's.
     filling_recommendation_filters: bool,
     /// How many recommendations are shown, of how many there are.
     recommendation_counts: (usize, usize),
@@ -256,7 +256,6 @@ thread_local! {
         suggestion_ids: Vec::new(),
         recommendation_ids: Vec::new(),
         recommendation_categories: Vec::new(),
-        recommendation_hashtags: Vec::new(),
         filling_recommendation_filters: false,
         recommendation_counts: (0, 0),
         history_offset: u64::MAX,
@@ -474,9 +473,37 @@ fn append_to(store: &gio::ListStore, entries: &[Entry]) {
     store.extend_from_slice(&objects);
 }
 
-/// Adds the entries the filter of the results lets through.
+/// The hashtags of a video, for the filters to narrow the videos down by.
+fn hashtags_of(entry: &Entry) -> Vec<String> {
+    social::hashtags_of(&entry.id)
+}
+
+/// Adds the entries the filter of the results lets through, where its order puts them.
 fn append_entries(ui: &Ui, entries: &[Entry]) {
-    append_to(&ui.store, &ui.results_filter.criteria().select(entries));
+    let criteria = ui.results_filter.criteria();
+    let entries = criteria.select(entries, hashtags_of);
+    if criteria.sort == Sort::Listed {
+        append_to(&ui.store, &entries);
+        return;
+    }
+    let at = |position: u32| {
+        ui.store
+            .item(position)
+            .and_downcast::<glib::BoxedAnyObject>()
+            .map(|object| object.borrow::<Entry>().clone())
+    };
+    for entry in entries {
+        // After the ones it ties with, which came first.
+        let (mut low, mut high) = (0, ui.store.n_items());
+        while low < high {
+            let middle = low + (high - low) / 2;
+            match at(middle) {
+                Some(other) if criteria.sort.compare(&other, &entry).is_le() => low = middle + 1,
+                _ => high = middle,
+            }
+        }
+        ui.store.insert(low, &glib::BoxedAnyObject::new(entry));
+    }
 }
 
 fn update_results_status(key: &str) {
@@ -3798,91 +3825,62 @@ pub fn feed_tab_changed() {
     update_feed_status();
 }
 
-/// What the menus over the recommendations pick.
-fn recommendation_selection(ui: &Ui) -> social::Selection {
-    let filters = &ui.recommendation_filters;
-    let (categories, hashtags) = with(|state| {
-        (
-            state.recommendation_categories.clone(),
-            state.recommendation_hashtags.clone(),
-        )
-    });
+/// The category the menu over the recommendations picks, if not all of them.
+fn recommendation_category(ui: &Ui) -> Option<String> {
     // The first item is all of them.
-    let label = |dropdown: &gtk::DropDown, labels: &[(String, usize)]| {
-        (dropdown.selected() as usize)
-            .checked_sub(1)
-            .and_then(|at| labels.get(at))
-            .map(|(label, _)| label.clone())
-    };
-    social::Selection {
-        category: label(&filters.category, &categories),
-        hashtag: label(&filters.hashtag, &hashtags),
-        length: social::Length::ALL
-            .get(filters.length.selected() as usize)
-            .map(|(length, _)| *length)
-            .unwrap_or_default(),
-        order: social::Order::ALL
-            .get(filters.order.selected() as usize)
-            .map(|(order, _)| *order)
-            .unwrap_or_default(),
-    }
+    (ui.recommendation_category.selected() as usize)
+        .checked_sub(1)
+        .and_then(|at| with(|state| state.recommendation_categories.get(at).cloned()))
+        .map(|(category, _)| category)
 }
 
-/// Puts the labels in the menu, keeping it on the one it had picked while that's still there.
-fn fill_label_menu(
+/// Puts the categories in the menu, keeping it on the one it had picked while that's still there.
+fn fill_category_menu(
     dropdown: &gtk::DropDown,
-    all: &str,
-    labels: Vec<(String, usize)>,
+    categories: Vec<(String, usize)>,
     picked: Option<&String>,
-    slot: fn(&mut State) -> &mut Vec<(String, usize)>,
 ) {
-    if with(|state| *slot(state) == labels) {
+    if with(|state| state.recommendation_categories == categories) {
         return;
     }
-    let mut names = vec![all.to_string()];
+    let mut names = vec!["All categories".to_string()];
     names.extend(
-        labels
+        categories
             .iter()
-            .map(|(label, count)| format!("{label} ({count})")),
+            .map(|(category, count)| format!("{category} ({count})")),
     );
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let at = picked
-        .and_then(|picked| labels.iter().position(|(label, _)| label == picked))
+        .and_then(|picked| {
+            categories
+                .iter()
+                .position(|(category, _)| category == picked)
+        })
         .map_or(0, |at| at + 1);
-    with(|state| *slot(state) = labels);
+    with(|state| state.recommendation_categories = categories);
     dropdown.set_model(Some(&gtk::StringList::new(&names)));
     dropdown.set_selected(at as u32);
 }
 
-/// Shows the recommendations the menus over them pick.
+/// Shows the recommendations the filter over them lets through.
 fn show_recommendations(ui: &Ui) {
     let videos = social::recommended();
-    let (categories, hashtags) = social::labels(&videos);
-    let picked = recommendation_selection(ui);
+    let picked = recommendation_category(ui);
     with(|state| state.filling_recommendation_filters = true);
-    let filters = &ui.recommendation_filters;
-    fill_label_menu(
-        &filters.category,
-        "All categories",
-        categories,
-        picked.category.as_ref(),
-        |state| &mut state.recommendation_categories,
-    );
-    fill_label_menu(
-        &filters.hashtag,
-        "All hashtags",
-        hashtags,
-        picked.hashtag.as_ref(),
-        |state| &mut state.recommendation_hashtags,
+    fill_category_menu(
+        &ui.recommendation_category,
+        social::categories(&videos),
+        picked.as_ref(),
     );
     with(|state| state.filling_recommendation_filters = false);
+    ui.recommendation_filter.refresh();
 
     // What was picked may be gone.
-    let selection = recommendation_selection(ui);
-    filters
-        .clear
-        .set_visible(selection != social::Selection::default());
-    let shown = social::select(&videos, &selection);
+    let in_category = social::in_category(&videos, recommendation_category(ui).as_deref());
+    let shown = ui
+        .recommendation_filter
+        .criteria()
+        .select(&in_category, hashtags_of);
     let ids: Vec<String> = shown.iter().map(|entry| entry.id.clone()).collect();
     with(|state| state.recommendation_counts = (shown.len(), videos.len()));
     if with(|state| std::mem::replace(&mut state.recommendation_ids, ids.clone())) != ids {
@@ -3892,8 +3890,8 @@ fn show_recommendations(ui: &Ui) {
     }
 }
 
-/// A menu over the recommendations picked something else.
-pub fn recommendation_filters_changed() {
+/// The filter over the recommendations changed.
+pub fn recommendation_filter_changed() {
     if with(|state| state.filling_recommendation_filters) {
         return;
     }
@@ -3901,40 +3899,17 @@ pub fn recommendation_filters_changed() {
     update_feed_status();
 }
 
-/// Shows all the recommendations again.
-pub fn clear_recommendation_filters() {
-    let ui = ui::get();
-    let filters = &ui.recommendation_filters;
-    with(|state| state.filling_recommendation_filters = true);
-    for dropdown in [
-        &filters.category,
-        &filters.hashtag,
-        &filters.length,
-        &filters.order,
-    ] {
-        dropdown.set_selected(0);
-    }
-    with(|state| state.filling_recommendation_filters = false);
-    recommendation_filters_changed();
-}
-
-/// Shows only the recommendations with the hashtag, or the category, clicked on one of them.
+/// Narrows the recommendations down to the hashtag, on top of what they already are, or shows
+/// only the category, clicked on one of them.
 pub fn pick_recommendation_label(label: &str, hashtag: bool) {
     let ui = ui::get();
-    let filters = &ui.recommendation_filters;
-    let (dropdown, labels) = if hashtag {
-        (
-            &filters.hashtag,
-            with(|state| state.recommendation_hashtags.clone()),
-        )
-    } else {
-        (
-            &filters.category,
-            with(|state| state.recommendation_categories.clone()),
-        )
-    };
-    if let Some(at) = labels.iter().position(|(name, _)| name == label) {
-        dropdown.set_selected(at as u32 + 1);
+    if hashtag {
+        ui.recommendation_filter.add_hashtag(label);
+        return;
+    }
+    let categories = with(|state| state.recommendation_categories.clone());
+    if let Some(at) = categories.iter().position(|(name, _)| name == label) {
+        ui.recommendation_category.set_selected(at as u32 + 1);
     }
 }
 

@@ -48,7 +48,6 @@ use ritualistic::{
 use serde::{Deserialize, Serialize};
 
 use crate::fetch::Entry;
-pub use crate::filter::Length;
 use crate::history;
 
 const METADATA: Kind = Kind(0);
@@ -62,7 +61,13 @@ const DEFAULT_FOLLOWS: [&str; 2] = [
     "738b7e8d7741fe3175c63178c50cc6f7ae7ef0f69e037736463d0c4a7394698b",
 ];
 /// Where the lists of relays people write to are looked for.
-const INDEXERS: [&str; 5] = ["wss://purplepag.es", "wss://nos.lol", "wss://indexer.coracle.social", "wss://relay.primal.net", "wss://relay.ditto.pub"];
+const INDEXERS: [&str; 5] = [
+    "wss://purplepag.es",
+    "wss://nos.lol",
+    "wss://indexer.coracle.social",
+    "wss://relay.primal.net",
+    "wss://relay.ditto.pub",
+];
 /// How many of the relays a person writes to are asked.
 const OUTBOX_RELAYS: usize = 4;
 
@@ -734,34 +739,6 @@ pub struct Recommendation {
     pub by: Vec<PubKey>,
 }
 
-/// The order the videos are shown in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Order {
-    /// The ones recommended by more of the people followed first, then the most recently
-    /// recommended.
-    #[default]
-    Recommended,
-    /// The ones that came out last first.
-    Newest,
-}
-
-impl Order {
-    /// In the order of the menu that picks it.
-    pub const ALL: [(Order, &str); 2] = [
-        (Order::Recommended, "Most recommended"),
-        (Order::Newest, "Newest"),
-    ];
-}
-
-/// Which of the recommendations are shown, and in what order.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Selection {
-    pub category: Option<String>,
-    pub hashtag: Option<String>,
-    pub length: Length,
-    pub order: Order,
-}
-
 /// Whether `id` looks like a YouTube video id.
 fn is_video_id(id: &str) -> bool {
     id.len() == 11
@@ -946,6 +923,16 @@ pub fn labels_of(id: &str) -> Option<(Vec<String>, Vec<String>, Vec<PubKey>)> {
     ))
 }
 
+/// The hashtags of a video, if it is recommended.
+pub fn hashtags_of(id: &str) -> Vec<String> {
+    let ranked = ranked();
+    ranked
+        .by_id
+        .get(id)
+        .map(|&at| ranked.videos[at].hashtags.clone())
+        .unwrap_or_default()
+}
+
 thread_local! {
     /// The names of the people, read from their metadata once, by public key in hex.
     static NAMES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
@@ -967,28 +954,13 @@ pub fn forget_name(pubkey: &str) {
     NAMES.with_borrow_mut(|names| names.remove(pubkey));
 }
 
-/// The recommendations that fit `selection`, in the order it asks for.
-pub fn select(videos: &[Recommendation], selection: &Selection) -> Vec<Entry> {
-    let mut chosen: Vec<&Recommendation> = videos
+/// The recommendations in the category, or all of them, in their order.
+pub fn in_category(videos: &[Recommendation], category: Option<&str>) -> Vec<Entry> {
+    videos
         .iter()
         .filter(|video| {
-            selection
-                .category
-                .as_ref()
-                .is_none_or(|category| video.categories.contains(category))
-                && selection
-                    .hashtag
-                    .as_ref()
-                    .is_none_or(|hashtag| video.hashtags.contains(hashtag))
-                && selection.length.fits(video.entry.duration)
+            category.is_none_or(|category| video.categories.iter().any(|c| c == category))
         })
-        .collect();
-    if selection.order == Order::Newest {
-        // The sort is stable, so the ones with no date stay as they were, after the rest.
-        chosen.sort_by_key(|video| std::cmp::Reverse(video.entry.published));
-    }
-    chosen
-        .into_iter()
         .map(|video| video.entry.clone())
         .collect()
 }
@@ -996,24 +968,18 @@ pub fn select(videos: &[Recommendation], selection: &Selection) -> Vec<Entry> {
 /// Labels with how many videos have each, the most common first.
 pub type Counted = Vec<(String, usize)>;
 
-/// The categories and the hashtags of the videos.
-pub fn labels(videos: &[Recommendation]) -> (Counted, Counted) {
-    fn counted<'a>(labels: impl Iterator<Item = &'a String>) -> Counted {
-        let mut counts: HashMap<&String, usize> = HashMap::new();
-        for label in labels {
-            *counts.entry(label).or_default() += 1;
-        }
-        let mut counts: Vec<(String, usize)> = counts
-            .into_iter()
-            .map(|(label, count)| (label.clone(), count))
-            .collect();
-        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        counts
+/// The categories of the videos.
+pub fn categories(videos: &[Recommendation]) -> Counted {
+    let mut counts: HashMap<&String, usize> = HashMap::new();
+    for category in videos.iter().flat_map(|video| &video.categories) {
+        *counts.entry(category).or_default() += 1;
     }
-    (
-        counted(videos.iter().flat_map(|video| &video.categories)),
-        counted(videos.iter().flat_map(|video| &video.hashtags)),
-    )
+    let mut counts: Counted = counts
+        .into_iter()
+        .map(|(category, count)| (category.clone(), count))
+        .collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    counts
 }
 
 #[cfg(test)]
@@ -1126,9 +1092,7 @@ mod tests {
         );
     }
 
-    fn video(id: &str, minutes: f64, published: Option<i64>, labels: &[&str]) -> Recommendation {
-        let (hashtags, categories) = labels.iter().partition(|label| label.starts_with('#'));
-        let strings = |labels: Vec<&&str>| labels.into_iter().map(|l| l.to_string()).collect();
+    fn video(id: &str, categories: &[&str]) -> Recommendation {
         Recommendation {
             entry: Entry {
                 id: id.to_string(),
@@ -1136,66 +1100,35 @@ mod tests {
                 title: String::new(),
                 channel: String::new(),
                 channel_id: String::new(),
-                duration: Some(minutes * 60.0),
+                duration: None,
                 views: None,
-                published,
+                published: None,
             },
-            hashtags: strings(hashtags),
-            categories: strings(categories),
+            hashtags: Vec::new(),
+            categories: categories.iter().map(|c| c.to_string()).collect(),
             by: Vec::new(),
         }
     }
 
     #[test]
-    fn selections_narrow_down_and_order() {
+    fn categories_narrow_down() {
         let videos = [
-            video("a", 3.0, Some(100), &["#rust", "Programming"]),
-            video("b", 45.0, None, &["#rust", "Talks"]),
-            video("c", 90.0, Some(300), &["#go", "Programming"]),
-            video("d", 10.0, Some(200), &["Talks"]),
+            video("a", &["Programming"]),
+            video("b", &["Talks"]),
+            video("c", &["Programming", "Talks"]),
+            video("d", &[]),
         ];
-        let ids = |selection: Selection| -> Vec<String> {
-            select(&videos, &selection)
+        let ids = |category| -> Vec<String> {
+            in_category(&videos, category)
                 .into_iter()
                 .map(|entry| entry.id)
                 .collect()
         };
-        assert_eq!(ids(Selection::default()), ["a", "b", "c", "d"]);
+        assert_eq!(ids(None), ["a", "b", "c", "d"]);
+        assert_eq!(ids(Some("Talks")), ["b", "c"]);
         assert_eq!(
-            ids(Selection {
-                hashtag: Some("#rust".to_string()),
-                ..Selection::default()
-            }),
-            ["a", "b"]
-        );
-        assert_eq!(
-            ids(Selection {
-                category: Some("Talks".to_string()),
-                length: Length::Long,
-                ..Selection::default()
-            }),
-            ["b"]
-        );
-        assert_eq!(
-            ids(Selection {
-                length: Length::VeryLong,
-                ..Selection::default()
-            }),
-            ["c"]
-        );
-        assert_eq!(
-            ids(Selection {
-                order: Order::Newest,
-                ..Selection::default()
-            }),
-            ["c", "d", "a", "b"]
-        );
-
-        let (categories, hashtags) = labels(&videos);
-        assert_eq!(
-            categories,
+            categories(&videos),
             [("Programming".to_string(), 2), ("Talks".to_string(), 2)]
         );
-        assert_eq!(hashtags, [("#rust".to_string(), 2), ("#go".to_string(), 1)]);
     }
 }
