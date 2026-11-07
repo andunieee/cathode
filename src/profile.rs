@@ -37,6 +37,9 @@ pub struct Profile {
     pub collections: Vec<String>,
     /// Leaves the Shorts out of channel listings while the restricted mode is on.
     pub hide_shorts: bool,
+    /// While the restricted mode is on, only the remote changes the volume and the queue, and
+    /// plays or stops videos: the desktop can only pause.
+    pub ultra_strict: bool,
 }
 
 /// Something that can be allowed in the profile.
@@ -132,6 +135,17 @@ pub fn allows_collection(name: &str) -> bool {
 /// Whether the restricted mode leaves the Shorts out of channel listings.
 pub fn hides_shorts() -> bool {
     read(|profile| profile.hide_shorts)
+}
+
+/// Whether the ultra strict mode is set, whether or not the restricted mode is on.
+pub fn ultra_strict_set() -> bool {
+    read(|profile| profile.ultra_strict)
+}
+
+/// Whether only the remote changes the volume, the queue and what plays: the ultra strict mode
+/// is set and the restricted mode is on.
+pub fn ultra_strict() -> bool {
+    restricted() && ultra_strict_set()
 }
 
 pub fn lists_video(id: &str) -> bool {
@@ -474,6 +488,7 @@ mod tests {
         let profile: Profile = serde_json::from_str("{}").unwrap();
         assert!(profile.channels.is_empty());
         assert!(!profile.hide_shorts);
+        assert!(!profile.ultra_strict);
 
         let profile: Profile =
             serde_json::from_str(r#"{"channels": [{"id": "yt:UC1", "name": "A"}]}"#).unwrap();

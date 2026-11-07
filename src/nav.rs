@@ -836,8 +836,18 @@ fn show_sponsor_marks(segments: Vec<(f64, f64)>) {
 
 /// Plays a chapter of the video on the current page, and pauses when it ends.
 pub fn play_chapter(index: usize) {
+    if locked_by_remote() {
+        return;
+    }
     if let Page::Video(entry) = current() {
         play_chapter_of(entry, index);
+    }
+}
+
+/// Plays a chapter of the video in the player, from its list in the player.
+pub fn player_chapter(index: usize) {
+    if !locked_by_remote() {
+        play_playing_chapter(index);
     }
 }
 
@@ -958,6 +968,27 @@ fn apply_mode() {
     } else {
         "Turn on the restricted mode"
     }));
+    ultra_strict_changed();
+}
+
+/// Locks the volume, the queue and starting or stopping videos on the desktop while the ultra
+/// strict mode is on, for the remote alone to change them.
+pub fn ultra_strict_changed() {
+    let ui = ui::get();
+    let locked = profile::ultra_strict();
+    ui.volume.set_sensitive(!locked);
+    ui.clear_queue.set_sensitive(!locked);
+    refresh_queue();
+}
+
+/// Whether the ultra strict mode keeps the desktop from changing the volume, the queue or what
+/// plays, saying so if it does.
+fn locked_by_remote() -> bool {
+    let locked = profile::ultra_strict();
+    if locked {
+        toast("Only the remote can change this in the ultra strict mode");
+    }
+    locked
 }
 
 /// Applies which player buttons the settings show, and whether the restricted mode can be set up.
@@ -1991,6 +2022,9 @@ fn refresh_after_save(entry: &Entry) {
 // Player
 
 pub fn play_current() {
+    if locked_by_remote() {
+        return;
+    }
     if let Page::Video(entry) = current() {
         if video_allowed(&entry) {
             enqueue(entry.clone());
@@ -2176,7 +2210,16 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     save_session();
 }
 
+/// Pauses or resumes, from the desktop: the ultra strict mode leaves it only pausing.
 pub fn toggle_pause() {
+    let ui = ui::get();
+    if ui.player.is_paused() && locked_by_remote() {
+        return;
+    }
+    flip_pause();
+}
+
+fn flip_pause() {
     let ui = ui::get();
     if ui.player.id().is_some() {
         if !ui.player.is_paused() {
@@ -2187,6 +2230,13 @@ pub fn toggle_pause() {
         save_session();
         tick();
         show_player_controls();
+    }
+}
+
+/// Closes the player from the desktop, which the ultra strict mode leaves to the remote.
+pub fn stop() {
+    if !locked_by_remote() {
+        stop_player();
     }
 }
 
@@ -2471,6 +2521,9 @@ pub fn volume_icon(volume: f64, muted: bool) -> &'static str {
 }
 
 pub fn toggle_mute() {
+    if locked_by_remote() {
+        return;
+    }
     let ui = ui::get();
     let muted = !ui.player.is_muted();
     ui.player.set_muted(muted);
@@ -2481,6 +2534,9 @@ pub fn toggle_mute() {
 
 /// Moves the volume by `delta`, on the scale of 0 to 1.
 pub fn change_volume(delta: f64) {
+    if locked_by_remote() {
+        return;
+    }
     let ui = ui::get();
     if ui.player.is_muted() {
         toggle_mute();
@@ -2549,6 +2605,9 @@ pub fn step_chapter(direction: i32) {
 
 /// Plays the next or the previous video of the queue that is ready.
 pub fn queue_step(direction: i32) {
+    if locked_by_remote() {
+        return;
+    }
     let ui = ui::get();
     let Some(id) = ui.player.id() else {
         return;
@@ -2959,6 +3018,7 @@ pub fn remote_status() -> crate::remote::Status {
         chapters,
         restricted: profile::restricted(),
         locked: profile::has_password(),
+        ultra_strict: profile::ultra_strict_set(),
         show_restricted_controls: settings::get().show_restricted_controls,
         playing: state.playing.as_ref().map(|entry| entry.id.clone()),
         title: state
@@ -3019,7 +3079,7 @@ pub fn remote_play() {
     let ui = ui::get();
     if ui.player.id().is_some() {
         if ui.player.is_paused() {
-            toggle_pause();
+            flip_pause();
         }
         return;
     }
@@ -3036,7 +3096,7 @@ pub fn remote_play() {
 
 pub fn remote_pause() {
     if !ui::get().player.is_paused() {
-        toggle_pause();
+        flip_pause();
     }
 }
 
@@ -3064,6 +3124,9 @@ pub fn queue_current() {
 
 /// Plays a video right away, from a listing: it joins the queue, as with the Play button of its page.
 pub fn play_now(entry: Entry) {
+    if locked_by_remote() {
+        return;
+    }
     if video_allowed(&entry) {
         enqueue(entry.clone());
     }
@@ -3107,19 +3170,27 @@ pub fn sync_queue_buttons() {
             .map(|item| item.entry.id.clone())
             .collect()
     });
+    let locked = profile::ultra_strict();
     QUEUE_BUTTONS.with(|buttons| {
         buttons.borrow_mut().retain(|tracked| {
             let Some(button) = tracked.button.upgrade() else {
                 return false;
             };
             let queued = (tracked.id)().is_some_and(|id| queued.contains(&id));
-            button.set_sensitive(tracked.usable && !queued);
+            button.set_sensitive(tracked.usable && !queued && !locked);
             true
         })
     });
 }
 
 pub fn queue_add(entry: Entry) {
+    if !locked_by_remote() {
+        remote_queue_add(entry);
+    }
+}
+
+/// Adds a video to the queue, which the ultra strict mode lets the remote do.
+pub fn remote_queue_add(entry: Entry) {
     if !video_allowed(&entry) {
         toast("This video is not available in the restricted mode");
         return;
@@ -3272,6 +3343,9 @@ const CONFIRM_CLEAR_QUEUE_LABEL: &str = "Confirm clearing the queue?";
 /// Needs two clicks: the first asks for confirmation, which lapses after a few seconds.
 /// The video playing stays in the queue.
 pub fn clear_queue() {
+    if locked_by_remote() {
+        return;
+    }
     let button = &ui::get().clear_queue;
     if button.label().as_deref() != Some(CONFIRM_CLEAR_QUEUE_LABEL) {
         button.set_label(CONFIRM_CLEAR_QUEUE_LABEL);
@@ -3416,6 +3490,7 @@ pub fn refresh_queue() {
     }
 
     let playing = playing_id();
+    let locked = profile::ultra_strict();
     let items: Vec<(Entry, String)> = with(|state| {
         state
             .queue
@@ -3455,7 +3530,7 @@ pub fn refresh_queue() {
             .icon_name("media-playback-start-symbolic")
             .tooltip_text("Play")
             .valign(gtk::Align::Center)
-            .sensitive(!is_playing && video_allowed(&entry))
+            .sensitive(!is_playing && !locked && video_allowed(&entry))
             .css_classes(["flat", "circular"])
             .build();
         play.connect_clicked({
@@ -3475,7 +3550,7 @@ pub fn refresh_queue() {
             .icon_name("window-close-symbolic")
             .tooltip_text("Remove from the queue")
             .valign(gtk::Align::Center)
-            .visible(!is_playing)
+            .visible(!is_playing && !locked)
             .css_classes(["flat", "circular"])
             .build();
         remove.connect_clicked({
@@ -3483,6 +3558,11 @@ pub fn refresh_queue() {
             move |_| queue_remove(&id)
         });
         row.add_suffix(&remove);
+
+        if locked {
+            ui.queue_list.append(&row);
+            continue;
+        }
 
         // Dragging a row onto another one moves it to that place.
         let source = gtk::DragSource::new();
@@ -3535,6 +3615,23 @@ fn queue_move(id: &str, onto: &str) {
     if moved.is_some() {
         save_session();
         refresh_queue();
+    }
+}
+
+/// Takes a video out of the queue, for the remote.
+pub fn remote_queue_remove(id: &str) {
+    queue_remove(id);
+}
+
+/// Moves a video of the queue a place up, `-1`, or down, `1`, for the remote.
+pub fn remote_queue_shift(id: &str, direction: i32) {
+    let onto = with(|state| {
+        let from = state.queue.iter().position(|item| item.entry.id == id)?;
+        let to = from.checked_add_signed(direction as isize)?;
+        state.queue.get(to).map(|item| item.entry.id.clone())
+    });
+    if let Some(onto) = onto {
+        queue_move(id, &onto);
     }
 }
 
@@ -4711,6 +4808,9 @@ pub fn cache_select_all(selected: bool) {
 }
 
 pub fn cache_queue_selected() {
+    if locked_by_remote() {
+        return;
+    }
     for entry in selected_cache_entries() {
         queue_add(entry);
     }

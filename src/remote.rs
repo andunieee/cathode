@@ -75,6 +75,9 @@ pub struct Status {
     pub restricted: bool,
     /// Whether a password guards the restricted mode.
     pub locked: bool,
+    /// Whether the ultra strict mode is set, which leaves the volume and the queue to the remote
+    /// while the restricted mode is on.
+    pub ultra_strict: bool,
     /// Whether the restricted mode controls are shown.
     pub show_restricted_controls: bool,
 }
@@ -115,11 +118,13 @@ pub enum Command {
     /// Resumes when paused, pauses otherwise.
     Toggle,
     Stop,
-    Next,
-    Previous,
     Jump(String),
     /// Adds a video of the last searches to the queue.
     Add(String),
+    /// Takes a video out of the queue.
+    Remove(String),
+    /// Moves a video of the queue a place up, `-1`, or down, `1`.
+    Shift(String, i32),
     Search {
         query: String,
         reply: UnboundedSender<Reply>,
@@ -141,6 +146,12 @@ pub enum Command {
     Chapter(usize),
     /// Turns the restricted mode on or off.
     SetRestricted {
+        on: bool,
+        password: String,
+        reply: UnboundedSender<Reply>,
+    },
+    /// Sets the ultra strict mode or unsets it.
+    SetUltraStrict {
         on: bool,
         password: String,
         reply: UnboundedSender<Reply>,
@@ -450,8 +461,6 @@ fn run(command: Command) {
             }
         }
         Command::Stop => nav::stop_player(),
-        Command::Next => nav::queue_step(1),
-        Command::Previous => nav::queue_step(-1),
         Command::Jump(id) => nav::queue_play(&id),
         Command::Add(id) => {
             let found = with(|local| local.found.get(&id).cloned()).or_else(|| {
@@ -460,9 +469,11 @@ fn run(command: Command) {
                     .find(|entry| entry.id == id)
             });
             if let Some(entry) = found {
-                nav::queue_add(entry);
+                nav::remote_queue_add(entry);
             }
         }
+        Command::Remove(id) => nav::remote_queue_remove(&id),
+        Command::Shift(id, direction) => nav::remote_queue_shift(&id, direction),
         Command::Volume(volume) => nav::remote_volume(volume),
         Command::Speed(speed) => nav::remote_speed(speed),
         Command::Size(height) => nav::set_size(height),
@@ -477,6 +488,24 @@ fn run(command: Command) {
                 let _ = reply.send(Reply::Failed("Wrong password".into()));
             } else if on != profile::restricted() {
                 nav::set_restricted(on);
+            }
+        }
+        Command::SetUltraStrict {
+            on,
+            password,
+            reply,
+        } => {
+            if profile::has_password() && !profile::check_password(&password) {
+                let _ = reply.send(Reply::Failed("Wrong password".into()));
+            } else if on != profile::ultra_strict_set() {
+                match profile::update(|profile| profile.ultra_strict = on) {
+                    Ok(()) => nav::ultra_strict_changed(),
+                    Err(error) => {
+                        let _ = reply.send(Reply::Failed(format!(
+                            "Could not save the restricted mode: {error}"
+                        )));
+                    }
+                }
             }
         }
         Command::Search { query, reply } => {

@@ -13,6 +13,8 @@ pub struct RemoteApp {
     replies: UnboundedSender<Reply>,
     /// Whether the restricted mode was on in the last status.
     restricted: bool,
+    /// Whether the ultra strict mode was set in the last status.
+    ultra_strict: bool,
     /// The caption tracks the select of the page was made from.
     captions: Vec<(i64, String)>,
     /// The speeds the speed select of the page was made from.
@@ -50,6 +52,7 @@ impl RemoteApp {
         Self {
             replies,
             restricted: false,
+            ultra_strict: false,
             captions: Vec::new(),
             speeds: Vec::new(),
             chapters: Vec::new(),
@@ -97,6 +100,7 @@ impl RemoteApp {
             "chaptered": false,
             "chapter": -1,
             "restricted": false,
+            "ultra_strict": false,
             "locked": false,
             "show_restricted_controls": status.show_restricted_controls,
             "password": "",
@@ -129,28 +133,20 @@ impl RemoteApp {
                 .label(cel("s.time")),
         );
         out.element(ui::row("controls").parent("now").justify("between"));
-        for (id, label, action) in [
-            ("previous", "Previous", "previous"),
-            ("stop", "Stop", "stop"),
-            ("next", "Next", "next"),
-        ] {
-            out.element(
-                ui::button(id)
-                    .parent("controls")
-                    .label(label)
-                    .variant("plain")
-                    .on_press(Handler::action(action)),
-            );
-            if id == "previous" {
-                out.element(
-                    ui::button("toggle")
-                        .parent("controls")
-                        .variant("primary")
-                        .label(cel("s.paused ? 'Play' : 'Pause'"))
-                        .on_press(Handler::action("toggle")),
-                );
-            }
-        }
+        out.element(
+            ui::button("toggle")
+                .parent("controls")
+                .variant("primary")
+                .label(cel("s.paused ? 'Play' : 'Pause'"))
+                .on_press(Handler::action("toggle")),
+        );
+        out.element(
+            ui::button("stop")
+                .parent("controls")
+                .label("Stop")
+                .variant("plain")
+                .on_press(Handler::action("stop")),
+        );
 
         out.element(
             ui::card("chapters")
@@ -261,6 +257,14 @@ impl RemoteApp {
                 .on_change(Handler::action("restrict")),
         );
         out.element(
+            ui::checkbox("ultra_strict")
+                .parent("restricted_tab")
+                .variant("switch")
+                .label("Ultra strict mode")
+                .bind("ultra_strict")
+                .on_change(Handler::action("ultra_strict")),
+        );
+        out.element(
             ui::input("password")
                 .parent("restricted_tab")
                 .variant("password")
@@ -324,8 +328,17 @@ impl RemoteApp {
         match action.name.as_str() {
             "toggle" => remote::command(Command::Toggle),
             "stop" => remote::command(Command::Stop),
-            "next" => remote::command(Command::Next),
-            "previous" => remote::command(Command::Previous),
+            "remove" => {
+                if let Some(id) = id() {
+                    remote::command(Command::Remove(id));
+                }
+            }
+            "up" | "down" => {
+                if let Some(id) = id() {
+                    let direction = if action.name == "up" { -1 } else { 1 };
+                    remote::command(Command::Shift(id, direction));
+                }
+            }
             "jump" => {
                 if let Some(id) = id() {
                     remote::command(Command::Jump(id));
@@ -385,6 +398,23 @@ impl RemoteApp {
                     .to_owned();
                 out.signal(json!({"restrict_error": "", "password": ""}));
                 remote::command(Command::SetRestricted {
+                    on,
+                    password,
+                    reply: self.replies.clone(),
+                });
+            }
+            "ultra_strict" => {
+                let on = action
+                    .signal("ultra_strict")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(self.ultra_strict);
+                let password = action
+                    .signal("password")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                out.signal(json!({"restrict_error": "", "password": ""}));
+                remote::command(Command::SetUltraStrict {
                     on,
                     password,
                     reply: self.replies.clone(),
@@ -453,10 +483,12 @@ impl RemoteApp {
             // The chapter playing is the last one started.
             "chapter": status.chapters.iter().rposition(|(_, start)| *start <= status.position).map_or(-1, |index| index as i64),
             "restricted": status.restricted,
+            "ultra_strict": status.ultra_strict,
             "locked": status.locked,
             "show_restricted_controls": status.show_restricted_controls,
         }));
         self.restricted = status.restricted;
+        self.ultra_strict = status.ultra_strict;
         if status.captions != self.captions {
             self.captions_select(out, &status.captions);
         }
@@ -524,9 +556,15 @@ impl RemoteApp {
         for id in &ids_of(&self.queue) {
             out.remove(format!("q_{id}"));
         }
-        for row in &status.queue {
+        let last = status.queue.len().saturating_sub(1);
+        for (index, row) in status.queue.iter().enumerate() {
             let item = format!("q_{}", row.id);
-            out.element(ui::row(item.as_str()).parent("queue").justify("between"));
+            out.element(
+                ui::row(item.as_str())
+                    .parent("queue")
+                    .justify("between")
+                    .set("wrap", true),
+            );
             out.element(
                 ui::column(format!("{item}_text"))
                     .parent(item.as_str())
@@ -547,15 +585,40 @@ impl RemoteApp {
                     .variant("caption")
                     .text(detail),
             );
+            let buttons = format!("{item}_buttons");
+            out.element(ui::row(buttons.as_str()).parent(item.as_str()));
+            let current = format!("s.current == {}", quote(&row.id));
             out.element(
                 ui::button(format!("{item}_play"))
-                    .parent(item.as_str())
-                    .label(cel(format!(
-                        "s.current == {} ? 'Playing' : 'Play'",
-                        quote(&row.id)
-                    )))
-                    .disabled(cel(format!("s.current == {}", quote(&row.id))))
+                    .parent(buttons.as_str())
+                    .label(cel(format!("{current} ? 'Playing' : 'Play'")))
+                    .disabled(cel(current.as_str()))
                     .on_press(Handler::action("jump").payload(row.id.as_str())),
+            );
+            out.element(
+                ui::button(format!("{item}_up"))
+                    .parent(buttons.as_str())
+                    .label("Up")
+                    .variant("plain")
+                    .disabled(index == 0)
+                    .on_press(Handler::action("up").payload(row.id.as_str())),
+            );
+            out.element(
+                ui::button(format!("{item}_down"))
+                    .parent(buttons.as_str())
+                    .label("Down")
+                    .variant("plain")
+                    .disabled(index == last)
+                    .on_press(Handler::action("down").payload(row.id.as_str())),
+            );
+            // The video playing can't be taken out of the queue.
+            out.element(
+                ui::button(format!("{item}_remove"))
+                    .parent(buttons.as_str())
+                    .label("Delete")
+                    .variant("failure")
+                    .disabled(cel(current.as_str()))
+                    .on_press(Handler::action("remove").payload(row.id.as_str())),
             );
         }
         self.queue = signature;
@@ -619,6 +682,7 @@ impl RemoteApp {
             Reply::Failed(error) => out.signal(json!({
                 "restrict_error": error,
                 "restricted": self.restricted,
+                "ultra_strict": self.ultra_strict,
             })),
         }
     }

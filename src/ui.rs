@@ -1488,7 +1488,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let chapters_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .build();
-    chapters_list.connect_row_activated(|_, row| nav::play_playing_chapter(row.index() as usize));
+    chapters_list.connect_row_activated(|_, row| nav::player_chapter(row.index() as usize));
     let chapters_button = gtk::MenuButton::builder()
         .cursor(&crate::ui::pointer())
         .icon_name("view-list-symbolic")
@@ -1532,7 +1532,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         )
         .build();
     let stop_button = icon_button("media-playback-stop-symbolic", "Stop and close the player");
-    stop_button.connect_clicked(|_| nav::stop_player());
+    stop_button.connect_clicked(|_| nav::stop());
     let theater = icon_button("video-display-symbolic", "Theater mode (Shift+F)");
     theater.connect_clicked(|_| nav::toggle_theater());
     let fullscreen = icon_button("view-fullscreen-symbolic", "Fullscreen (F)");
@@ -1950,8 +1950,10 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         let header = header.clone();
         let subs_toggle = subs_toggle.clone();
         move |split| {
-            // Resizing can open it on its own, which the restricted mode doesn't allow.
-            if split.shows_sidebar() && !subs_toggle.is_visible() {
+            // Resizing can open it on its own, which the restricted mode doesn't allow. Ask
+            // whether the toggle is shown, not whether it is on screen: the window is not yet
+            // visible when the sidebar is restored on startup.
+            if split.shows_sidebar() && !subs_toggle.get_visible() {
                 split.set_show_sidebar(false);
             }
             header.set_show_start_title_buttons(!split.shows_sidebar())

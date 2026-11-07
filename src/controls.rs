@@ -67,6 +67,7 @@ pub struct Widgets {
     settings_entry: gtk::Entry,
     settings_status: gtk::Label,
     hide_shorts: adw::SwitchRow,
+    ultra_strict: adw::SwitchRow,
     settings_channels: Section,
     settings_playlists: Section,
     settings_videos: Section,
@@ -167,6 +168,28 @@ impl Widgets {
             .build();
         listings.add(&hide_shorts);
 
+        let ultra_strict = adw::SwitchRow::builder()
+            .title("Ultra strict mode")
+            .subtitle(
+                "While the restricted mode is on, only the remote plays and stops videos and changes the volume and the queue",
+            )
+            .cursor(&crate::ui::pointer())
+            .build();
+        ultra_strict.connect_active_notify(|row| {
+            let active = row.is_active();
+            if profile::ultra_strict_set() == active {
+                return;
+            }
+            match profile::update(|p| p.ultra_strict = active) {
+                Ok(()) => nav::ultra_strict_changed(),
+                Err(error) => nav::toast(&format!("Could not save restricted mode: {error}")),
+            }
+        });
+        let remote = adw::PreferencesGroup::builder()
+            .title("Remote control")
+            .build();
+        remote.add(&ultra_strict);
+
         let (settings_channels, settings_playlists, settings_videos, settings_collections) = (
             section("Channels"),
             section("Playlists"),
@@ -189,9 +212,7 @@ impl Widgets {
         password_remove.connect_clicked(|_| remove_password());
         password_row.add_suffix(&password_set);
         password_row.add_suffix(&password_remove);
-        let password = adw::PreferencesGroup::builder()
-            .title("Password")
-            .build();
+        let password = adw::PreferencesGroup::builder().title("Password").build();
         password.add(&password_row);
 
         let settings_page = page_box();
@@ -200,6 +221,7 @@ impl Widgets {
         settings_page.append(&adding);
         settings_page.append(&settings_status);
         settings_page.append(&listings);
+        settings_page.append(&remote);
         settings_page.append(&settings_channels.root);
         settings_page.append(&settings_playlists.root);
         settings_page.append(&settings_collections.root);
@@ -219,6 +241,7 @@ impl Widgets {
             settings_entry,
             settings_status,
             hide_shorts,
+            ultra_strict,
             settings_channels,
             settings_playlists,
             settings_videos,
@@ -461,6 +484,7 @@ pub fn show_settings() {
     );
 
     widgets.hide_shorts.set_active(profile::hides_shorts());
+    widgets.ultra_strict.set_active(profile::ultra_strict_set());
 
     let has_password = profile::has_password();
     widgets
