@@ -2098,10 +2098,14 @@ fn save_session() {
     remember_position();
     let (queue, playing, positions) = with(|state| {
         let queue: Vec<Entry> = state.queue.iter().map(|item| item.entry.clone()).collect();
+        // The video playing may not be in the queue: one opened from a link or a file is not.
+        let playing_id = state.playing.as_ref().map(|entry| entry.id.as_str());
         let positions = state
             .positions
             .iter()
-            .filter(|(id, _)| queue.iter().any(|entry| &entry.id == *id))
+            .filter(|(id, _)| {
+                playing_id == Some(id.as_str()) || queue.iter().any(|entry| &entry.id == *id)
+            })
             .map(|(id, position)| (id.clone(), *position))
             .collect();
         (queue, state.playing.clone(), positions)
@@ -2153,6 +2157,17 @@ fn remember_position() {
     let Some(id) = ui.player.id() else {
         return;
     };
+
+    // A seek to where the video was left off is still queued, and the player is not there yet:
+    // the position it has now is not where the video was, keep the one waiting to be restored.
+    if with(|state| {
+        state
+            .pending_seek
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == id)
+    }) {
+        return;
+    }
 
     let (position, duration) = (ui.player.position(), ui.player.duration());
     with(|state| {
@@ -2244,6 +2259,10 @@ pub fn stop() {
 pub fn stop_player() {
     crate::log::info!("stopping the player");
     let playing = playing_id();
+    // Stopping starts the video over, but the other videos of the queue keep where they were.
+    if let Some(id) = &playing {
+        with(|state| state.positions.remove(id));
+    }
     unload_player();
     if let Some(id) = playing {
         drop_played_through(&id);
@@ -2264,10 +2283,10 @@ fn unload_player() {
     ui.player.stop();
     refresh_captions();
     with(|state| {
-        state.positions.clear();
         state.playing = None;
         state.awaiting_play = None;
         state.chapter_stop = None;
+        state.pending_seek = None;
     });
     caption_options_changed();
     ui.player_status.set_visible(false);
