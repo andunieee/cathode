@@ -37,8 +37,8 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 ## Remote control
 <img src="assets/remote.jpg" alt="The remote control in hyperb on a phone" width="270" align="right">
 
-- Control Cathode from your phone with an [iroh](https://iroh.computer)-powered [hyperb](https://github.com/andunieee/hyperb) interface: no accounts needed and super secure, works over the internet or offline in the same network
-- Turn it on in Settings → Remote Control and scan the QR code with hyperb. Each code pairs one phone, and paired phones are listed there and can be unpaired one by one
+- Control Cathode from your phone with an [iroh](https://iroh.computer)-powered [hyperb](https://github.com/hypereffect/hyperb) interface: no accounts needed and super secure, works over the internet or offline in the same network
+- Turn it on in Settings → Remote Control and scan the QR code with hyperb, which you can [install on Android](https://github.com/hypereffect/hyperb#installation) or use [the web version](https://hypereffect.github.io/hyperb/) as a fallback. Each code pairs one phone, and paired phones are listed there and can be unpaired one by one
 - What is playing, with play/pause, stop, previous and next, volume, speed, video quality, captions and chapters
 - The queue, to jump to any video in it
 - Search YouTube and add videos to the queue, or add them from your subscriptions feed

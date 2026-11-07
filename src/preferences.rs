@@ -395,6 +395,7 @@ fn general() -> adw::PreferencesPage {
 fn remote_page() -> adw::PreferencesPage {
     let switch = adw::SwitchRow::builder()
         .title("Phone remote")
+        .subtitle("If you have a hyperb:// browser in your phone that can be used to control this desktop remotely")
         .cursor(&crate::ui::pointer())
         .active(remote::enabled())
         .build();
@@ -417,9 +418,29 @@ fn remote_page() -> adw::PreferencesPage {
         .build();
     pair.add_suffix(&pair_button);
 
+    let android = gtk::LinkButton::builder()
+        .label("Android")
+        .uri("https://github.com/hypereffect/hyperb#installation")
+        .cursor(&crate::ui::pointer())
+        .valign(gtk::Align::Center)
+        .build();
+    let web = gtk::LinkButton::builder()
+        .label("Web")
+        .uri("https://hypereffect.github.io/hyperb/")
+        .cursor(&crate::ui::pointer())
+        .valign(gtk::Align::Center)
+        .build();
+    let app = adw::ActionRow::builder()
+        .title("hyperb")
+        .subtitle("Install it on Android, or use the web version as a fallback")
+        .build();
+    app.add_suffix(&android);
+    app.add_suffix(&web);
+
     let group = adw::PreferencesGroup::builder().title("Remote").build();
     group.add(&switch);
     group.add(&pair);
+    group.add(&app);
 
     let devices = adw::PreferencesGroup::builder()
         .title("Paired phones")
