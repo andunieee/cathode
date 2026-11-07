@@ -2648,7 +2648,8 @@ pub fn toggle_fullscreen() {
     let ui = ui::get();
     let window = video_window(&ui);
     let fullscreen = !window.is_fullscreen();
-    if fullscreen && ui.player.id().is_none() {
+    // The player may still be waiting for the video to download.
+    if fullscreen && !ui.player_frame.is_visible() {
         return;
     }
 
@@ -2670,7 +2671,7 @@ pub fn toggle_theater() {
         leave_theater();
         return;
     }
-    if ui.player.id().is_none() {
+    if !ui.player_frame.is_visible() {
         return;
     }
 

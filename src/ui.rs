@@ -257,7 +257,7 @@ pub fn select_speed(speed: f64) {
 /// Handles the keys of the player, which follow the ones of mpv. Returns whether it was one.
 fn player_key(key: gdk::Key, shift: bool) -> bool {
     let ui = get();
-    if ui.player.id().is_none() {
+    if !ui.player_frame.is_visible() {
         return false;
     }
 
@@ -272,6 +272,15 @@ fn player_key(key: gdk::Key, shift: bool) -> bool {
         .is_some_and(|widget| widget.is::<gtk::Editable>())
     {
         return false;
+    }
+    // While the video downloads there is nothing to control yet, but it can fill the window.
+    if ui.player.id().is_none() {
+        match key {
+            gdk::Key::f | gdk::Key::F if shift => nav::toggle_theater(),
+            gdk::Key::f | gdk::Key::F => nav::toggle_fullscreen(),
+            _ => return false,
+        }
+        return true;
     }
     let arrows_taken =
         inside(&|widget| widget.is::<gtk::DropDown>() || widget.is::<gtk::Popover>());
