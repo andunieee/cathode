@@ -3,11 +3,3 @@
 /.flatpak-builder
 /build-dir
 /repo
-/skyshelf.jsonl
-/skyshelf.meta.jsonl
-/skyshelf.published.jsonl
-/skyshelf_key
-/videos.jsonl
-/videos.meta.jsonl
-/videos.published.jsonl
-/videos_secret_key

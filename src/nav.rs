@@ -1,9 +1,10 @@
 //! Pages, history, the queue and everything that decides what the widgets show.
 //! Everything here runs on the GTK main thread.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -16,7 +17,7 @@ use crate::controls;
 use crate::fetch::{
     Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo,
 };
-use crate::filter::Sort;
+use crate::filter::{Criteria, Sort};
 use crate::format;
 use crate::history;
 use crate::library;
@@ -36,6 +37,9 @@ const FEED_REFRESH_SECONDS: u32 = 30 * 60;
 const SUGGESTION_WAIT_SECONDS: u32 = 30;
 /// How often the people followed are checked for new recommendations.
 const SOCIAL_SYNC_SECONDS: u32 = 15 * 60;
+/// How long a page shown again keeps trying to scroll back to where it was left, while what it
+/// lists is still arriving.
+const SCROLL_BACK_MICROS: i64 = 10_000_000;
 
 #[derive(Clone)]
 enum Page {
@@ -95,9 +99,52 @@ impl Page {
             Page::Person { pubkey } => format!("p:{pubkey}"),
         }
     }
+
+    /// Whether it is a page of results, with the filter over them.
+    fn is_listing(&self) -> bool {
+        matches!(
+            self,
+            Page::Search { .. }
+                | Page::Playlist { .. }
+                | Page::Channel { .. }
+                | Page::Related(_)
+                | Page::Allowed { .. }
+                | Page::Person { .. }
+        )
+    }
+}
+
+/// How far a scrolled window of a page was scrolled, across and down.
+type Scroll = (glib::WeakRef<gtk::ScrolledWindow>, f64, f64);
+
+/// A page of the history of the pages, with what it showed, to show it again as it was left.
+struct Visit {
+    page: Page,
+    /// The results it lists. They stay what they were for this page, even if the same results
+    /// are asked for again later.
+    listing: Option<Rc<RefCell<Listing>>>,
+    /// What the filter of the results let through.
+    criteria: Criteria,
+    /// How far the scrolled windows of the page were scrolled, empty until it is left.
+    scrolls: Vec<Scroll>,
+    /// How many videos the history page showed.
+    watched_shown: usize,
+}
+
+impl Visit {
+    fn new(page: Page) -> Self {
+        Self {
+            page,
+            listing: None,
+            criteria: Criteria::default(),
+            scrolls: Vec::new(),
+            watched_shown: 0,
+        }
+    }
 }
 
 /// A listing as far as it was received.
+#[derive(Default)]
 struct Listing {
     entries: Vec<Entry>,
     /// The channels of a search.
@@ -124,11 +171,14 @@ const WATCHED_FRACTION: f64 = 0.9;
 
 struct State {
     requests: Option<UnboundedSender<Request>>,
-    history: Vec<Page>,
+    history: Vec<Visit>,
     index: usize,
+    /// Counts the times a page was shown, so scrolling one back stops once another is shown.
+    shown_count: u64,
 
-    /// Listings and video details already fetched, so going back doesn't wait on yt-dlp again.
-    listings: HashMap<String, Listing>,
+    /// The latest listing of each key, the one the responses go to, and video details already
+    /// fetched, so going to another page doesn't wait on yt-dlp again.
+    listings: HashMap<String, Rc<RefCell<Listing>>>,
     infos: HashMap<String, VideoInfo>,
     /// Videos whose details were asked for, because the cache doesn't know them or to learn
     /// their original title.
@@ -149,9 +199,6 @@ struct State {
     /// What the channels say about themselves, by channel id, and the ones asked for.
     channel_abouts: HashMap<String, crate::fetch::ChannelAbout>,
     channel_abouts_requested: HashSet<String>,
-    /// The key of the last page of results shown, to know when the filter of the results is for
-    /// another one.
-    shown_key: String,
     waiting_pictures: HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>,
 
     queue: Vec<QueueItem>,
@@ -211,13 +258,16 @@ struct State {
     history_offset: u64,
     history_done: bool,
     history_day: Option<String>,
+    /// How many videos the history page shows.
+    watched_shown: usize,
 }
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State {
         requests: None,
-        history: vec![Page::Home],
+        history: vec![Visit::new(Page::Home)],
         index: 0,
+        shown_count: 0,
         listings: HashMap::new(),
         pending_seek: None,
         positions: HashMap::new(),
@@ -238,7 +288,6 @@ thread_local! {
         social_relay_lists: HashMap::new(),
         channel_abouts: HashMap::new(),
         channel_abouts_requested: HashSet::new(),
-        shown_key: String::new(),
         waiting_pictures: HashMap::new(),
         queue: Vec::new(),
         queue_downloading: None,
@@ -261,6 +310,7 @@ thread_local! {
         history_offset: u64::MAX,
         history_done: true,
         history_day: None,
+        watched_shown: 0,
     });
 }
 
@@ -278,7 +328,7 @@ pub fn send(request: Request) {
 }
 
 fn current() -> Page {
-    with(|state| state.history[state.index].clone())
+    with(|state| state.history[state.index].page.clone())
 }
 
 pub fn toast(message: &str) {
@@ -506,12 +556,57 @@ fn append_entries(ui: &Ui, entries: &[Entry]) {
     }
 }
 
-fn update_results_status(key: &str) {
-    let (count, done) = with(|state| {
-        state
-            .listings
-            .get(key)
-            .map_or((0, true), |listing| (listing.entries.len(), listing.done))
+/// The listing of the page on screen, if it is a page of results.
+fn shown_listing() -> Option<Rc<RefCell<Listing>>> {
+    with(|state| state.history[state.index].listing.clone())
+}
+
+/// Whether the page on screen shows `listing`.
+fn shows(listing: &Rc<RefCell<Listing>>) -> bool {
+    shown_listing().is_some_and(|shown| Rc::ptr_eq(&shown, listing))
+}
+
+/// Makes `listing` the one of the page on screen.
+fn set_shown_listing(listing: &Rc<RefCell<Listing>>) {
+    with(|state| {
+        let index = state.index;
+        state.history[index].listing = Some(listing.clone());
+    });
+}
+
+/// The listing kept for the page on screen, when it can be shown again as it is: it was all
+/// received, or it is still the one being received. One that failed or was given up on halfway
+/// is asked for again.
+fn kept_listing(key: &str) -> Option<Rc<RefCell<Listing>>> {
+    let listing = shown_listing()?;
+    let usable = listing.borrow().done
+        || with(|state| {
+            state
+                .listings
+                .get(key)
+                .is_some_and(|latest| Rc::ptr_eq(latest, &listing))
+        });
+    usable.then_some(listing)
+}
+
+/// Fills the results with what `listing` has so far.
+fn show_entries(ui: &Ui, key: &str, listing: &Rc<RefCell<Listing>>) {
+    ui.stack.set_visible_child_name("results");
+    ui.store.remove_all();
+    let (entries, channels) = {
+        let listing = listing.borrow();
+        (listing.entries.clone(), listing.channels.clone())
+    };
+    show_channel_results(&channels);
+    note_listed(key, &entries);
+    append_entries(ui, &entries);
+    update_results_status();
+}
+
+fn update_results_status() {
+    let (count, done) = shown_listing().map_or((0, true), |listing| {
+        let listing = listing.borrow();
+        (listing.entries.len(), listing.done)
     });
 
     let ui = ui::get();
@@ -533,19 +628,13 @@ fn update_results_status(key: &str) {
 /// The filter of the results changed, the ones listed so far are sifted through again.
 pub fn results_filter_changed() {
     let ui = ui::get();
-    let key = current().key();
-    let entries = with(|state| {
-        state
-            .listings
-            .get(&key)
-            .map(|listing| listing.entries.clone())
-    });
-    let Some(entries) = entries else {
+    let Some(listing) = shown_listing() else {
         return;
     };
+    let entries = listing.borrow().entries.clone();
     ui.store.remove_all();
     append_entries(&ui, &entries);
-    update_results_status(&key);
+    update_results_status();
 }
 
 /// Fills the row of channels above the results, which is hidden when there are none.
@@ -577,42 +666,26 @@ fn show_channel_results(channels: &[ChannelRef]) {
         .set_visible(ui.channel_results.first_child().is_some());
 }
 
+/// Shows the results the page had, the latest ones of its key for a page not shown before, or
+/// asks for them.
 fn show_listing(key: String, source: Source) {
     let ui = ui::get();
-    ui.stack.set_visible_child_name("results");
-    ui.store.remove_all();
-
-    show_channel_results(&[]);
-    let cached = with(|state| {
-        state
-            .listings
-            .get(&key)
-            .map(|l| (l.entries.clone(), l.channels.clone()))
-    });
-    match cached {
-        Some((entries, channels)) => {
-            show_channel_results(&channels);
-            note_listed(&key, &entries);
-            append_entries(&ui, &entries);
-        }
-        None => {
-            with(|state| {
-                state.listings.insert(
-                    key.clone(),
-                    Listing {
-                        entries: Vec::new(),
-                        channels: Vec::new(),
-                        done: false,
-                    },
-                )
-            });
-            send(Request::Listing {
-                key: key.clone(),
-                source,
-            });
-        }
+    let (listing, fetch) = match kept_listing(&key) {
+        Some(listing) => (listing, false),
+        None => with(|state| match state.listings.get(&key) {
+            Some(latest) => (latest.clone(), false),
+            None => {
+                let listing = Rc::new(RefCell::new(Listing::default()));
+                state.listings.insert(key.clone(), listing.clone());
+                (listing, true)
+            }
+        }),
+    };
+    set_shown_listing(&listing);
+    show_entries(&ui, &key, &listing);
+    if fetch {
+        send(Request::Listing { key, source });
     }
-    update_results_status(&key);
 }
 
 // Video page
@@ -919,9 +992,16 @@ fn shorts_hidden() -> bool {
 /// The settings that leave Shorts out of channel listings changed.
 pub fn shorts_hidden_changed() {
     // The channel listings saved so far may still have Shorts in them.
-    with(|state| state.listings.retain(|key, _| !key.starts_with("c:")));
+    with(|state| {
+        state.listings.retain(|key, _| !key.starts_with("c:"));
+        for visit in &mut state.history {
+            if matches!(visit.page, Page::Channel { .. }) {
+                visit.listing = None;
+            }
+        }
+    });
     if matches!(current(), Page::Channel { .. }) {
-        show();
+        show_again();
     } else if matches!(current(), Page::Home) && !profile::restricted() {
         show_feed();
     }
@@ -1034,7 +1114,7 @@ pub fn set_restricted(restricted: bool) {
     with(|state| {
         // The channel listings saved may have the Shorts the restricted mode leaves out.
         state.listings.retain(|key, _| !key.starts_with("c:"));
-        state.history = vec![Page::Home];
+        state.history = vec![Visit::new(Page::Home)];
         state.index = 0;
     });
     apply_mode();
@@ -1215,30 +1295,26 @@ pub fn toggle_allowed() {
 /// Makes the UI show the current history entry.
 fn show() {
     let ui = ui::get();
-    let (page, can_back, can_forward) = with(|state| {
+    let (page, criteria, scrolls, watched_shown, can_back, can_forward, shown) = with(|state| {
+        state.shown_count += 1;
+        let visit = &state.history[state.index];
         (
-            state.history[state.index].clone(),
+            visit.page.clone(),
+            visit.criteria.clone(),
+            visit.scrolls.clone(),
+            visit.watched_shown,
             state.index > 0,
             state.index + 1 < state.history.len(),
+            state.shown_count,
         )
     });
     ui.back.set_sensitive(can_back);
     ui.forward.set_sensitive(can_forward);
 
     let key = page.key();
-    // The filter of the results is for the page it was set on, it stays while a video opened
-    // from there is looked at.
-    let listed = matches!(
-        page,
-        Page::Search { .. }
-            | Page::Playlist { .. }
-            | Page::Channel { .. }
-            | Page::Related(_)
-            | Page::Allowed { .. }
-            | Page::Person { .. }
-    );
-    if listed && with(|state| std::mem::replace(&mut state.shown_key, key.clone())) != key {
-        ui.results_filter.clear();
+    // Each page of results has its own filter, cleared on one not shown before.
+    if page.is_listing() {
+        ui.results_filter.set_criteria(&criteria);
     }
     clear_about(&ui);
     match page {
@@ -1332,7 +1408,7 @@ fn show() {
             show_listing(key, Source::Related { id: entry.id });
         }
         Page::Cache => show_cache(),
-        Page::History => show_history(),
+        Page::History => show_history(watched_shown),
         Page::Collection(name) => {
             ui.stack.set_visible_child_name("collection");
             library::show_collection(&name);
@@ -1349,6 +1425,122 @@ fn show() {
     update_details(&ui);
     update_allow_buttons();
     update_subscribe_button();
+    scroll_back(&ui, scrolls, shown);
+}
+
+/// The scrolled windows of the page on screen, not those inside them.
+fn page_scrolls(ui: &Ui) -> Vec<gtk::ScrolledWindow> {
+    fn find(widget: &gtk::Widget, found: &mut Vec<gtk::ScrolledWindow>) {
+        if let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() {
+            found.push(window.clone());
+            return;
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            find(&widget, found);
+            child = widget.next_sibling();
+        }
+    }
+    let mut found = Vec::new();
+    if let Some(page) = ui.stack.visible_child() {
+        find(&page, &mut found);
+    }
+    found
+}
+
+/// Keeps how the page on screen is left: the filter of its results, how far it is scrolled and
+/// how much of the history it shows.
+fn remember_view() {
+    let ui = ui::get();
+    let listing = current().is_listing();
+    let criteria = if listing {
+        ui.results_filter.criteria()
+    } else {
+        Criteria::default()
+    };
+    let scrolls: Vec<Scroll> = page_scrolls(&ui)
+        .iter()
+        .map(|window| {
+            (
+                window.downgrade(),
+                window.hadjustment().value(),
+                window.vadjustment().value(),
+            )
+        })
+        .collect();
+    with(|state| {
+        let watched_shown = state.watched_shown;
+        let visit = &mut state.history[state.index];
+        visit.criteria = criteria;
+        visit.scrolls = scrolls;
+        if matches!(visit.page, Page::History) {
+            visit.watched_shown = watched_shown;
+        }
+    });
+}
+
+/// Shows the page on screen again, as it is now, where it is scrolled to.
+fn show_again() {
+    remember_view();
+    show();
+}
+
+/// Scrolls the page back to where it was left, or to the top of one not shown before. What it
+/// lists may not be laid out yet or still be arriving, so this is tried again on each frame
+/// until it is reached, the page is scrolled by hand, or another one is shown (`shown`).
+fn scroll_back(ui: &Ui, scrolls: Vec<Scroll>, shown: u64) {
+    let scrolls = if scrolls.is_empty() {
+        page_scrolls(ui)
+            .iter()
+            .map(|window| (window.downgrade(), 0.0, 0.0))
+            .collect()
+    } else {
+        scrolls
+    };
+    let started = glib::monotonic_time();
+    for (window, across, down) in scrolls {
+        let Some(window) = window.upgrade() else {
+            continue;
+        };
+        let frames = Cell::new(0);
+        // Where each adjustment was left on the last frame, and how long it was then.
+        let last: Cell<Option<[(f64, f64); 2]>> = Cell::new(None);
+        window.add_tick_callback(move |window, _| {
+            if with(|state| state.shown_count) != shown
+                || glib::monotonic_time() - started > SCROLL_BACK_MICROS
+            {
+                return glib::ControlFlow::Break;
+            }
+            let adjustments = [(window.hadjustment(), across), (window.vadjustment(), down)];
+            // The first frames lay the page out, which may move it.
+            frames.set(frames.get() + 1);
+            let moved = |(adjustment, _): &(gtk::Adjustment, f64), (value, upper): (f64, f64)| {
+                (adjustment.value() - value).abs() > 0.5 && adjustment.upper() == upper
+            };
+            if frames.get() > 3
+                && let Some(last) = last.get()
+                && adjustments.iter().zip(last).any(|(a, l)| moved(a, l))
+            {
+                return glib::ControlFlow::Break;
+            }
+            let mut reached = true;
+            for (adjustment, target) in &adjustments {
+                if (adjustment.value() - target).abs() > 0.5 {
+                    adjustment.set_value(*target);
+                }
+                reached &= (adjustment.value() - target).abs() <= 0.5;
+            }
+            last.set(Some(
+                adjustments.map(|(adjustment, _)| (adjustment.value(), adjustment.upper())),
+            ));
+            // Laid out where it should be, and staying there.
+            if reached && frames.get() > 3 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
 }
 
 fn navigate(page: Page) {
@@ -1358,9 +1550,11 @@ fn navigate(page: Page) {
         return;
     }
 
+    remember_view();
     let reload = with(|state| {
         let key = page.key();
-        if state.history[state.index].key() == key {
+        let index = state.index;
+        if state.history[index].page.key() == key {
             // Repeating a search refreshes it, anything else is already on screen.
             let reload = matches!(
                 page,
@@ -1368,12 +1562,13 @@ fn navigate(page: Page) {
             );
             if reload {
                 state.listings.remove(&key);
+                state.history[index] = Visit::new(page);
             }
             return reload;
         }
 
-        state.history.truncate(state.index + 1);
-        state.history.push(page);
+        state.history.truncate(index + 1);
+        state.history.push(Visit::new(page));
         state.index += 1;
         true
     });
@@ -1514,19 +1709,10 @@ pub fn search_allowed(query: &str) {
 /// Shows the results of a search of what the restricted mode allows, as they are found.
 fn show_allowed(key: String, query: &str) {
     let ui = ui::get();
-    ui.stack.set_visible_child_name("results");
-    ui.store.remove_all();
-    show_channel_results(&[]);
-
-    let cached = with(|state| {
-        state
-            .listings
-            .get(&key)
-            .map(|listing| listing.entries.clone())
-    });
-    if let Some(entries) = cached {
-        append_entries(&ui, &entries);
-        update_results_status(&key);
+    let cached = kept_listing(&key).or_else(|| with(|state| state.listings.get(&key).cloned()));
+    if let Some(listing) = cached {
+        set_shown_listing(&listing);
+        show_entries(&ui, &key, &listing);
         return;
     }
 
@@ -1537,45 +1723,40 @@ fn show_allowed(key: String, query: &str) {
             if state
                 .listings
                 .get(&old)
-                .is_some_and(|listing| !listing.done)
+                .is_some_and(|listing| !listing.borrow().done)
             {
                 state.listings.remove(&old);
             }
         });
     }
-    with(|state| {
-        state.listings.insert(
-            key.clone(),
-            Listing {
-                entries: Vec::new(),
-                channels: Vec::new(),
-                done: false,
-            },
-        )
-    });
-    update_results_status(&key);
+    let listing = Rc::new(RefCell::new(Listing::default()));
+    with(|state| state.listings.insert(key.clone(), listing.clone()));
+    set_shown_listing(&listing);
+    show_entries(&ui, &key, &listing);
     let sink_key = key.clone();
+    let sink = listing.clone();
     let id = allowed::start(
         query,
         Box::new(move |entries, done| {
             let key = &sink_key;
+            {
+                let mut listing = sink.borrow_mut();
+                listing.entries.extend(entries.iter().cloned());
+                listing.done = done;
+            }
             with(|state| {
-                if let Some(listing) = state.listings.get_mut(key) {
-                    listing.entries.extend(entries.iter().cloned());
-                    listing.done = done;
-                }
                 if done && state.allowed_search.as_ref().is_some_and(|(_, k)| k == key) {
                     state.allowed_search = None;
                 }
             });
-            if current().key() == *key {
+            if shows(&sink) {
                 append_entries(&ui::get(), &entries);
-                update_results_status(key);
+                update_results_status();
             }
         }),
     );
     // A search that found everything at once is done already.
-    if !with(|state| state.listings.get(&key).is_some_and(|listing| listing.done)) {
+    if !listing.borrow().done {
         with(|state| state.allowed_search = Some((id, key)));
     }
 }
@@ -1683,6 +1864,7 @@ pub fn collection_forgotten(name: &str) {
 }
 
 pub fn back() {
+    remember_view();
     if with(|state| {
         let can = state.index > 0;
         if can {
@@ -1695,6 +1877,7 @@ pub fn back() {
 }
 
 pub fn forward() {
+    remember_view();
     if with(|state| {
         let can = state.index + 1 < state.history.len();
         if can {
@@ -4159,6 +4342,16 @@ fn showing_person(pubkey: &str) -> bool {
     matches!(current(), Page::Person { pubkey: shown } if shown == pubkey)
 }
 
+/// Shows the page of the person on screen again, with what the syncs brought since.
+fn show_person_again() {
+    remember_view();
+    with(|state| {
+        let index = state.index;
+        state.history[index].listing = None;
+    });
+    show();
+}
+
 /// Shows the page of a person followed: who they say they are, their relays and the videos they
 /// recommend, all from what the syncs saved.
 fn show_person(key: String, hex: &str) {
@@ -4198,20 +4391,16 @@ fn show_person(key: String, hex: &str) {
         });
     }
 
-    // Read again each time, the syncs may have brought more.
-    let entries = social::videos_of(pubkey);
-    append_entries(&ui, &entries);
-    with(|state| {
-        state.listings.insert(
-            key.clone(),
-            Listing {
-                entries,
-                channels: Vec::new(),
-                done: true,
-            },
-        )
+    // Read again for each new page of the person, the syncs may have brought more.
+    let listing = shown_listing().unwrap_or_else(|| {
+        Rc::new(RefCell::new(Listing {
+            entries: social::videos_of(pubkey),
+            channels: Vec::new(),
+            done: true,
+        }))
     });
-    update_results_status(&key);
+    set_shown_listing(&listing);
+    show_entries(&ui, &key, &listing);
 }
 
 /// Empties what the page says about the channel or person shown.
@@ -4422,7 +4611,8 @@ fn channel_listing_id(key: &str) -> Option<&str> {
 
 // History page
 
-fn show_history() {
+/// Shows the history from its latest video, as many as `shown` at first if it was shown before.
+fn show_history(shown: usize) {
     let ui = ui::get();
     ui.stack.set_visible_child_name("history");
 
@@ -4437,8 +4627,9 @@ fn show_history() {
         state.history_offset = u64::MAX;
         state.history_done = false;
         state.history_day = None;
+        state.watched_shown = 0;
     });
-    history_more();
+    history_more(shown.max(HISTORY_PAGE));
 }
 
 /// Called as the page is scrolled (`scrolled`) or resized: reads more of the file if the end of
@@ -4460,21 +4651,23 @@ pub fn history_check(scrolled: bool) {
         page > 0.0 && adjustment.upper() <= page
     };
     if more {
-        history_more();
+        history_more(HISTORY_PAGE);
     }
 }
 
-fn history_more() {
+/// Shows `count` more videos of the history, if there are.
+fn history_more(count: usize) {
     let ui = ui::get();
     let (offset, done) = with(|state| (state.history_offset, state.history_done));
     if done {
         return;
     }
 
-    let (watched, offset, done) = history::read(offset, HISTORY_PAGE);
+    let (watched, offset, done) = history::read(offset, count);
     with(|state| {
         state.history_offset = offset;
         state.history_done = done;
+        state.watched_shown += watched.len();
     });
 
     for item in watched {
@@ -4569,6 +4762,7 @@ fn history_more() {
                 ui::refresh_watched();
                 // The place to read on from is before the rows shown, it doesn't move.
                 list.remove(&row);
+                with(|state| state.watched_shown = state.watched_shown.saturating_sub(1));
                 if list.first_child().is_none() {
                     let ui = ui::get();
                     if let Some(heading) = list.prev_sibling() {
@@ -4583,7 +4777,7 @@ fn history_more() {
                         if with(|state| state.history_done) {
                             ui.history_empty.set_visible(true);
                         } else {
-                            history_more();
+                            history_more(HISTORY_PAGE);
                         }
                     }
                 }
@@ -4948,18 +5142,12 @@ pub fn handle(response: Response) {
                 entries
             };
 
-            let newest = with(|state| {
-                let listing = state
-                    .listings
-                    .entry(key.clone())
-                    .or_insert_with(|| Listing {
-                        entries: Vec::new(),
-                        channels: Vec::new(),
-                        done: false,
-                    });
+            let listing = with(|state| state.listings.entry(key.clone()).or_default().clone());
+            let newest = {
+                let mut listing = listing.borrow_mut();
                 listing.entries.extend(entries.iter().cloned());
                 listing.entries.clone()
-            });
+            };
 
             // A subscribed channel's page tells what's new there as well as a refresh would.
             if let Some(id) = channel_listing_id(&key).filter(|id| subscriptions::is_subscribed(id))
@@ -4969,34 +5157,36 @@ pub fn handle(response: Response) {
 
             note_listed(&key, &entries);
 
-            if current().key() == key {
+            if shows(&listing) {
                 append_entries(&ui, &entries);
-                update_results_status(&key);
+                update_results_status();
             }
         }
         Response::Channels { key, channels } => {
-            let all = with(|state| {
-                state.listings.get_mut(&key).map(|listing| {
-                    listing.channels.extend(channels);
-                    listing.channels.clone()
-                })
-            });
-            if let Some(all) = all.filter(|_| current().key() == key) {
+            let Some(listing) = with(|state| state.listings.get(&key).cloned()) else {
+                return;
+            };
+            let all = {
+                let mut listing = listing.borrow_mut();
+                listing.channels.extend(channels);
+                listing.channels.clone()
+            };
+            if shows(&listing) {
                 show_channel_results(&all);
             }
         }
         Response::ListingDone { key, error } => {
-            let failed = error.is_some();
-            with(|state| {
-                if failed {
-                    // Not remembered, so that visiting the page again tries again.
-                    state.listings.remove(&key);
-                } else if let Some(listing) = state.listings.get_mut(&key) {
-                    listing.done = true;
-                }
-            });
+            let Some(listing) = with(|state| state.listings.get(&key).cloned()) else {
+                return;
+            };
+            if error.is_some() {
+                // Not remembered, so that visiting the page again tries again.
+                with(|state| state.listings.remove(&key));
+            } else {
+                listing.borrow_mut().done = true;
+            }
 
-            if current().key() == key {
+            if shows(&listing) {
                 match error {
                     Some(error) => {
                         let message = glib::markup_escape_text(&format!("Failed to load: {error}"));
@@ -5007,7 +5197,7 @@ pub fn handle(response: Response) {
                         };
                         ui.results_status.set_markup(&format!("{message}{link}"));
                     }
-                    None => update_results_status(&key),
+                    None => update_results_status(),
                 }
             }
         }
@@ -5039,7 +5229,7 @@ pub fn handle(response: Response) {
                         let shown = if shown.title.is_empty() {
                             with(|state| {
                                 let index = state.index;
-                                state.history[index] = Page::Video(entry.clone());
+                                state.history[index].page = Page::Video(entry.clone());
                             });
                             entry
                         } else {
@@ -5112,7 +5302,7 @@ pub fn handle(response: Response) {
             let changed = social::synced(&pubkey, result);
             if showing_person(&pubkey) {
                 // The relay list comes with the sync, even when no video does.
-                show();
+                show_person_again();
             } else if changed && matches!(current(), Page::Home) && !profile::restricted() {
                 feed_tab_changed();
             } else {
@@ -5227,7 +5417,7 @@ pub fn handle(response: Response) {
             }
             refresh_following();
             if showing_person(&pubkey) {
-                show();
+                show_person_again();
             }
         }
         Response::ChannelAbout { id, about } => {

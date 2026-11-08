@@ -357,10 +357,21 @@ impl Filter {
         self.words.set_position(-1);
     }
 
-    /// Lets everything through again, in the order it was listed in, without telling.
-    pub fn clear(&self) {
-        self.set_quietly(|| self.reset());
-        self.clear_button.set_visible(false);
+    /// Lets through what `criteria` does, in its order, without telling. The menus of the list's
+    /// own show everything.
+    pub fn set_criteria(&self, criteria: &Criteria) {
+        fn position<T: PartialEq>(all: &[(T, &str)], value: &T) -> u32 {
+            all.iter().position(|(item, _)| item == value).unwrap_or(0) as u32
+        }
+        self.set_quietly(|| {
+            self.reset();
+            self.words.set_text(&criteria.words);
+            self.age.set_selected(position(&Age::ALL, &criteria.age));
+            self.length
+                .set_selected(position(&Length::ALL, &criteria.length));
+            self.sort.set_selected(position(&Sort::ALL, &criteria.sort));
+        });
+        self.refresh();
     }
 
     fn reset(&self) {

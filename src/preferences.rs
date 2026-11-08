@@ -212,9 +212,7 @@ fn general() -> adw::PreferencesPage {
             nav::default_language_changed();
         },
     );
-    let languages = adw::PreferencesGroup::builder()
-        .title("Language")
-        .build();
+    let languages = adw::PreferencesGroup::builder().title("Language").build();
     languages.add(&language);
 
     let middle_thumbnails = adw::SwitchRow::builder()
@@ -326,9 +324,7 @@ fn general() -> adw::PreferencesPage {
         }
         Err(error) => nav::toast(&format!("Could not write the extension: {error}")),
     });
-    let browser_row = adw::ActionRow::builder()
-        .title("Chrome extension")
-        .build();
+    let browser_row = adw::ActionRow::builder().title("Chrome extension").build();
     browser_row.add_suffix(&browser_button);
     let browser = adw::PreferencesGroup::builder().title("Browser").build();
     browser.add(&browser_row);
@@ -413,9 +409,7 @@ fn remote_page() -> adw::PreferencesPage {
             pair_button.set_sensitive(row.is_active());
         }
     });
-    let pair = adw::ActionRow::builder()
-        .title("Pair a phone")
-        .build();
+    let pair = adw::ActionRow::builder().title("Pair a phone").build();
     pair.add_suffix(&pair_button);
 
     let android = gtk::LinkButton::builder()
@@ -522,9 +516,7 @@ fn social_page() -> adw::PreferencesPage {
         }
     });
 
-    let group = adw::PreferencesGroup::builder()
-        .title("You")
-        .build();
+    let group = adw::PreferencesGroup::builder().title("You").build();
     group.add(&name);
     group.add(&secret_key);
     group.add(&public_key);
