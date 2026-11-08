@@ -342,6 +342,10 @@ pub enum Request {
     SocialProfile {
         pubkey: String,
     },
+    /// Downloads the latest recommendations of a person from the relays they write to.
+    SocialLatest {
+        pubkey: String,
+    },
 }
 
 impl Request {
@@ -368,6 +372,9 @@ impl Request {
                 format!("recommendations of {pubkey} since {since}")
             }
             Request::SocialProfile { pubkey } => format!("profile of {pubkey}"),
+            Request::SocialLatest { pubkey } => {
+                format!("latest recommendations of {pubkey}")
+            }
         }
     }
 }
@@ -401,6 +408,14 @@ impl Response {
                 "profile of {pubkey}, with a picture: {}, with a relay list: {relay_list}",
                 picture.is_some()
             ),
+            Response::SocialLatest { pubkey, result } => match result {
+                Ok(entries) => {
+                    format!("{} latest recommendations of {pubkey}", entries.len())
+                }
+                Err(error) => {
+                    format!("latest recommendations of {pubkey} failed: {error}")
+                }
+            },
             Response::Captions {
                 id,
                 mode,
@@ -500,6 +515,11 @@ pub enum Response {
         pubkey: String,
         picture: Option<Thumbnail>,
         relay_list: bool,
+    },
+    /// The latest recommendations of the person, newest first, saved to the database.
+    SocialLatest {
+        pubkey: String,
+        result: Result<Vec<Entry>, String>,
     },
     /// Progress of the startup check of the external tools.
     Setup(crate::tools::Status),
@@ -702,6 +722,15 @@ async fn run(
                         pubkey,
                         picture,
                         relay_list: found.relay_list,
+                    });
+                });
+            }
+            Request::SocialLatest { pubkey } => {
+                let network = network.clone();
+                tokio::spawn(async move {
+                    on_response(Response::SocialLatest {
+                        result: crate::social::fetch_latest(&network, &pubkey).await,
+                        pubkey,
                     });
                 });
             }

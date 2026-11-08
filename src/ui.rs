@@ -74,10 +74,10 @@ pub struct Ui {
     /// The channels a search found, above its videos.
     pub channel_results: gtk::Box,
     pub channel_results_row: gtk::ScrolledWindow,
-    /// What the channel or person shown says about themselves, under the header.
+    /// What the channel or person shown says about themselves, in `page_details`.
     pub page_about: gtk::Label,
-    /// The link and the rest of what is known about the channel or person shown, folded away,
-    /// and the arrow by the title that unfolds them.
+    /// The link, the description and the rest of what is known about the channel or person
+    /// shown, folded away, and the arrow by the title that unfolds them.
     pub page_details: gtk::Revealer,
     pub page_details_toggle: gtk::ToggleButton,
     pub page_facts: gtk::Box,
@@ -1062,9 +1062,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .wrap_mode(pango::WrapMode::WordChar)
         .selectable(true)
         .focusable(false)
-        .margin_start(12)
-        .margin_end(12)
-        .margin_bottom(6)
         .visible(false)
         .build();
     let channel_link = LinkRow::new();
@@ -1074,6 +1071,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     details_content.set_margin_end(12);
     details_content.set_margin_bottom(6);
     details_content.append(&channel_link.row);
+    details_content.append(&page_about);
     details_content.append(&page_facts);
     let page_details = gtk::Revealer::builder()
         .child(&details_content)
@@ -1096,7 +1094,6 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
     let results = gtk::Box::new(gtk::Orientation::Vertical, 0);
     results.append(&channel_header);
     results.append(&page_details);
-    results.append(&page_about);
     results.append(&channel_results_row);
     results.append(&results_filter.bar);
     results.append(&results_status);

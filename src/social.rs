@@ -27,7 +27,9 @@
 //! The people followed are filled in with a few to start with the first time the recommendations
 //! are turned on, and from then on are only what that file says. Each person's recommendations are
 //! looked for only on the relays they say they write to, in their relay list as the indexers have
-//! it. Their names and pictures come from their metadata, kept with the events.
+//! it. Their names and pictures come from their metadata, kept with the events. Opening the page
+//! of a person asks those relays for their latest recommendations, followed or not, and the page
+//! shows the latest 20 of them.
 //!
 //! The events are kept in `social.redb` in the data directory, and each followed person is
 //! synced on their own: `social_sync.json` there keeps up to when each one was downloaded, so
@@ -70,6 +72,8 @@ const INDEXERS: [&str; 5] = [
 ];
 /// How many of the relays a person writes to are asked.
 const OUTBOX_RELAYS: usize = 4;
+/// How many of the latest recommendations the page of a person shows.
+const LATEST_RECOMMENDATIONS: usize = 20;
 
 /// A person synced more recently than this isn't synced again.
 const SYNC_AGAIN_SECONDS: u32 = 10 * 60;
@@ -431,15 +435,24 @@ async fn relays_of(network: &Network, author: PubKey) -> Vec<String> {
         crate::log::warning!("Cannot save the relay list of {}: {error}", author.to_hex());
     }
 
+    match &newest {
+        Some(list) => write_relays_of(list),
+        None => Vec::new(),
+    }
+}
+
+/// The relays in the relay list that the person writes to, normalized, without duplicates, and
+/// only as many as are asked.
+fn write_relays_of(list: &ritualistic::Event) -> Vec<String> {
     let mut relays = Vec::new();
     let mut seen = HashSet::new();
-    let written = newest
-        .iter()
-        .flat_map(|list| list.tags.find_all("r"))
+    for relay in list
+        .tags
+        .find_all("r")
         .filter(|tag| tag.get(2).is_none_or(|marker| marker == "write"))
         .map(|tag| tag[1].clone())
-        .take(OUTBOX_RELAYS);
-    for relay in written {
+        .take(OUTBOX_RELAYS)
+    {
         if let Ok(url) = ritualistic::normalize_url(&relay)
             && seen.insert(url.to_string())
         {
@@ -447,6 +460,11 @@ async fn relays_of(network: &Network, author: PubKey) -> Vec<String> {
         }
     }
     relays
+}
+
+/// The relays the person writes to, from their relay list in the database, if it has one.
+fn saved_write_relays(pubkey: PubKey) -> Option<Vec<String>> {
+    newest_of(pubkey, RELAY_LIST).map(|list| write_relays_of(&list))
 }
 
 /// Both of the TLS backends of rustls end up built in, the relay connections can't pick one by
@@ -520,6 +538,75 @@ pub async fn sync(network: &Network, pubkey: &str, since: u32) -> Result<Synced,
         added,
         deleted,
     })
+}
+
+/// Downloads the latest recommendations of the person from the relays they write to, saves them
+/// and answers them, newest first, with at most `LATEST_RECOMMENDATIONS` of them.
+pub async fn fetch_latest(network: &Network, pubkey: &str) -> Result<Vec<Entry>, String> {
+    pick_tls();
+
+    let author: PubKey = pubkey.parse().map_err(|error| format!("{error}"))?;
+    let relays = match saved_write_relays(author) {
+        Some(relays) if !relays.is_empty() => relays,
+        _ => relays_of(network, author).await,
+    };
+    if relays.is_empty() {
+        return Err("no relay list was found".to_string());
+    }
+    let relays = reachable(network, relays).await;
+    if relays.is_empty() {
+        return Err("none of the relays could be reached".to_string());
+    }
+
+    let filter = Filter {
+        kinds: Some(vec![RECOMMENDATION]),
+        authors: Some(vec![author]),
+        limit: Some(LATEST_RECOMMENDATIONS),
+        ..Filter::default()
+    };
+    let mut queries = tokio::task::JoinSet::new();
+    for relay in relays {
+        let network = network.clone();
+        let filter = filter.clone();
+        queries.spawn(async move { collect(&network, &[relay], filter).await });
+    }
+    let mut events = Vec::new();
+    let mut seen = HashSet::new();
+    while let Some(result) = queries.join_next().await {
+        let Ok((found, _)) = result else {
+            continue;
+        };
+        events.extend(found.into_iter().filter(|event| seen.insert(event.id)));
+    }
+
+    let db = database()?;
+    let mut events: Vec<ritualistic::Event> = events
+        .into_iter()
+        .filter(|event| {
+            event.pubkey == author && event.kind == RECOMMENDATION && event.verify_signature()
+        })
+        .collect();
+    events.sort_by_key(|event| std::cmp::Reverse(event.created_at));
+
+    let mut entries = Vec::new();
+    let mut ids = HashSet::new();
+    for event in events {
+        if is_deleted(db, &event)? {
+            continue;
+        }
+        let Some(video) = recommendation_of(&event) else {
+            continue;
+        };
+        if !ids.insert(video.entry.id.clone()) {
+            continue;
+        }
+        save(db, &event)?;
+        entries.push(video.entry);
+        if entries.len() == LATEST_RECOMMENDATIONS {
+            break;
+        }
+    }
+    Ok(entries)
 }
 
 /// What looking up a person found.
@@ -652,6 +739,11 @@ pub fn synced(pubkey: &str, result: Result<Synced, String>) -> bool {
     })
 }
 
+/// Reads the recommendations from the database again next time, after new ones were saved.
+pub fn forget_ranked() {
+    RANKED.set(None);
+}
+
 /// How many people are being synced, how many failed the last time and why one did.
 pub fn progress() -> (usize, usize, Option<String>) {
     with(|state| {
@@ -697,7 +789,7 @@ pub fn relays(pubkey: PubKey) -> Option<Vec<(String, Option<String>)>> {
     )
 }
 
-/// The videos the person recommends, the most recently recommended first.
+/// The latest videos the person recommends, the most recently recommended first.
 pub fn videos_of(pubkey: PubKey) -> Vec<Entry> {
     let mut filters = [Filter {
         kinds: Some(vec![RECOMMENDATION]),
@@ -722,6 +814,7 @@ pub fn videos_of(pubkey: PubKey) -> Vec<Entry> {
         .iter()
         .filter_map(recommendation_of)
         .filter(|video| seen.insert(video.entry.id.clone()))
+        .take(LATEST_RECOMMENDATIONS)
         .map(|video| video.entry)
         .collect()
 }
@@ -1047,6 +1140,27 @@ mod tests {
 
         drop(db);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_relays_leave_out_the_read_only_ones() {
+        let list = event(vec![
+            vec!["r", "wss://write.example"],
+            vec!["r", "wss://both.example"],
+            vec!["r", "wss://read.example", "read"],
+            vec!["r", "wss://also-write.example", "write"],
+            vec!["r", "wss://write.example"],
+        ]);
+        let relays = write_relays_of(&list);
+        assert_eq!(relays.len(), 3);
+        assert!(relays.iter().all(|relay| !relay.contains("read.example")));
+        assert_eq!(
+            relays
+                .iter()
+                .filter(|relay| relay.contains("//write.example"))
+                .count(),
+            1
+        );
     }
 
     /// Hits the network, and saves to the data directory: `XDG_DATA_HOME` should point to an

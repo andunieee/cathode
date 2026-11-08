@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -37,6 +38,8 @@ const FEED_REFRESH_SECONDS: u32 = 30 * 60;
 const SUGGESTION_WAIT_SECONDS: u32 = 30;
 /// How often the people followed are checked for new recommendations.
 const SOCIAL_SYNC_SECONDS: u32 = 15 * 60;
+/// How long before the latest recommendations of a person are asked for again on their page.
+const SOCIAL_LATEST_SECONDS: u64 = 60;
 /// How long a page shown again keeps trying to scroll back to where it was left, while what it
 /// lists is still arriving.
 const SCROLL_BACK_MICROS: i64 = 10_000_000;
@@ -196,6 +199,10 @@ struct State {
     social_profiles_requested: HashSet<String>,
     /// Whether the indexers have a relay list of each person whose profile was looked up.
     social_relay_lists: HashMap<String, bool>,
+    /// When the latest recommendations of each person were asked for, by public key.
+    social_latest: HashMap<String, Instant>,
+    /// The people whose latest recommendations are still on the way.
+    social_latest_pending: HashSet<String>,
     /// What the channels say about themselves, by channel id, and the ones asked for.
     channel_abouts: HashMap<String, crate::fetch::ChannelAbout>,
     channel_abouts_requested: HashSet<String>,
@@ -286,6 +293,8 @@ thread_local! {
         social_pictures: HashMap::new(),
         social_profiles_requested: HashSet::new(),
         social_relay_lists: HashMap::new(),
+        social_latest: HashMap::new(),
+        social_latest_pending: HashSet::new(),
         channel_abouts: HashMap::new(),
         channel_abouts_requested: HashSet::new(),
         waiting_pictures: HashMap::new(),
@@ -4391,14 +4400,33 @@ fn show_person(key: String, hex: &str) {
         });
     }
 
-    // Read again for each new page of the person, the syncs may have brought more.
-    let listing = shown_listing().unwrap_or_else(|| {
-        Rc::new(RefCell::new(Listing {
-            entries: social::videos_of(pubkey),
-            channels: Vec::new(),
-            done: true,
-        }))
+    // Ask the relays they write to for their latest recommendations, unless they were asked for
+    // just now. What the database has is shown in the meantime.
+    let mut ask = false;
+    let pending = with(|state| {
+        let key = hex.to_string();
+        let stale = state
+            .social_latest
+            .get(&key)
+            .is_none_or(|asked| asked.elapsed() >= Duration::from_secs(SOCIAL_LATEST_SECONDS));
+        if stale && state.social_latest_pending.insert(key.clone()) {
+            state.social_latest.insert(key.clone(), Instant::now());
+            ask = true;
+        }
+        state.social_latest_pending.contains(&key)
     });
+    if ask {
+        send(Request::SocialLatest {
+            pubkey: hex.to_string(),
+        });
+    }
+
+    // Read again each time, the syncs and the relays may have brought more.
+    let listing = Rc::new(RefCell::new(Listing {
+        entries: social::videos_of(pubkey),
+        channels: Vec::new(),
+        done: !pending,
+    }));
     set_shown_listing(&listing);
     show_entries(&ui, &key, &listing);
 }
@@ -4413,7 +4441,9 @@ fn clear_about(ui: &ui::Ui) {
 
 /// Shows the details only when there is something in them.
 fn update_details(ui: &ui::Ui) {
-    let any = ui.channel_link.row.is_visible() || ui.page_facts.first_child().is_some();
+    let any = ui.channel_link.row.is_visible()
+        || ui.page_about.is_visible()
+        || ui.page_facts.first_child().is_some();
     ui.page_details.set_visible(any);
     ui.page_details_toggle.set_visible(any);
 }
@@ -5418,6 +5448,22 @@ pub fn handle(response: Response) {
             refresh_following();
             if showing_person(&pubkey) {
                 show_person_again();
+            }
+        }
+        Response::SocialLatest { pubkey, result } => {
+            with(|state| state.social_latest_pending.remove(&pubkey));
+            if let Err(error) = &result {
+                // What the database has stays, and the page asks again later.
+                crate::log::info!("no latest recommendations for {pubkey}: {error}");
+            }
+            social::forget_ranked();
+            let followed = pubkey
+                .parse::<ritualistic::PubKey>()
+                .is_ok_and(social::is_followed);
+            if showing_person(&pubkey) {
+                show_person_again();
+            } else if followed && matches!(current(), Page::Home) && !profile::restricted() {
+                feed_tab_changed();
             }
         }
         Response::ChannelAbout { id, about } => {
