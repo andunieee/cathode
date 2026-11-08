@@ -1365,7 +1365,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .cursor(&pointer())
         .build();
     let recommendation_filter = crate::filter::Filter::new(
-        "Most recommended",
+        "Listed order",
         vec![recommendation_category.clone()],
         nav::recommendation_filter_changed,
     );
