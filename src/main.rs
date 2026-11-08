@@ -15,6 +15,7 @@ mod history;
 mod instance;
 mod library;
 mod log;
+mod muted;
 mod nav;
 mod paths;
 mod player;

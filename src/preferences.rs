@@ -6,6 +6,7 @@ use adw::prelude::*;
 
 use crate::extension;
 use crate::fetch::Request;
+use crate::muted;
 use crate::nav;
 use crate::remote;
 use crate::settings::{self, BROWSERS, QUALITIES};
@@ -23,6 +24,13 @@ thread_local! {
     static RESTRICTED_ROW: RefCell<Option<gtk::ListBoxRow>> = const { RefCell::new(None) };
     /// The Social page in the settings sidebar.
     static SOCIAL_ROW: RefCell<Option<gtk::ListBoxRow>> = const { RefCell::new(None) };
+    /// The groups of the Muted & Hidden page, with what is muted and hidden in them.
+    static MUTED_CHANNELS: RefCell<Option<adw::PreferencesGroup>> = const { RefCell::new(None) };
+    static HIDDEN_VIDEOS: RefCell<Option<adw::PreferencesGroup>> = const { RefCell::new(None) };
+    /// The rows put in those groups, so they can be taken out again. A group is not a container
+    /// whose children can be walked, and its own child is its internal box, not a row.
+    static MUTED_CHANNEL_ROWS: RefCell<Vec<gtk::Widget>> = const { RefCell::new(Vec::new()) };
+    static HIDDEN_VIDEO_ROWS: RefCell<Vec<gtk::Widget>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Shows or hides a page in the settings sidebar.
@@ -667,6 +675,116 @@ fn link_row(title: &str, uri: String) -> adw::ActionRow {
     row
 }
 
+/// Empties a group of the rows put in it before, and remembers the rows added after.
+fn clear_group(
+    slot: &'static std::thread::LocalKey<RefCell<Vec<gtk::Widget>>>,
+    group: &adw::PreferencesGroup,
+) {
+    slot.with(|rows| {
+        for row in rows.borrow_mut().drain(..) {
+            group.remove(&row);
+        }
+    });
+}
+
+/// Empties a group and puts in it what is muted or hidden now, with a way to undo each.
+pub fn refresh_muted() {
+    MUTED_CHANNELS.with(|slot| {
+        let Some(group) = slot.borrow().clone() else {
+            return;
+        };
+        clear_group(&MUTED_CHANNEL_ROWS, &group);
+        let channels = muted::channels();
+        if channels.is_empty() {
+            let row = adw::ActionRow::builder()
+                .title("No muted channels")
+                .css_classes(["dim-label"])
+                .build();
+            group.add(&row);
+            MUTED_CHANNEL_ROWS.with(|rows| rows.borrow_mut().push(row.upcast()));
+        }
+        for channel in channels {
+            let row = adw::ActionRow::builder()
+                .title(&channel.name)
+                .subtitle("Channel")
+                .build();
+            let button = gtk::Button::builder()
+                .label("Unmute")
+                .cursor(&crate::ui::pointer())
+                .valign(gtk::Align::Center)
+                .build();
+            let id = channel.id.clone();
+            button.connect_clicked(move |_| nav::unmute_channel(&id));
+            row.add_suffix(&button);
+            group.add(&row);
+            MUTED_CHANNEL_ROWS.with(|rows| rows.borrow_mut().push(row.upcast()));
+        }
+    });
+
+    HIDDEN_VIDEOS.with(|slot| {
+        let Some(group) = slot.borrow().clone() else {
+            return;
+        };
+        clear_group(&HIDDEN_VIDEO_ROWS, &group);
+        let videos = muted::videos();
+        if videos.is_empty() {
+            let row = adw::ActionRow::builder()
+                .title("No hidden videos")
+                .css_classes(["dim-label"])
+                .build();
+            group.add(&row);
+            HIDDEN_VIDEO_ROWS.with(|rows| rows.borrow_mut().push(row.upcast()));
+        }
+        for video in videos {
+            let title = if video.title.is_empty() {
+                &video.id
+            } else {
+                &video.title
+            };
+            let row = adw::ActionRow::builder()
+                .title(title)
+                .subtitle(if video.channel.is_empty() {
+                    "Video"
+                } else {
+                    video.channel.as_str()
+                })
+                .build();
+            let button = gtk::Button::builder()
+                .label("Unhide")
+                .cursor(&crate::ui::pointer())
+                .valign(gtk::Align::Center)
+                .build();
+            let id = video.id.clone();
+            button.connect_clicked(move |_| nav::unhide_video(&id));
+            row.add_suffix(&button);
+            group.add(&row);
+            HIDDEN_VIDEO_ROWS.with(|rows| rows.borrow_mut().push(row.upcast()));
+        }
+    });
+}
+
+/// The page with the channels muted and the videos hidden, and the way to undo each.
+fn muted_page() -> adw::PreferencesPage {
+    let channels = adw::PreferencesGroup::builder()
+        .title("Muted channels")
+        .description("Their videos are left out of search results, recommendations, channel lists and the rest")
+        .build();
+    let videos = adw::PreferencesGroup::builder()
+        .title("Hidden videos")
+        .description(
+            "They are left out of search results, recommendations, channel lists and the rest",
+        )
+        .build();
+    MUTED_CHANNELS.with(|slot| *slot.borrow_mut() = Some(channels.clone()));
+    HIDDEN_VIDEOS.with(|slot| *slot.borrow_mut() = Some(videos.clone()));
+    refresh_muted();
+
+    let page = adw::PreferencesPage::new();
+    page.add(&channels);
+    page.add(&videos);
+    page
+}
+
 fn about() -> adw::PreferencesPage {
     let header = gtk::Box::new(gtk::Orientation::Vertical, 6);
     header.set_margin_top(24);
@@ -734,6 +852,7 @@ fn about() -> adw::PreferencesPage {
 pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
     let stack = gtk::Stack::new();
     stack.add_named(&general(), Some("general"));
+    stack.add_named(&muted_page(), Some("muted"));
     stack.add_named(parental, Some("parental"));
     stack.add_named(&remote_page(), Some("remote"));
     stack.add_named(&social_page(), Some("social"));
@@ -745,6 +864,7 @@ pub fn build(parental: &impl IsA<gtk::Widget>) -> gtk::Box {
         .build();
     for (name, title, icon) in [
         ("general", "General", "preferences-system-symbolic"),
+        ("muted", "Muted & Hidden", "view-conceal-symbolic"),
         ("parental", "Restricted Mode", "system-users-symbolic"),
         ("remote", "Remote Control", "phone-symbolic"),
         ("social", "Social", "system-users-symbolic"),

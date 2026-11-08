@@ -70,6 +70,8 @@ pub struct Ui {
     pub channel_entry: gtk::SearchEntry,
     pub allow_channel: gtk::Button,
     pub subscribe_button: gtk::Button,
+    /// Mutes the channel whose page is shown, or unmutes it.
+    pub mute_channel: gtk::Button,
     pub results_status: gtk::Label,
     /// The channels a search found, above its videos.
     pub channel_results: gtk::Box,
@@ -104,6 +106,8 @@ pub struct Ui {
     pub caption_tracks: RefCell<(Vec<crate::player::CaptionTrack>, Option<i64>)>,
     pub allow_video: gtk::Button,
     pub related: gtk::Button,
+    /// Hides the video whose page is shown, or unhides it.
+    pub hide_video: gtk::Button,
 
     pub cache_list: gtk::ListBox,
     pub cache_select_all: gtk::CheckButton,
@@ -764,6 +768,30 @@ fn fill_menu(menu: &gtk::Box, popover: &gtk::Popover, entry: &Entry) {
         let entry = entry.clone();
         Box::new(move || nav::open_related_of(entry.clone()))
     });
+    if !entry.channel_id.is_empty() {
+        let muted = crate::muted::channel_muted(&entry.channel_id);
+        add(
+            "audio-volume-muted-symbolic",
+            if muted {
+                "Unmute channel"
+            } else {
+                "Mute channel"
+            },
+            {
+                let entry = entry.clone();
+                Box::new(move || nav::toggle_channel_muted(&entry))
+            },
+        );
+    }
+    let hidden = crate::muted::video_hidden(&entry.id);
+    add(
+        "view-conceal-symbolic",
+        if hidden { "Unhide video" } else { "Hide video" },
+        {
+            let entry = entry.clone();
+            Box::new(move || nav::toggle_video_hidden(&entry))
+        },
+    );
     // Only the one in charge of the profile gets to save.
     if !profile::restricted() && !entry.url.is_empty() {
         for name in crate::collections::savable() {
@@ -1028,7 +1056,15 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .visible(false)
         .build();
     subscribe_button.connect_clicked(|_| nav::toggle_subscription());
+    let mute_channel = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
+        .valign(gtk::Align::Center)
+        .tooltip_text("Leave this channel's videos out of the lists")
+        .visible(false)
+        .build();
+    mute_channel.connect_clicked(|_| nav::toggle_channel_muted_here());
     channel_header.append(&subscribe_button);
+    channel_header.append(&mute_channel);
     channel_header.append(&allow_channel);
 
     let results_status = gtk::Label::builder()
@@ -1168,6 +1204,13 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         .build();
     related.connect_clicked(|_| nav::open_related());
     buttons.append(&related);
+    let hide_video = gtk::Button::builder()
+        .cursor(&crate::ui::pointer())
+        .tooltip_text("Leave this video out of the lists")
+        .visible(false)
+        .build();
+    hide_video.connect_clicked(|_| nav::toggle_video_hidden_here());
+    buttons.append(&hide_video);
     let library = library::Widgets::new();
     buttons.append(&library.save);
     let allow_video = gtk::Button::builder()
@@ -2115,6 +2158,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         channel_entry,
         allow_channel,
         subscribe_button,
+        mute_channel,
         results_status,
         channel_results,
         channel_results_row,
@@ -2139,6 +2183,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         caption_tracks: RefCell::default(),
         allow_video,
         related,
+        hide_video,
         cache_list,
         cache_select_all,
         cache_summary,

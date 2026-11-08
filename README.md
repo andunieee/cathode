@@ -15,6 +15,7 @@ Cathode is a YouTube client for the desktop. Search for a video, hit play, and w
 - Sort by relevance or date, and filter the results
 - Paste a YouTube link to open the video directly, or a YouTube channel or playlist link
 - Right-click a video in any list to play it, queue it, mark it as watched or not, see related videos, save it or allow it in restricted mode
+- Mute a channel or hide a video from the right-click menu, or from the channel and video pages, to leave it out of search results, recommendations and the other lists; manage them in Settings → Muted & Hidden
 
 ## Video pages
 ![A video page](assets/video.jpg)

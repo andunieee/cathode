@@ -22,6 +22,7 @@ use crate::filter::{Criteria, Sort};
 use crate::format;
 use crate::history;
 use crate::library;
+use crate::muted;
 use crate::profile::{self, ChannelRef, Input, Item, PlaylistRef};
 use crate::settings;
 use crate::social;
@@ -540,7 +541,12 @@ fn hashtags_of(entry: &Entry) -> Vec<String> {
 /// Adds the entries the filter of the results lets through, where its order puts them.
 fn append_entries(ui: &Ui, entries: &[Entry]) {
     let criteria = ui.results_filter.criteria();
-    let entries = criteria.select(entries, hashtags_of);
+    let entries: Vec<Entry> = entries
+        .iter()
+        .filter(|entry| !muted::hides(entry))
+        .cloned()
+        .collect();
+    let entries = criteria.select(&entries, hashtags_of);
     if criteria.sort == Sort::Listed {
         append_to(&ui.store, &entries);
         return;
@@ -615,7 +621,14 @@ fn show_entries(ui: &Ui, key: &str, listing: &Rc<RefCell<Listing>>) {
 fn update_results_status() {
     let (count, done) = shown_listing().map_or((0, true), |listing| {
         let listing = listing.borrow();
-        (listing.entries.len(), listing.done)
+        (
+            listing
+                .entries
+                .iter()
+                .filter(|entry| !muted::hides(entry))
+                .count(),
+            listing.done,
+        )
     });
 
     let ui = ui::get();
@@ -655,6 +668,7 @@ fn show_channel_results(channels: &[ChannelRef]) {
     for channel in channels
         .iter()
         .filter(|c| !profile::restricted() || profile::allows_channel(&c.id))
+        .filter(|c| !muted::channel_muted(&c.id))
     {
         let button = gtk::Button::builder()
             .cursor(&crate::ui::pointer())
@@ -1186,6 +1200,28 @@ fn update_allow_buttons() {
         _ => false,
     };
     library::show_save_button(savable);
+
+    let channel_muted = match current() {
+        Page::Channel { id, .. } => Some(muted::channel_muted(&id)),
+        _ => None,
+    };
+    ui.mute_channel.set_visible(channel_muted.is_some());
+    if let Some(muted_now) = channel_muted {
+        ui.mute_channel.set_label(if muted_now {
+            "Unmute channel"
+        } else {
+            "Mute channel"
+        });
+    }
+    let video_hidden = match current() {
+        Page::Video(entry) => Some(muted::video_hidden(&entry.id)),
+        _ => None,
+    };
+    ui.hide_video.set_visible(video_hidden.is_some());
+    if let Some(hidden) = video_hidden {
+        ui.hide_video
+            .set_label(if hidden { "Unhide" } else { "Hide" });
+    }
 }
 
 /// Adds the video to the restricted mode, or takes it out of it. True when it was added.
@@ -1249,6 +1285,120 @@ pub fn toggle_video_allowed(entry: Entry) {
         Err(error) => toast(&format!("Could not save the profile: {error}")),
     }
     update_allow_buttons();
+}
+
+// Muted channels and hidden videos
+
+/// Mutes or unmutes the channel of a video, leaving its videos out of the lists.
+pub fn toggle_channel_muted(entry: &Entry) {
+    if entry.channel_id.is_empty() {
+        toast("This video doesn't say which channel it is from");
+        return;
+    }
+    let name = if entry.channel.is_empty() {
+        entry.channel_id.clone()
+    } else {
+        entry.channel.clone()
+    };
+    let was_muted = muted::channel_muted(&entry.channel_id);
+    let result = if was_muted {
+        muted::unmute_channel(&entry.channel_id)
+    } else {
+        muted::mute_channel(&entry.channel_id, &name)
+    };
+    match result {
+        Ok(()) => toast(&format!(
+            "{} {name}",
+            if was_muted { "Unmuted" } else { "Muted" }
+        )),
+        Err(error) => {
+            toast(&format!("Could not save the muted channels: {error}"));
+            return;
+        }
+    }
+    muted_changed();
+}
+
+/// Mutes or unmutes the channel whose page is on screen.
+pub fn toggle_channel_muted_here() {
+    let Page::Channel { id, name, .. } = current() else {
+        return;
+    };
+    let was_muted = muted::channel_muted(&id);
+    let result = if was_muted {
+        muted::unmute_channel(&id)
+    } else {
+        muted::mute_channel(&id, &name)
+    };
+    match result {
+        Ok(()) => toast(&format!(
+            "{} {name}",
+            if was_muted { "Unmuted" } else { "Muted" }
+        )),
+        Err(error) => {
+            toast(&format!("Could not save the muted channels: {error}"));
+            return;
+        }
+    }
+    muted_changed();
+}
+
+/// Hides or unhides a video, leaving it out of the lists.
+pub fn toggle_video_hidden(entry: &Entry) {
+    let was_hidden = muted::video_hidden(&entry.id);
+    let result = if was_hidden {
+        muted::unhide_video(&entry.id)
+    } else {
+        muted::hide_video(entry)
+    };
+    match result {
+        Ok(()) => toast(if was_hidden {
+            "Video shown"
+        } else {
+            "Video hidden"
+        }),
+        Err(error) => {
+            toast(&format!("Could not save the hidden videos: {error}"));
+            return;
+        }
+    }
+    muted_changed();
+}
+
+/// Hides or unhides the video whose page is on screen.
+pub fn toggle_video_hidden_here() {
+    if let Page::Video(entry) = current() {
+        toggle_video_hidden(&entry);
+    }
+}
+
+pub fn unmute_channel(id: &str) {
+    match muted::unmute_channel(id) {
+        Ok(()) => {
+            toast("Unmuted the channel");
+            muted_changed();
+        }
+        Err(error) => toast(&format!("Could not save the muted channels: {error}")),
+    }
+}
+
+pub fn unhide_video(id: &str) {
+    match muted::unhide_video(id) {
+        Ok(()) => {
+            toast("Video shown");
+            muted_changed();
+        }
+        Err(error) => toast(&format!("Could not save the hidden videos: {error}")),
+    }
+}
+
+/// Shows the pages of videos again without what was just muted or hidden.
+fn muted_changed() {
+    crate::preferences::refresh_muted();
+    update_allow_buttons();
+    if !matches!(current(), Page::Settings) {
+        show_again();
+    }
 }
 
 /// Adds the page on screen to the restricted mode, or takes it out of it.
@@ -1594,6 +1744,8 @@ pub fn init(requests: UnboundedSender<Request>) {
     suggestions::init();
     collections::init();
     state::init();
+    muted::init();
+    crate::preferences::refresh_muted();
     restore_sidebars();
     restore_playback();
     restore_session();
@@ -3208,6 +3360,7 @@ pub fn remote_status() -> crate::remote::Status {
     } else {
         subscriptions::feed()
             .iter()
+            .filter(|entry| !muted::hides(entry))
             .take(30)
             .map(crate::remote::hit)
             .collect()
@@ -4076,6 +4229,7 @@ fn show_feed() {
     let feed: Vec<Entry> = subscriptions::feed()
         .into_iter()
         .filter(|entry| !(shorts_hidden() && entry.is_short()))
+        .filter(|entry| !muted::hides(entry))
         .collect();
     let ids: Vec<String> = feed.iter().map(|entry| entry.id.clone()).collect();
     if with(|state| std::mem::replace(&mut state.feed_ids, ids.clone())) != ids {
@@ -4121,7 +4275,10 @@ pub fn feed_tab_changed() {
     let ui = ui::get();
     match ui.feed_tabs.visible_child_name().as_deref() {
         Some("suggestions") => {
-            let ranked = suggestions::ranked();
+            let ranked: Vec<Entry> = suggestions::ranked()
+                .into_iter()
+                .filter(|entry| !muted::hides(entry))
+                .collect();
             let ids: Vec<String> = ranked.iter().map(|entry| entry.id.clone()).collect();
             if with(|state| std::mem::replace(&mut state.suggestion_ids, ids.clone())) != ids {
                 ui.suggestions_store.remove_all();
@@ -4173,7 +4330,10 @@ fn fill_category_menu(
 
 /// Shows the recommendations the filter over them lets through.
 fn show_recommendations(ui: &Ui) {
-    let videos = social::recommended();
+    let videos: Vec<social::Recommendation> = social::recommended()
+        .into_iter()
+        .filter(|video| !muted::hides(&video.entry))
+        .collect();
     let picked = recommendation_category(ui);
     with(|state| state.filling_recommendation_filters = true);
     fill_category_menu(
@@ -4186,7 +4346,7 @@ fn show_recommendations(ui: &Ui) {
 
     // What was picked may be gone.
     let in_category = social::in_category(&videos, recommendation_category(ui).as_deref());
-    let shown = ui
+    let shown: Vec<Entry> = ui
         .recommendation_filter
         .criteria()
         .select(&in_category, hashtags_of);
@@ -5162,6 +5322,15 @@ pub fn handle(response: Response) {
 
     match response {
         Response::Entries { key, entries } => {
+            // The videos of a channel's page may not repeat which channel they belong to.
+            let mut entries = entries;
+            if let Some(id) = channel_listing_id(&key) {
+                for entry in &mut entries {
+                    if entry.channel_id.is_empty() {
+                        entry.channel_id = id.to_string();
+                    }
+                }
+            }
             // A channel listing can carry the Shorts of the channel.
             let entries: Vec<Entry> = if key.starts_with("c:") && shorts_hidden() {
                 entries

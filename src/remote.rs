@@ -466,7 +466,7 @@ fn run(command: Command) {
             let found = with(|local| local.found.get(&id).cloned()).or_else(|| {
                 subscriptions::feed()
                     .into_iter()
-                    .find(|entry| entry.id == id)
+                    .find(|entry| entry.id == id && !crate::muted::hides(entry))
             });
             if let Some(entry) = found {
                 nav::remote_queue_add(entry);
@@ -557,6 +557,7 @@ fn run(command: Command) {
                     let hits: Vec<Hit> = with(|local| {
                         entries
                             .into_iter()
+                            .filter(|entry| !crate::muted::hides(entry))
                             .take(ALLOWED_RESULTS - sent)
                             .map(|entry| {
                                 let hit = hit(&entry);
@@ -633,7 +634,9 @@ pub fn intercept(response: Response) -> Option<Response> {
                 if pending.hits.len() >= RESULTS {
                     break;
                 }
-                if !nav::video_allowed(&entry) || pending.hits.iter().any(|hit| hit.id == entry.id)
+                if !nav::video_allowed(&entry)
+                    || crate::muted::hides(&entry)
+                    || pending.hits.iter().any(|hit| hit.id == entry.id)
                 {
                     continue;
                 }

@@ -23,6 +23,10 @@ pub struct State {
     pub restricted: bool,
     /// The collection the Save button saves to.
     pub save_collection: Option<String>,
+    /// Channels whose videos are left out of the lists of videos.
+    pub muted_channels: Vec<MutedChannel>,
+    /// Videos left out of the lists of videos.
+    pub hidden_videos: Vec<Entry>,
     /// The volume from 0 to 1, none until it is changed.
     pub volume: Option<f64>,
     /// The playback speed, none until it is changed.
@@ -34,6 +38,13 @@ pub struct State {
     pub session: Session,
     /// The same, for the restricted mode.
     pub restricted_session: Session,
+}
+
+/// A channel whose videos are left out of the lists of videos.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MutedChannel {
+    pub id: String,
+    pub name: String,
 }
 
 /// Which captions the player goes for.
