@@ -372,6 +372,7 @@ fn video_row(collection: &Collection, video: &SavedVideo) -> adw::ActionRow {
 
     let row = adw::ActionRow::builder()
         .title(&entry.title)
+        .tooltip_text(&entry.title)
         .subtitle(subtitle.join("  ·  "))
         .title_lines(2)
         .subtitle_lines(1)

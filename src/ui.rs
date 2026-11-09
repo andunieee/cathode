@@ -627,6 +627,7 @@ impl Card {
             labels.set_visible(!links.is_empty());
         }
         self.title.set_text(&entry.title);
+        self.title.set_tooltip_text(Some(&entry.title));
         self.channel.set_label(&entry.channel);
         self.channel.set_visible(!entry.channel.is_empty());
         // In the restricted mode only the channels that are allowed can be visited.

@@ -3879,6 +3879,7 @@ pub fn refresh_queue() {
 
         let row = adw::ActionRow::builder()
             .title(&entry.title)
+            .tooltip_text(&entry.title)
             .subtitle(queue_subtitle(&entry.id, status, playing.as_deref()))
             .title_lines(2)
             .use_markup(false)
@@ -4914,6 +4915,7 @@ fn history_more(count: usize) {
 
         let row = adw::ActionRow::builder()
             .title(&entry.title)
+            .tooltip_text(&entry.title)
             .subtitle(subtitle.join("  ·  "))
             .title_lines(2)
             .use_markup(false)
@@ -5055,6 +5057,7 @@ fn show_cache() {
 
         let row = adw::ActionRow::builder()
             .title(&entry.title)
+            .tooltip_text(&entry.title)
             .subtitle(subtitle.join("  ·  "))
             .use_markup(false)
             .activatable(true)

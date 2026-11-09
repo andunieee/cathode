@@ -358,6 +358,7 @@ fn video_row(entry: &Entry, removal: VideoRemoval) -> adw::ActionRow {
 
     let row = adw::ActionRow::builder()
         .title(&entry.title)
+        .tooltip_text(&entry.title)
         .subtitle(subtitle.join("  ·  "))
         .use_markup(false)
         .activatable(true)
