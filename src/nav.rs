@@ -168,10 +168,16 @@ struct QueueItem {
     state: QueueState,
     /// Played past [`WATCHED_FRACTION`], so it is taken out of the queue once the player moves on.
     played_through: bool,
+    /// Played past [`WATCHED_SECONDS`], so it goes to the history if taken out of the queue.
+    watched: bool,
 }
 
 /// How much of a video has to be played for it to count as watched.
 const WATCHED_FRACTION: f64 = 0.9;
+
+/// How much of a video has to be played for it to be part of the history when it is taken out
+/// of the queue before the end.
+const WATCHED_SECONDS: f64 = 10.0;
 
 struct State {
     requests: Option<UnboundedSender<Request>>,
@@ -2470,18 +2476,22 @@ fn save_session() {
 /// Brings back the queue and the player as they were left, the video paused.
 fn restore_session() {
     let saved = state::get().session_mut(profile::restricted()).clone();
+    let positions = saved.positions;
     with(|state| {
         state.queue = saved
             .queue
             .into_iter()
             .filter(video_allowed)
             .map(|entry| QueueItem {
+                watched: positions
+                    .get(&entry.id)
+                    .is_some_and(|position| *position > WATCHED_SECONDS),
                 entry,
                 state: QueueState::Waiting,
                 played_through: false,
             })
             .collect();
-        state.positions = saved.positions;
+        state.positions = positions;
     });
     pump_queue();
     let queued: Vec<Entry> = with(|state| state.queue.iter().map(|i| i.entry.clone()).collect());
@@ -3280,6 +3290,9 @@ pub fn tick() {
     ));
     if let Some(id) = ui.player.id() {
         refresh_queue_status(&id);
+        if duration > 0.0 && position > WATCHED_SECONDS {
+            mark_watched_seconds(&id);
+        }
         if duration > 0.0 && position >= duration * WATCHED_FRACTION {
             watched_through(&id);
         }
@@ -3577,6 +3590,7 @@ fn enqueue(entry: Entry) -> bool {
             entry,
             state: QueueState::Waiting,
             played_through: false,
+            watched: false,
         });
         true
     });
@@ -3636,6 +3650,19 @@ fn queue_remove(id: &str) {
     if playing_id().as_deref() == Some(id) {
         return;
     }
+
+    // A video watched even a little is part of the history when it leaves the queue.
+    let watched = with(|state| {
+        state
+            .queue
+            .iter()
+            .find(|item| item.entry.id == id)
+            .and_then(|item| {
+                let position = state.positions.get(id).copied().unwrap_or(0.0);
+                (item.watched || position > WATCHED_SECONDS).then(|| item.entry.clone())
+            })
+    });
+
     let cancel = with(|state| {
         state.queue.retain(|item| item.entry.id != id);
         let downloading = state.queue_downloading.as_deref() == Some(id);
@@ -3651,6 +3678,20 @@ fn queue_remove(id: &str) {
         send(Request::Cancel { id: id.to_string() });
     }
     pump_queue();
+
+    if let Some(entry) = watched.filter(|entry| !history::is_watched(&entry.id)) {
+        record_watched(&entry);
+    }
+}
+
+/// Remembers that a video was played past [`WATCHED_SECONDS`], so that taking it out of the
+/// queue puts it in the history.
+fn mark_watched_seconds(id: &str) {
+    with(|state| {
+        if let Some(item) = state.queue.iter_mut().find(|item| item.entry.id == id) {
+            item.watched = true;
+        }
+    });
 }
 
 /// The video in the player was played far enough to count as watched.
@@ -3665,12 +3706,19 @@ fn watched_through(id: &str) {
         }
         state.playing.clone().filter(|entry| entry.id == id)
     });
+    if let Some(entry) = entry {
+        record_watched(&entry);
+    }
+}
+
+/// Puts a video in the history, with what watching it changes elsewhere.
+fn record_watched(entry: &Entry) {
     // Files from the command line aren't YouTube videos.
-    let Some(entry) = entry.filter(|entry| !entry.url.is_empty()) else {
+    if entry.url.is_empty() {
         return;
-    };
+    }
     crate::log::info!("{} was watched", entry.id);
-    if let Err(error) = history::record(&entry) {
+    if let Err(error) = history::record(entry) {
         crate::log::warning!("Cannot write the history: {error}");
     }
     suggestions::watched(&entry.id);
