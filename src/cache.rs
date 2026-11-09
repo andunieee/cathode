@@ -8,6 +8,8 @@ use std::time::{Duration, SystemTime};
 use crate::fetch::{Entry, bare_id, cache_dir, youtube_id};
 
 const INDEX_FILE: &str = "index.json";
+/// Where the storyboards are kept, see `storyboard`.
+const STORYBOARD_DIR: &str = "storyboards";
 /// Downloaded videos that are not saved anywhere are deleted once they are this old.
 const MAX_AGE: Duration = Duration::from_secs(48 * 60 * 60);
 const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mkv", "webm", "mov", "m4v"];
@@ -135,6 +137,13 @@ pub fn caption_files(video: &Path) -> Vec<(String, PathBuf)> {
     files
 }
 
+/// The picture of the frames of a video shown over the seek bar, named after the video file
+/// like its captions. They are kept apart, as saved videos live outside the cache.
+pub fn storyboard(video: &Path) -> Option<PathBuf> {
+    let stem = video.file_stem()?.to_str()?;
+    Some(cache_dir().join(STORYBOARD_DIR).join(format!("{stem}.jpg")))
+}
+
 /// The other sizes a video was downloaded at.
 pub fn sizes(id: &str) -> Vec<u32> {
     let mut sizes: Vec<u32> = video_files(&cache_dir())
@@ -209,6 +218,20 @@ pub fn expire() -> usize {
         .collect();
 
     delete(&old);
+
+    // The ones of videos that were saved, or deleted outside of Cathode, are cheap to make again.
+    if let Ok(read_dir) = std::fs::read_dir(cache_dir().join(STORYBOARD_DIR)) {
+        for entry in read_dir.filter_map(|entry| entry.ok()) {
+            let age = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok());
+            if age.is_some_and(|age| age > MAX_AGE) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     old.len()
 }
 
@@ -243,6 +266,9 @@ pub fn delete(stems: &[String]) {
         if stems.contains(&stem) {
             for (_, captions) in caption_files(&path) {
                 let _ = std::fs::remove_file(captions);
+            }
+            if let Some(storyboard) = storyboard(&path) {
+                let _ = std::fs::remove_file(storyboard);
             }
             let _ = std::fs::remove_file(path);
         }

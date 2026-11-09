@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,6 +31,10 @@ const INFO_PARALLEL: usize = 3;
 
 /// Thumbnails shown in lists are scaled down to keep a thousand of them cheap to hold.
 const SMALL_THUMBNAIL: (u32, u32) = (168, 94);
+/// The frames of a storyboard are laid out in a grid of this many columns and rows.
+const STORYBOARD_GRID: u32 = 10;
+/// The size of each frame of a storyboard.
+const STORYBOARD_FRAME: (u32, u32) = (160, 90);
 
 /// What the id of a YouTube video starts with, so it can't clash with the id of a file.
 pub const YOUTUBE_PREFIX: &str = "yt:";
@@ -328,6 +332,12 @@ pub enum Request {
     Segments {
         id: String,
     },
+    /// Frames from all along a video that is on disk at `video`, for the seek bar. They are made
+    /// once and kept, see `crate::cache::storyboard`.
+    Storyboard {
+        id: String,
+        video: PathBuf,
+    },
     /// Tries yt-dlp with the cookies of the browser, before the setting is accepted.
     CheckCookies {
         browser: String,
@@ -367,6 +377,7 @@ impl Request {
             Request::Latest { channel_id, .. } => format!("latest videos of {channel_id}"),
             Request::Suggest { id } => format!("suggestions after {id}"),
             Request::Segments { id } => format!("sponsor segments of {id}"),
+            Request::Storyboard { id, .. } => format!("storyboard of {id}"),
             Request::CheckCookies { browser } => format!("check the cookies of {browser}"),
             Request::SocialSync { pubkey, since, .. } => {
                 format!("recommendations of {pubkey} since {since}")
@@ -501,6 +512,11 @@ pub enum Response {
         id: String,
         segments: Vec<(f64, f64)>,
     },
+    /// Frames evenly spread over the video, the first one at its start.
+    Storyboard {
+        id: String,
+        frames: Vec<Thumbnail>,
+    },
     CookiesChecked {
         browser: String,
         result: Result<(), String>,
@@ -561,6 +577,8 @@ async fn run(
     let latest_slots = Arc::new(Semaphore::new(LATEST_PARALLEL));
     // A queue of videos asks for the details of all of them at once.
     let info_slots = Arc::new(Semaphore::new(INFO_PARALLEL));
+    // Making one decodes the whole video, a few at once would slow the playback down.
+    let storyboard_slots = Arc::new(Semaphore::new(1));
     let downloads: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Default::default();
     // The relay connections are shared by the syncs of all the people followed.
     let network = ritualistic::Network::new();
@@ -739,6 +757,16 @@ async fn run(
                     // Not worth bothering the user when SponsorBlock is out of reach.
                     let segments = sponsor_segments(&id).await.unwrap_or_default();
                     on_response(Response::Segments { id, segments });
+                });
+            }
+            Request::Storyboard { id, video } => {
+                let slots = storyboard_slots.clone();
+                tokio::spawn(async move {
+                    let _slot = slots.acquire().await;
+                    match storyboard(&video).await {
+                        Ok(frames) => on_response(Response::Storyboard { id, frames }),
+                        Err(error) => crate::log::info!("no storyboard for {id}: {error}"),
+                    }
                 });
             }
             Request::Avatar { id } => {
@@ -1825,6 +1853,108 @@ async fn thumbnail(id: &str, large: bool) -> Result<Thumbnail, String> {
         height: image.height(),
         rgba: image.into_raw(),
     })
+}
+
+/// The frames of the storyboard of a video, made with ffmpeg the first time.
+async fn storyboard(video: &Path) -> Result<Vec<Thumbnail>, String> {
+    let path = crate::cache::storyboard(video).ok_or("the video has no file name")?;
+    if !path.exists() {
+        make_storyboard(video, &path).await?;
+    }
+
+    let image = image::open(&path).map_err(|e| e.to_string())?;
+    let (width, height) = STORYBOARD_FRAME;
+    Ok((0..STORYBOARD_GRID * STORYBOARD_GRID)
+        .map(|index| {
+            let (column, row) = (index % STORYBOARD_GRID, index / STORYBOARD_GRID);
+            let frame = image
+                .crop_imm(column * width, row * height, width, height)
+                .into_rgba8();
+            Thumbnail {
+                width: frame.width(),
+                height: frame.height(),
+                rgba: frame.into_raw(),
+            }
+        })
+        .collect())
+}
+
+/// Saves at `path` a grid of frames taken evenly over the video, the first one at its start.
+async fn make_storyboard(video: &Path, path: &Path) -> Result<(), String> {
+    let output = crate::tools::command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(video)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ffprobe: {e}"))?;
+    let duration: f64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .map_err(|_| last_line(&output.stderr))?;
+    if duration <= 0.0 {
+        return Err("the video has no length".to_string());
+    }
+
+    let (width, height) = STORYBOARD_FRAME;
+    let frames = STORYBOARD_GRID * STORYBOARD_GRID;
+    let filter = format!(
+        "fps={frames}/{duration},\
+         scale={width}:{height}:force_original_aspect_ratio=decrease,\
+         pad={width}:{height}:-1:-1,\
+         tile={STORYBOARD_GRID}x{STORYBOARD_GRID}"
+    );
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    // Written aside and renamed so an interrupted run doesn't leave half a picture.
+    let temporary = path.with_extension("tmp.jpg");
+    let output = crate::tools::command("ffmpeg")
+        .args(["-v", "error", "-y"])
+        // Only the keyframes: decoding every frame takes far longer, for frames nobody will
+        // tell apart at this size.
+        .args(["-skip_frame", "nokey", "-i"])
+        .arg(video)
+        .args([
+            "-an",
+            "-sn",
+            "-dn",
+            "-vf",
+            &filter,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
+        ])
+        .arg(&temporary)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ffmpeg: {e}"))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(last_line(&output.stderr));
+    }
+    std::fs::rename(&temporary, path).map_err(|e| e.to_string())
+}
+
+/// What a tool other than yt-dlp said last when it failed.
+fn last_line(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .last()
+        .unwrap_or("no output")
+        .trim()
+        .to_string()
 }
 
 /// The bytes of a JPEG served by YouTube.

@@ -191,6 +191,8 @@ pub struct Ui {
     pub seek_marks: gtk::DrawingArea,
     /// Duration of the video, and the `(start, end)` of its sponsor segments in seconds.
     pub sponsor_spans: SponsorSpans,
+    /// Frames evenly spread over the video in the player, shown when hovering the seek bar.
+    pub storyboard: RefCell<Vec<gdk::Texture>>,
     pub time_label: gtk::Label,
     /// The sizes the video in the player can be downloaded at, in the order of `QUALITIES`.
     pub size_buttons: Vec<gtk::CheckButton>,
@@ -1456,10 +1458,20 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         glib::Propagation::Proceed
     });
     seek.set_has_tooltip(true);
-    seek.connect_query_tooltip(|seek, x, _y, _keyboard, tooltip| {
+    let seek_frame = gtk::Picture::new();
+    seek_frame.set_can_shrink(false);
+    let seek_text = gtk::Label::new(None);
+    seek_text.set_justify(gtk::Justification::Center);
+    let seek_tip = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    seek_tip.append(&seek_frame);
+    seek_tip.append(&seek_text);
+    seek.connect_query_tooltip(move |seek, x, _y, _keyboard, tooltip| {
         match nav::seek_tooltip(x as f64, seek.width() as f64) {
-            Some(text) => {
-                tooltip.set_text(Some(&text));
+            Some((text, frame)) => {
+                seek_text.set_text(&text);
+                seek_frame.set_visible(frame.is_some());
+                seek_frame.set_paintable(frame.as_ref());
+                tooltip.set_custom(Some(&seek_tip));
                 true
             }
             None => false,
@@ -2237,6 +2249,7 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
         seek,
         seek_marks,
         sponsor_spans,
+        storyboard: RefCell::new(Vec::new()),
         time_label,
         size_buttons,
         size_status,

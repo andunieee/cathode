@@ -16,7 +16,7 @@ use crate::cache;
 use crate::collections;
 use crate::controls;
 use crate::fetch::{
-    Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, VideoInfo,
+    Chapter, Entry, Request, Response, SearchFilter, SearchSort, Source, Thumbnail, VideoInfo,
 };
 use crate::filter::{Criteria, Sort};
 use crate::format;
@@ -899,8 +899,8 @@ fn show_player_chapters() {
 }
 
 /// What the seek bar tells about the point `x` of its `width` pixels: the chapter and sponsor
-/// segment there.
-pub fn seek_tooltip(x: f64, width: f64) -> Option<String> {
+/// segment there, and the frame of the video there once its storyboard is made.
+pub fn seek_tooltip(x: f64, width: f64) -> Option<(String, Option<gdk::Texture>)> {
     let ui = ui::get();
     let id = ui.player.id()?;
     let duration = ui.player.duration();
@@ -926,7 +926,27 @@ pub fn seek_tooltip(x: f64, width: f64) -> Option<String> {
         lines.push("Sponsor".to_string());
     }
     lines.push(format::duration(time));
-    Some(lines.join("\n"))
+
+    // The frames start at the beginning and are as far apart from each other.
+    let storyboard = ui.storyboard.borrow();
+    let frame = (!storyboard.is_empty()).then(|| {
+        let index = (time / duration * storyboard.len() as f64).round() as usize;
+        storyboard[index.min(storyboard.len() - 1)].clone()
+    });
+    Some((lines.join("\n"), frame))
+}
+
+/// A picture that came from the fetcher, ready to be shown.
+fn texture(image: Thumbnail) -> gdk::Texture {
+    let bytes = glib::Bytes::from_owned(image.rgba);
+    gdk::MemoryTexture::new(
+        image.width as i32,
+        image.height as i32,
+        gdk::MemoryFormat::R8g8b8a8,
+        &bytes,
+        image.width as usize * 4,
+    )
+    .upcast()
 }
 
 /// Paints the sponsor segments on the seek bar.
@@ -2557,6 +2577,11 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     request_captions();
     show_player_chapters();
     show_sponsor_marks(Vec::new());
+    ui.storyboard.borrow_mut().clear();
+    send(Request::Storyboard {
+        id: entry.id.clone(),
+        video: path.to_path_buf(),
+    });
     if settings::get().skip_sponsors && !entry.url.is_empty() {
         if let Some(segments) = with(|state| state.segments.get(&entry.id).cloned()) {
             show_sponsor_marks(segments.clone());
@@ -5617,16 +5642,13 @@ pub fn handle(response: Response) {
             }
             with(|state| state.segments.insert(id, segments));
         }
+        Response::Storyboard { id, frames } => {
+            if ui.player.id().as_deref() == Some(&id) {
+                *ui.storyboard.borrow_mut() = frames.into_iter().map(texture).collect();
+            }
+        }
         Response::Thumbnail { id, large, image } => {
-            let bytes = glib::Bytes::from_owned(image.rgba);
-            let texture: gdk::Texture = gdk::MemoryTexture::new(
-                image.width as i32,
-                image.height as i32,
-                gdk::MemoryFormat::R8g8b8a8,
-                &bytes,
-                image.width as usize * 4,
-            )
-            .upcast();
+            let texture = texture(image);
 
             let pictures = with(|state| {
                 state.thumbnails[large as usize].insert(id.clone(), texture.clone());
@@ -5654,16 +5676,7 @@ pub fn handle(response: Response) {
             with(|state| state.social_relay_lists.insert(pubkey.clone(), relay_list));
             social::forget_name(&pubkey);
             if let Some(image) = picture {
-                let bytes = glib::Bytes::from_owned(image.rgba);
-                let texture: gdk::Texture = gdk::MemoryTexture::new(
-                    image.width as i32,
-                    image.height as i32,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &bytes,
-                    image.width as usize * 4,
-                )
-                .upcast();
-                with(|state| state.social_pictures.insert(pubkey.clone(), texture));
+                with(|state| state.social_pictures.insert(pubkey.clone(), texture(image)));
             }
             refresh_following();
             if showing_person(&pubkey) {
@@ -5694,15 +5707,7 @@ pub fn handle(response: Response) {
             with(|state| state.channel_abouts.insert(id, about));
         }
         Response::Avatar { id, image } => {
-            let bytes = glib::Bytes::from_owned(image.rgba);
-            let texture: gdk::Texture = gdk::MemoryTexture::new(
-                image.width as i32,
-                image.height as i32,
-                gdk::MemoryFormat::R8g8b8a8,
-                &bytes,
-                image.width as usize * 4,
-            )
-            .upcast();
+            let texture = texture(image);
             let avatars = with(|state| {
                 state.avatars.insert(id.clone(), texture.clone());
                 state.waiting_avatars.remove(&id).unwrap_or_default()
