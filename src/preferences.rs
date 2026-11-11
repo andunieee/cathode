@@ -827,7 +827,7 @@ fn about() -> adw::PreferencesPage {
     ));
     files.add(&location_row(
         "Videos",
-        crate::fetch::cache_dir(),
+        crate::cache::videos_dir(),
         "Videos and their subtitles, deleted after 48 hours unless saved.",
     ));
     files.add(&location_row(

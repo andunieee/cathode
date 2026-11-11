@@ -1600,7 +1600,7 @@ async fn download(
     cancel: Arc<Notify>,
     on_response: &impl Fn(Response),
 ) -> Result<PathBuf, String> {
-    let dir = cache_dir();
+    let dir = crate::cache::videos_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     if let Some(path) = crate::cache::find_size(&entry.id, height) {

@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 use crate::fetch::{Entry, bare_id, cache_dir, youtube_id};
 
 const INDEX_FILE: &str = "index.json";
-/// Where the storyboards are kept, see `storyboard`.
-const STORYBOARD_DIR: &str = "storyboards";
+/// The subdirectory of the cache where the downloaded videos are kept.
+const VIDEOS_DIR: &str = "videos";
 /// Downloaded videos that are not saved anywhere are deleted once they are this old.
 const MAX_AGE: Duration = Duration::from_secs(48 * 60 * 60);
 const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mkv", "webm", "mov", "m4v"];
@@ -27,6 +27,11 @@ pub struct CachedVideo {
 }
 
 type Index = HashMap<String, Entry>;
+
+/// Where the downloaded videos are kept.
+pub fn videos_dir() -> PathBuf {
+    cache_dir().join(VIDEOS_DIR)
+}
 
 fn read_index(dir: &Path) -> Index {
     std::fs::read(dir.join(INDEX_FILE))
@@ -101,7 +106,7 @@ pub fn find(id: &str) -> Option<PathBuf> {
 /// The file of an already downloaded video at that size, `None` being the usual one.
 pub fn find_size(id: &str, height: Option<u32>) -> Option<PathBuf> {
     let wanted = stem(id, height);
-    video_files(&cache_dir())
+    video_files(&videos_dir())
         .into_iter()
         .find(|(file_stem, _)| *file_stem == wanted)
         .map(|(_, path)| path)
@@ -137,16 +142,16 @@ pub fn caption_files(video: &Path) -> Vec<(String, PathBuf)> {
     files
 }
 
-/// The picture of the frames of a video shown over the seek bar, named after the video file
-/// like its captions. They are kept apart, as saved videos live outside the cache.
+/// The picture of the frames of a video shown over the seek bar, next to the video file and named
+/// after it like its captions, with a different extension.
 pub fn storyboard(video: &Path) -> Option<PathBuf> {
-    let stem = video.file_stem()?.to_str()?;
-    Some(cache_dir().join(STORYBOARD_DIR).join(format!("{stem}.jpg")))
+    video.file_stem()?;
+    Some(video.with_extension("jpg"))
 }
 
 /// The other sizes a video was downloaded at.
 pub fn sizes(id: &str) -> Vec<u32> {
-    let mut sizes: Vec<u32> = video_files(&cache_dir())
+    let mut sizes: Vec<u32> = video_files(&videos_dir())
         .into_iter()
         .filter_map(|(file_stem, _)| match parse_stem(&file_stem) {
             (file_id, Some(height)) if file_id == bare_id(id) => Some(height),
@@ -161,7 +166,7 @@ pub fn sizes(id: &str) -> Vec<u32> {
 pub fn scan() -> Vec<CachedVideo> {
     let dir = cache_dir();
     let mut index = read_index(&dir);
-    let files = video_files(&dir);
+    let files = video_files(&videos_dir());
 
     let before = index.len();
     index.retain(|id, _| files.iter().any(|(stem, _)| parse_stem(stem).0 == id));
@@ -205,7 +210,7 @@ pub fn scan() -> Vec<CachedVideo> {
 /// Deletes the videos older than 48 hours, and forgets about them. Returns how many there were.
 pub fn expire() -> usize {
     let now = SystemTime::now();
-    let old: Vec<String> = video_files(&cache_dir())
+    let old: Vec<String> = video_files(&videos_dir())
         .into_iter()
         .filter(|(_, path)| {
             std::fs::metadata(path)
@@ -219,19 +224,25 @@ pub fn expire() -> usize {
 
     delete(&old);
 
-    // The ones of videos that were saved, or deleted outside of Cathode, are cheap to make again.
-    if let Ok(read_dir) = std::fs::read_dir(cache_dir().join(STORYBOARD_DIR)) {
+    // The storyboards of videos saved elsewhere are left behind, they are cheap to make again.
+    let dir = videos_dir();
+    if let Ok(read_dir) = std::fs::read_dir(&dir) {
         for entry in read_dir.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("jpg") {
+                continue;
+            }
             let age = entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .ok()
                 .and_then(|modified| now.duration_since(modified).ok());
             if age.is_some_and(|age| age > MAX_AGE) {
-                let _ = std::fs::remove_file(entry.path());
+                let _ = std::fs::remove_file(path);
             }
         }
     }
+
     old.len()
 }
 
@@ -262,7 +273,7 @@ pub fn record(entry: &Entry) {
 pub fn delete(stems: &[String]) {
     let dir = cache_dir();
 
-    for (stem, path) in video_files(&dir) {
+    for (stem, path) in video_files(&videos_dir()) {
         if stems.contains(&stem) {
             for (_, captions) in caption_files(&path) {
                 let _ = std::fs::remove_file(captions);
@@ -274,7 +285,7 @@ pub fn delete(stems: &[String]) {
         }
     }
 
-    let left = video_files(&dir);
+    let left = video_files(&videos_dir());
     let mut index = read_index(&dir);
     let before = index.len();
     index.retain(|id, _| left.iter().any(|(stem, _)| parse_stem(stem).0 == id));
@@ -329,10 +340,11 @@ mod tests {
         // SAFETY: This test owns the environment for the process; nothing else reads it concurrently.
         unsafe { std::env::set_var("XDG_CACHE_HOME", &root) };
         let dir = cache_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let videos = videos_dir();
+        std::fs::create_dir_all(&videos).unwrap();
 
         let age = |name: &str, hours: u64| {
-            let file = std::fs::File::create(dir.join(name)).unwrap();
+            let file = std::fs::File::create(videos.join(name)).unwrap();
             file.set_modified(SystemTime::now() - Duration::from_secs(hours * 3600))
                 .unwrap();
         };
@@ -342,8 +354,8 @@ mod tests {
         write_index(&dir, &Index::new());
 
         assert_eq!(expire(), 1);
-        assert!(!dir.join("old.mp4").exists());
-        assert!(dir.join("recent.mp4").exists() && dir.join("old.txt").exists());
+        assert!(!videos.join("old.mp4").exists());
+        assert!(videos.join("recent.mp4").exists() && videos.join("old.txt").exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
