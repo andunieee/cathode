@@ -417,6 +417,8 @@ jobs:
             mingw-w64-ucrt-x86_64-gtk4
             mingw-w64-ucrt-x86_64-libadwaita
             mingw-w64-ucrt-x86_64-mpv
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-librsvg
             mingw-w64-ucrt-x86_64-ntldd
 
       - name: Build
@@ -460,6 +462,10 @@ jobs:
             esac
           done
 
+          # Adwaita's icons are SVG only: without this loader none of them show up.
+          compgen -G "bundle/lib/gdk-pixbuf-2.0/2.10.0/loaders/*svg*.dll" > /dev/null \
+            || { echo "missing the SVG pixbuf loader"; exit 1; }
+
           # Fail here rather than ship a bundle that can't start.
           for dll in libgtk-4-1.dll libadwaita-1-0.dll libcairo-2.dll libcairo-gobject-2.dll \
             libgdk_pixbuf-2.0-0.dll libglib-2.0-0.dll libmpv-2.dll; do
@@ -470,6 +476,8 @@ jobs:
           cp /ucrt64/share/glib-2.0/schemas/*.xz bundle/share/glib-2.0/schemas/ 2>/dev/null || true
           cp -r /ucrt64/share/glib-2.0/schemas/gschemas.compiled bundle/share/glib-2.0/schemas/
           cp -r /ucrt64/share/icons/hicolor bundle/share/icons/
+          # The symbolic icons the UI uses come from the Adwaita theme, GTK itself has only a few.
+          cp -r /ucrt64/share/icons/Adwaita bundle/share/icons/
           # The app icon by name (About page, window icon).
           mkdir -p bundle/share/icons/hicolor/scalable/apps
           cp assets/io.github.andunieee.Cathode.svg bundle/share/icons/hicolor/scalable/apps/
