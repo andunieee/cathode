@@ -22,8 +22,8 @@ WizardStyle=modern
 Source: "{#Bundle}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\Cathode"; Filename: "{app}\bin\cathode.exe"
-Name: "{autodesktop}\Cathode"; Filename: "{app}\bin\cathode.exe"; Tasks: desktopicon
+Name: "{group}\Cathode"; Filename: "{app}\bin\cathode.exe"; WorkingDir: "{localappdata}"
+Name: "{autodesktop}\Cathode"; Filename: "{app}\bin\cathode.exe"; Tasks: desktopicon; WorkingDir: "{localappdata}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -35,4 +35,4 @@ Root: HKA; Subkey: "Software\Classes\cathode"; ValueType: string; ValueName: "UR
 Root: HKA; Subkey: "Software\Classes\cathode\shell\open\command"; ValueType: string; ValueData: """{app}\bin\cathode.exe"" ""%1"""
 
 [Run]
-Filename: "{app}\bin\cathode.exe"; Description: "Launch Cathode"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\bin\cathode.exe"; Description: "Launch Cathode"; Flags: nowait postinstall skipifsilent; WorkingDir: "{localappdata}"

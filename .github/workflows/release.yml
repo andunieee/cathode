@@ -485,7 +485,9 @@ jobs:
             > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache)
 
           # CRLF batch wrapper (Finder-style entry point, LF breaks cmd.exe).
-          printf '@echo off\r\nset GDK_PIXBUF_MODULE_FILE=%%~dp0lib\\gdk-pixbuf-2.0\\2.10.0\\loaders.cache\r\nstart "" "%%~dp0bin\\cathode.exe" %%*\r\n' > bundle/cathode.bat
+          # `start /D` keeps the app out of Program Files (or wherever the zip was unpacked):
+          # its working directory is %LOCALAPPDATA%, which is always writable.
+          printf '@echo off\r\nset GDK_PIXBUF_MODULE_FILE=%%~dp0lib\\gdk-pixbuf-2.0\\2.10.0\\loaders.cache\r\nstart "" /D "%%LOCALAPPDATA%%" "%%~dp0bin\\cathode.exe" %%*\r\n' > bundle/cathode.bat
 
           mkdir -p dist
           # The installer: Start menu entry, uninstaller and the cathode:// handler.

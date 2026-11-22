@@ -2,7 +2,7 @@
 //! emptied after 48 hours. There are two kinds, both described by a file in the `collections`
 //! directory of the config directory of the app (`collections/<name>.json`):
 //! - a place to save to, which has a directory the saved videos are moved into (by default
-//!   `saved` in the data directory of the app);
+//!   `saved` in the local data directory of the app);
 //! - an imported folder, which has no directory of its own: the file only points to the videos
 //!   that were already there, and they are never moved or deleted.
 
@@ -63,7 +63,8 @@ fn directory() -> PathBuf {
 
 /// Where the videos saved to a collection without a directory of its own go.
 pub fn default_directory(name: &str) -> PathBuf {
-    let base = crate::paths::data();
+    // The local data folder, not the roaming one: saved videos are large.
+    let base = crate::paths::local_data();
     if name == DEFAULT_NAME {
         base.join("saved")
     } else {

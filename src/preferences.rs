@@ -831,9 +831,14 @@ fn about() -> adw::PreferencesPage {
         "Videos and their subtitles, deleted after 48 hours unless saved.",
     ));
     files.add(&location_row(
+        "Default folder for saved videos",
+        crate::collections::default_directory(crate::collections::DEFAULT_NAME),
+        "Videos saved to a collection that does not have a folder of its own.",
+    ));
+    files.add(&location_row(
         "Permanent non-config data",
         crate::paths::data(),
-        "Queue and other current app views, history, log and saved videos.",
+        "Queue and other current app views, history and log.",
     ));
     files.add(&location_row(
         "Downloaded tools",
