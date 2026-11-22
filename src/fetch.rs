@@ -633,6 +633,11 @@ async fn run(
                             .get(&entry.id)
                             .is_some_and(|current| Arc::ptr_eq(current, &cancel));
                         if ours {
+                            // Nothing newer took over, so the cancellation leaves partial files
+                            // that nothing will want.
+                            if matches!(&result, Err(error) if error == "Cancelled") {
+                                crate::cache::delete_partials(&entry.id);
+                            }
                             downloads.remove(&entry.id);
                         }
                         !ours

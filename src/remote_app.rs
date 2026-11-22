@@ -611,13 +611,12 @@ impl RemoteApp {
                     .disabled(index == last)
                     .on_press(Handler::action("down").payload(row.id.as_str())),
             );
-            // The video playing can't be taken out of the queue.
+            // The video playing can be taken out of the queue too, which stops it.
             out.element(
                 ui::button(format!("{item}_remove"))
                     .parent(buttons.as_str())
                     .label("Delete")
                     .variant("failure")
-                    .disabled(cel(current.as_str()))
                     .on_press(Handler::action("remove").payload(row.id.as_str())),
             );
         }

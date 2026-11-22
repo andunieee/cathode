@@ -39,6 +39,8 @@ const FEED_REFRESH_SECONDS: u32 = 30 * 60;
 const SUGGESTION_WAIT_SECONDS: u32 = 30;
 /// How often the people followed are checked for new recommendations.
 const SOCIAL_SYNC_SECONDS: u32 = 15 * 60;
+/// How often partial downloads nothing is waiting for are deleted from the cache.
+const CACHE_CLEANUP_SECONDS: u32 = 10 * 60;
 /// How long before the latest recommendations of a person are asked for again on their page.
 const SOCIAL_LATEST_SECONDS: u64 = 60;
 /// How long a page shown again keeps trying to scroll back to where it was left, while what it
@@ -1785,6 +1787,7 @@ pub fn init(requests: UnboundedSender<Request>) {
     }
     // Forgets what's left of videos that are gone.
     cache::scan();
+    cleanup_partials();
     refresh_subscriptions();
     show();
 
@@ -1807,6 +1810,11 @@ pub fn init(requests: UnboundedSender<Request>) {
     });
     glib::timeout_add_seconds_local(SOCIAL_SYNC_SECONDS, || {
         social_sync();
+        glib::ControlFlow::Continue
+    });
+    // Downloads left behind by a crash, or by a video taken out of the queue, don't stay.
+    glib::timeout_add_seconds_local(CACHE_CLEANUP_SECONDS, || {
+        cleanup_partials();
         glib::ControlFlow::Continue
     });
 }
@@ -2168,6 +2176,32 @@ fn size_name(height: u32) -> String {
     }
 }
 
+/// The videos whose partial downloads must be kept: those in the queue, the one in the player, and
+/// anything being downloaded for something else, like a collection.
+fn download_keepers() -> Vec<String> {
+    with(|state| {
+        let mut ids: Vec<String> = state
+            .queue
+            .iter()
+            .map(|item| item.entry.id.clone())
+            .collect();
+        ids.extend(state.inflight.keys().cloned());
+        ids.extend(state.pending_saves.keys().cloned());
+        if let Some(entry) = &state.playing {
+            ids.push(entry.id.clone());
+        }
+        ids
+    })
+}
+
+/// Deletes the partial downloads of videos nothing is waiting for.
+fn cleanup_partials() {
+    let deleted = cache::cleanup_partials(&download_keepers());
+    if deleted > 0 {
+        crate::log::info!("Deleted {deleted} unfinished downloads");
+    }
+}
+
 fn start_download(entry: Entry) {
     let height = wanted_size(&entry.id);
     crate::log::info!("starting the download of {} at {height:?}", entry.id);
@@ -2264,7 +2298,7 @@ pub fn set_size(height: u32) {
             .set_text(&format!("Downloading {}…", size_name(height)));
         ui.size_status.set_visible(true);
     } else {
-        ui.player_status.set_text("Downloading…");
+        ui.player_status.set_text(&downloading_status(&entry.id));
         ui.player_status.set_visible(true);
     }
     send(Request::Download {
@@ -2415,6 +2449,9 @@ pub fn play(entry: Entry) {
     set_sidebar_toggle(&ui.queue_toggle, true);
     let previous = with(|state| {
         state.watched_through = None;
+        if state.start_paused.as_deref() != Some(&entry.id) {
+            state.start_paused = None;
+        }
         state.playing.replace(entry.clone())
     });
     caption_options_changed();
@@ -2456,8 +2493,10 @@ fn show_player(entry: &Entry) {
             remember_position();
             ui.player.stop();
             with(|state| state.awaiting_play = Some(entry.id.clone()));
-            ui.player_status.set_text("Downloading…");
+            ui.player_status.set_text(&downloading_status(&entry.id));
             ui.player_status.set_visible(true);
+            show_pause_button(is_paused());
+            show_player_controls();
             start_download(entry.clone());
         }
     }
@@ -2604,10 +2643,51 @@ fn start_playback(entry: &Entry, path: &std::path::Path) {
     save_session();
 }
 
+/// Whether the video playing, or the one that starts once it downloads, is paused. Nothing loaded
+/// counts as paused.
+fn is_paused() -> bool {
+    let ui = ui::get();
+    if ui.player.id().is_some() {
+        return ui.player.is_paused();
+    }
+    with(|state| match &state.playing {
+        Some(entry) if state.awaiting_play.as_deref() == Some(entry.id.as_str()) => {
+            state.start_paused.as_deref() == Some(entry.id.as_str())
+        }
+        _ => true,
+    })
+}
+
+/// Shows whether the video is paused on the button of the player.
+fn show_pause_button(paused: bool) {
+    ui::get().play_button.set_icon_name(if paused {
+        "media-playback-start-symbolic"
+    } else {
+        "media-playback-pause-symbolic"
+    });
+}
+
+/// What the player says while it waits for the video to download, which can be paused first.
+fn downloading_status(id: &str) -> String {
+    let (progress, paused) = with(|state| {
+        (
+            state.progress.get(id).copied(),
+            state.start_paused.as_deref() == Some(id),
+        )
+    });
+    let mut status = match progress {
+        Some(fraction) => format!("Downloading… {:.0}%", fraction * 100.0),
+        None => "Downloading…".to_string(),
+    };
+    if paused {
+        status.push_str(" · Paused");
+    }
+    status
+}
+
 /// Pauses or resumes, from the desktop: the ultra strict mode leaves it only pausing.
 pub fn toggle_pause() {
-    let ui = ui::get();
-    if ui.player.is_paused() && locked_by_remote() {
+    if is_paused() && locked_by_remote() {
         return;
     }
     flip_pause();
@@ -2624,7 +2704,30 @@ fn flip_pause() {
         save_session();
         tick();
         show_player_controls();
+        return;
     }
+
+    // The video chosen may still be downloading: it starts paused once it is ready.
+    let paused = with(|state| {
+        let id = state.awaiting_play.clone()?;
+        if state.start_paused.as_deref() == Some(&id) {
+            state.start_paused = None;
+            Some(false)
+        } else {
+            state.start_paused = Some(id);
+            Some(true)
+        }
+    });
+    let Some(paused) = paused else {
+        return;
+    };
+    crate::log::info!("paused: {paused}");
+    show_pause_button(paused);
+    if let Some(id) = playing_id() {
+        ui.player_status.set_text(&downloading_status(&id));
+    }
+    save_session();
+    show_player_controls();
 }
 
 /// Closes the player from the desktop, which the ultra strict mode leaves to the remote.
@@ -2664,6 +2767,7 @@ fn unload_player() {
     with(|state| {
         state.playing = None;
         state.awaiting_play = None;
+        state.start_paused = None;
         state.chapter_stop = None;
         state.pending_seek = None;
     });
@@ -3372,8 +3476,7 @@ fn play_next_in_queue() {
 /// What the phone remote shows: the video in the player and the queue.
 pub fn remote_status() -> crate::remote::Status {
     let ui = ui::get();
-    // Nothing in the player counts as paused: Play starts the queue.
-    let paused = ui.player.id().is_none() || ui.player.is_paused();
+    let paused = is_paused();
     let (position, duration) = (ui.player.position(), ui.player.duration());
     let (volume, speed) = (ui.volume_scale.value(), ui::current_speed());
     let (captions, caption) = {
@@ -3480,8 +3583,9 @@ pub fn remote_caption(id: i64) {
 /// of the queue.
 pub fn remote_play() {
     let ui = ui::get();
-    if ui.player.id().is_some() {
-        if ui.player.is_paused() {
+    let waiting = with(|state| state.awaiting_play.is_some());
+    if ui.player.id().is_some() || waiting {
+        if is_paused() {
             flip_pause();
         }
         return;
@@ -3498,7 +3602,7 @@ pub fn remote_play() {
 }
 
 pub fn remote_pause() {
-    if !ui::get().player.is_paused() {
+    if !is_paused() {
         flip_pause();
     }
 }
@@ -3672,8 +3776,9 @@ fn retitle(original: &Entry) -> bool {
 
 fn queue_remove(id: &str) {
     crate::log::info!("removing {id} from the queue");
+    // Taking out the video playing stops it first, as the stop button does.
     if playing_id().as_deref() == Some(id) {
-        return;
+        stop_player();
     }
 
     // A video watched even a little is part of the history when it leaves the queue.
@@ -3688,19 +3793,30 @@ fn queue_remove(id: &str) {
             })
     });
 
+    let wanted = with(|state| state.pending_saves.contains_key(id));
     let cancel = with(|state| {
         state.queue.retain(|item| item.entry.id != id);
-        let downloading = state.queue_downloading.as_deref() == Some(id);
-        if downloading {
+        let downloading = state.queue_downloading.as_deref() == Some(id)
+            || state.inflight.contains_key(id)
+            || state.switching.as_deref() == Some(id);
+        if state.queue_downloading.as_deref() == Some(id) {
             state.queue_downloading = None;
         }
-        // The player may need that download too.
-        downloading && state.awaiting_play.as_deref() != Some(id)
+        // A collection waiting for the download still needs it.
+        downloading && !wanted && state.awaiting_play.as_deref() != Some(id)
     });
 
     save_session();
     if cancel {
         send(Request::Cancel { id: id.to_string() });
+    }
+    // What the download left is of no use once the video is out of the queue. The worker deletes
+    // it too, once yt-dlp is stopped, in case it was still writing.
+    if !wanted {
+        let deleted = cache::delete_partials(id);
+        if deleted > 0 {
+            crate::log::info!("Deleted {deleted} unfinished downloads of {id}");
+        }
     }
     pump_queue();
 
@@ -3987,9 +4103,13 @@ pub fn refresh_queue() {
         let remove = gtk::Button::builder()
             .cursor(&crate::ui::pointer())
             .icon_name("window-close-symbolic")
-            .tooltip_text("Remove from the queue")
+            .tooltip_text(if is_playing {
+                "Stop and remove from the queue"
+            } else {
+                "Remove from the queue"
+            })
             .valign(gtk::Align::Center)
-            .visible(!is_playing && !locked)
+            .visible(!locked)
             .css_classes(["flat", "circular"])
             .build();
         remove.connect_clicked({
@@ -5740,8 +5860,7 @@ pub fn handle(response: Response) {
                 ));
             }
             if with(|state| state.awaiting_play.as_deref() == Some(&id)) {
-                ui.player_status
-                    .set_text(&format!("Downloading… {:.0}%", fraction * 100.0));
+                ui.player_status.set_text(&downloading_status(&id));
             }
         }
         Response::Downloaded { id, height, result } => {
@@ -5817,6 +5936,8 @@ pub fn handle(response: Response) {
                 match (&result, entry) {
                     (Ok(path), Some(entry)) => start_playback(&entry, path),
                     (Err(error), Some(_)) => {
+                        with(|state| state.start_paused = None);
+                        show_pause_button(is_paused());
                         ui.player_status
                             .set_text(&format!("Download failed: {error}"));
                     }

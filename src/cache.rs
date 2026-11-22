@@ -13,6 +13,10 @@ const VIDEOS_DIR: &str = "videos";
 /// Downloaded videos that are not saved anywhere are deleted once they are this old.
 const MAX_AGE: Duration = Duration::from_secs(48 * 60 * 60);
 const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mkv", "webm", "mov", "m4v"];
+/// The extensions of the streams yt-dlp downloads before it merges them into a video.
+const MEDIA_EXTENSIONS: [&str; 12] = [
+    "mp4", "mkv", "webm", "mov", "m4v", "m4a", "mp3", "opus", "ogg", "aac", "flac", "wav",
+];
 
 pub struct CachedVideo {
     pub entry: Entry,
@@ -78,6 +82,51 @@ pub fn parse_stem(stem: &str) -> (&str, Option<u32>) {
     }
 }
 
+/// Whether the stem of a media file is the name of a finished video: the id alone, or the id and
+/// a size, like `id.720p` or `id.best`.
+fn is_final_stem(stem: &str) -> bool {
+    let Some((id, size)) = stem.split_once('.') else {
+        return true;
+    };
+    if id.is_empty() {
+        return false;
+    }
+    size == "best"
+        || size
+            .strip_suffix('p')
+            .is_some_and(|height| !height.is_empty() && height.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Whether a file of the cache is part of a download that hasn't finished: yt-dlp's `.part` and
+/// `.ytdl` files, the temporary merges, and the separate streams it downloads before merging.
+fn is_partial(name: &str) -> bool {
+    if name.contains(".part")
+        || name.ends_with(".ytdl")
+        || name.contains(".temp.")
+        || name.ends_with(".temp")
+    {
+        return true;
+    }
+
+    let path = Path::new(name);
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    if !MEDIA_EXTENSIONS.contains(&extension) {
+        return false;
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| !is_final_stem(stem))
+}
+
+/// Whether a file of the cache is part of an unfinished download of the video `id`.
+fn is_partial_of(name: &str, id: &str) -> bool {
+    name.strip_prefix(id)
+        .is_some_and(|rest| rest.starts_with('.'))
+        && is_partial(name)
+}
+
 fn video_files(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -90,6 +139,10 @@ fn video_files(dir: &Path) -> Vec<(String, PathBuf)> {
             path.extension()
                 .and_then(|ext| ext.to_str())
                 .is_some_and(|ext| VIDEO_EXTENSIONS.contains(&ext))
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| !is_partial(name))
         })
         .filter_map(|path| {
             let id = path.file_stem()?.to_str()?.to_string();
@@ -294,6 +347,55 @@ pub fn delete(stems: &[String]) {
     }
 }
 
+/// Deletes what is left of a download that didn't finish for a video: its `.part` and `.ytdl`
+/// files, temporary merges, and the streams that were waiting to be merged. Returns how many files
+/// there were.
+pub fn delete_partials(id: &str) -> usize {
+    let id = bare_id(id);
+    let Ok(read_dir) = std::fs::read_dir(videos_dir()) else {
+        return 0;
+    };
+
+    let mut deleted = 0;
+    for entry in read_dir.filter_map(|entry| entry.ok()) {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_partial_of(name, id) && std::fs::remove_file(entry.path()).is_ok() {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+/// Deletes the unfinished downloads of videos that aren't in `keep`, which are what a crash or a
+/// stopped download leaves behind. Returns how many files there were.
+pub fn cleanup_partials(keep: &[String]) -> usize {
+    let keep: Vec<&str> = keep.iter().map(|id| bare_id(id)).collect();
+    let Ok(read_dir) = std::fs::read_dir(videos_dir()) else {
+        return 0;
+    };
+
+    let mut deleted = 0;
+    for entry in read_dir.filter_map(|entry| entry.ok()) {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some((id, _)) = name.split_once('.') else {
+            continue;
+        };
+        if keep.contains(&id) || !is_partial(name) {
+            continue;
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +433,33 @@ mod tests {
         assert_eq!(languages("abc.720p.mp4"), ["en"]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unfinished_downloads_are_not_videos() {
+        for name in [
+            "abc.f137.mp4",
+            "abc.720p.f251.webm",
+            "abc.mp4.part",
+            "abc.mp4.part-Frag12",
+            "abc.ytdl",
+            "abc.temp.mp4",
+            "abc.720p.temp.mp4",
+        ] {
+            assert!(is_partial(name), "{name} is part of a download");
+        }
+        for name in [
+            "abc.mp4",
+            "abc.720p.mp4",
+            "abc.best.mkv",
+            "abc.en.vtt",
+            "abc.720p.en.vtt",
+            "abc.jpg",
+        ] {
+            assert!(!is_partial(name), "{name} is a finished video");
+        }
+        assert!(is_partial_of("abc.f137.mp4", "abc"));
+        assert!(!is_partial_of("abcd.f137.mp4", "abc"));
     }
 
     #[test]
