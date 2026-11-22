@@ -2,7 +2,7 @@
 Type=Application
 Name=Cathode
 GenericName=YouTube Client
-Comment=Search, download and watch YouTube videos
+Comment=YouTube: search, download and queue videos, subscribe to channels
 Exec=cathode %U
 Icon=io.github.andunieee.Cathode
 Terminal=false
