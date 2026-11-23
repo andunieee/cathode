@@ -229,6 +229,18 @@ jobs:
         with:
           name: flatpak-sources
           path: packaging/flatpak
+
+      # The image ships the GNOME SDK and runtimes in its own read-only layers.
+      # flatpak updates a runtime by atomically swapping its directory, which
+      # overlayfs refuses with EXDEV ("Invalid cross-device link") as soon as
+      # one of the two directories is still in a lower layer. Copying the
+      # installation into the container's writable layer makes the swap work.
+      - name: Move the preinstalled runtimes into the writable layer
+        run: |
+          cp -a /var/lib/flatpak /var/lib/flatpak.upper
+          rm -rf /var/lib/flatpak
+          mv /var/lib/flatpak.upper /var/lib/flatpak
+
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: cathode-linux-x86_64-${{ github.ref_name }}.flatpak
@@ -411,9 +423,13 @@ jobs:
           msystem: UCRT64
           update: false
           release: false
+          # pkgconf and make are no longer pulled in by the toolchain group,
+          # but glib-sys (pkg-config) and aws-lc-sys (cmake) need them.
           install: >-
             mingw-w64-ucrt-x86_64-rust
             mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-gtk4
             mingw-w64-ucrt-x86_64-libadwaita
             mingw-w64-ucrt-x86_64-mpv
