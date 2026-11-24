@@ -1324,9 +1324,11 @@ pub fn build(app: &adw::Application) -> Rc<Ui> {
 
     // Home page, once there are subscriptions
     let feed_store = gio::ListStore::new::<glib::BoxedAnyObject>();
+    // Ellipsized, or a long error would widen the page and make the queue sidebar float.
     let feed_status = gtk::Label::builder()
         .xalign(0.0)
         .hexpand(true)
+        .ellipsize(pango::EllipsizeMode::End)
         .css_classes(["dim-label"])
         .build();
     let feed_refresh = icon_button("view-refresh-symbolic", "Check for new videos");
